@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}{{ t('ui.settings') }} {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('nav.management.settings') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">{{ t('ui.administrator.deployment') }}</span>
+    <h1>{{ t('nav.management.settings') }}</h1>
+    <p class="lede">{{ t('ui.machine.settings.are.read.only.here') }}</p>
+  </div>
+  {% if saved_profile %}<span class="tag">{{ t('ui.profile.version') }} {{ saved_profile.configuration_version }}</span>{% endif %}
+</div>
+
+<div class="alert info">{{ t('ui.open.the.local.service.console.as.windows.administrator.to.change.machine.settings') }}</div>
+{% if profile_error_key %}<div class="alert error">{{ t(profile_error_key) }}</div>{% endif %}
+<div class="alert warn">{{ t('ui.public.http.traffic.is.not.encrypted.login.passwords.sessions.records.and.photos') }}</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-head"><h2>{{ t('ui.current.runtime') }}</h2></div>
+    <div class="card-body">
+      <dl class="kv">
+        <dt>{{ t('ui.application') }}</dt><dd class="mono">{{ runtime_app_host }}:{{ runtime_app_port }}</dd>
+        <dt>{{ t('ui.postgresql') }}</dt><dd class="mono">{{ runtime_database.host }}:{{ runtime_database.port }}</dd>
+        <dt>{{ t('ui.database') }}</dt><dd>{{ runtime_database.database }}</dd>
+        <dt>{{ t('ui.database.user') }}</dt><dd>{{ runtime_database.username }}</dd>
+      </dl>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-head"><h2>{{ t('ui.detected.server.addresses') }}</h2></div>
+    <div class="card-body">
+      {% if detected_ipv4 %}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        {% for address in detected_ipv4 %}<span class="tag mono">{{ address }}</span>{% endfor %}
+      </div>
+      {% else %}<p class="meta">{{ t('ui.no.non.loopback.ipv4.addresses.were.detected.through.the.application.process') }}</p>{% endif %}
+    </div>
+  </div>
+</div>
+
+<div class="grid-2" style="margin-top:18px;">
+  <div class="card">
+    <div class="card-head"><h2>{{ t('ui.local.network.access') }}</h2></div>
+    <div class="card-body"><dl class="kv">
+      <dt>{{ t('ui.windows.lan.adapter.name') }}</dt><dd>{{ profile.local_interface or '—' }}</dd>
+      <dt>{{ t('ui.lan.ipv4.address') }}</dt><dd class="mono">{{ profile.local_ip or '—' }}:{{ profile.local_port }}</dd>
+      <dt>{{ t('ui.network.prefix') }}</dt><dd>{{ profile.local_prefix_length }}</dd>
+      <dt>{{ t('ui.lan.gateway') }}</dt><dd class="mono">{{ profile.local_gateway or '—' }}</dd>
+      <dt>{{ t('ui.dns.servers') }}</dt><dd class="mono">{{ profile.local_dns_servers | replace('\n', ', ') or '—' }}</dd>
+    </dl></div>
+  </div>
+  <div class="card">
+    <div class="card-head"><h2>{{ t('ui.public.http.access') }}</h2></div>
+    <div class="card-body"><dl class="kv">
+      <dt>{{ t('ui.status') }}</dt><dd>{{ t('ui.enabled') if profile.public_enabled else t('ui.disabled') }}</dd>
+      <dt>{{ t('ui.public.ipv4.address') }}</dt><dd class="mono">{{ profile.public_ip or '—' }}:{{ profile.public_port }}</dd>
+      <dt>{{ t('ui.permitted.remote.ips.or.networks') }}</dt><dd class="mono">{{ profile.allowed_remote_ips | replace('\n', ', ') or '—' }}</dd>
+    </dl></div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:18px;" data-backup-state="{{ backup_status.state }}">
+  <div class="card-head"><h2>{{ t('ui.automatic.postgresql.backups') }}</h2></div>
+  <div class="card-body">
+    <div class="alert {{ backup_status.state }}">{{ backup_status.message }}</div>
+    {% if backup_status.completion_age %}<p>{{ backup_status.completion_age }}</p>{% endif %}
+    {% if backup_status.last_success_age %}<p>{{ backup_status.last_success_age }}</p>{% endif %}
+    <p>{{ backup_status.uploads_summary }}</p>
+    {% if backup_status.backup_file %}<p class="mono">{{ backup_status.backup_file }}</p>{% endif %}
+  </div>
+</div>
+
+<div class="card" style="margin-top:18px;">
+  <div class="card-head"><h2>{{ t('ui.settings.audit') }}</h2></div>
+  {% if history %}<div class="table-wrap"><table><thead><tr>
+    <th>{{ t('ui.version') }}</th><th>{{ t('ui.user') }}</th><th>{{ t('ui.updated') }}</th><th>{{ t('ui.changes') }}</th>
+  </tr></thead><tbody>
+  {% for entry in history %}<tr>
+    <td class="mono">{{ entry.configuration_version }}</td><td>{{ entry.editor_name }}</td>
+    <td class="mono">{{ entry.created_at | datetime }}</td><td>
+      {% set changed = [] %}{% for key, value in entry.after.items() %}{% if entry.before.get(key) != value %}{% set _ = changed.append(key | replace('_', ' ')) %}{% endif %}{% endfor %}
+      {{ changed | join(', ') | title if changed else t('ui.no.value.changes') }}
+    </td>
+  </tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<p class="meta" style="padding:18px;">{{ t('ui.no.deployment.settings.have.been.saved') }}</p>{% endif %}
+</div>
+{% endblock %}

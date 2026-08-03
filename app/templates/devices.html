@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as ui with context %}
+{% block title %}{{ t('ui.devices') }} {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('nav.management.devices') }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><span class="eyebrow">{{ t('ui.administration') }}</span><h1>{{ t('ui.device.catalog') }}</h1>
+    <p class="lede">{{ t('ui.devices.available.for.new.installations.deactivate.models.instead.of.deleting.them.so') }}</p></div>
+  <button class="btn btn-primary" data-toggle-target="add-device" aria-expanded="false">{{ t('ui.add.device') }}</button>
+</div>
+<div class="card" id="add-device" hidden>
+  <div class="card-head"><h2>{{ t('ui.add.a.device') }}</h2></div>
+  <div class="card-body">
+    <form method="post" action="/devices">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="grid cols-2">
+        <div class="field"><label for="device-name">{{ t('ui.device.name') }} <span class="req">*</span></label><input id="device-name" name="name" required maxlength="120" placeholder="e.g. IP Camera" dir="auto"></div>
+        <div class="field"><label for="device-maker">{{ t('ui.manufacturer') }}</label><input id="device-maker" name="manufacturer" maxlength="120" placeholder="e.g. Axis" dir="auto"></div>
+        <div class="field"><label for="device-model">{{ t('ui.model') }} <span class="req">*</span></label><input id="device-model" name="model" required maxlength="120" placeholder="e.g. P3265-LV" dir="auto"></div>
+        <div class="field"><label for="device-desc">{{ t('ui.description') }}</label><input id="device-desc" name="description" placeholder="{{ t('ui.optional.device.details') }}" dir="auto"></div>
+      </div>
+      <div style="display:flex;gap:10px;"><button class="btn btn-primary" type="submit">{{ t('ui.save.device') }}</button><button class="btn btn-secondary" type="button" data-toggle-target="add-device">{{ t('ui.cancel') }}</button></div>
+    </form>
+  </div>
+</div>
+<div class="card">
+  <div class="card-head"><h2>{{ devices|length }} {{ t('ui.device') if devices|length == 1 else t('ui.devices.lowercase') }}</h2>
+    <form method="get" action="/devices" style="display:flex;gap:8px;"><input type="search" name="q" value="{{ q }}" placeholder="{{ t('ui.search.devices') }}" aria-label="{{ t('ui.search.devices.aria') }}" dir="auto"><button class="btn btn-secondary btn-sm">{{ t('ui.search') }}</button>{% if q %}<a class="btn btn-quiet btn-sm" href="/devices">{{ t('ui.clear') }}</a>{% endif %}</form>
+  </div>
+  <div class="card-body tight">
+    {% if devices %}
+    <div class="table-wrap"><table>
+      <thead><tr><th>{{ t('ui.device.title') }}</th><th>{{ t('ui.manufacturer') }}</th><th>{{ t('ui.model') }}</th><th>{{ t('ui.installed') }}</th><th>{{ t('ui.status') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
+      <tbody>{% for d in devices %}
+        <tr><td><strong>{{ d.name }}</strong></td><td>{{ d.manufacturer or '—' }}</td><td class="mono">{{ d.model }}</td><td class="num">{{ usage.get(d.id, 0) }}</td><td>{{ ui.status_badge(d.is_active) }}</td>
+          <td><button class="btn btn-quiet btn-sm" data-toggle-target="device-{{ d.id }}">{{ t('ui.edit') }}</button>
+            {% if user.is_admin %}
+            <form method="post" action="/devices/{{ d.id }}/toggle" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-quiet btn-sm">{{ t('ui.deactivate') if d.is_active else t('ui.activate') }}</button></form>
+            <form method="post" action="/devices/{{ d.id }}/delete" style="display:inline;" onsubmit="return confirm('{{ t("ui.delete.this.device.referenced.devices.will.be.deactivated.instead") }}');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-danger btn-sm" type="submit">{{ t('ui.delete') }}</button></form></td></tr>
+            {% else %}</td></tr>{% endif %}
+        <tr id="device-{{ d.id }}" hidden><td colspan="6" style="background:#f7f9fa;"><form method="post" action="/devices/{{ d.id }}/edit"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <div class="grid cols-2"><div class="field"><label>{{ t('ui.name') }}</label><input name="name" value="{{ d.name }}" required dir="auto"></div><div class="field"><label>{{ t('ui.manufacturer') }}</label><input name="manufacturer" value="{{ d.manufacturer or '' }}" dir="auto"></div><div class="field"><label>{{ t('ui.model') }}</label><input name="model" value="{{ d.model }}" required dir="auto"></div><div class="field"><label>{{ t('ui.description') }}</label><input name="description" value="{{ d.description or '' }}" dir="auto"></div></div>
+          <button class="btn btn-primary btn-sm">{{ t('ui.save.changes') }}</button></form></td></tr>
+      {% endfor %}</tbody>
+    </table></div>
+    {% else %}{{ ui.empty_state(t('ui.no.devices.yet'), t('ui.add.the.device.models.your.teams.install.and.maintain')) }}{% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as ui with context %}
+{% block title %}{{ t('ui.technician.activity') }} {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('nav.reports.technician_activity') }}{% endblock %}
+
+{% block content %}
+{% if export_error %}<div class="alert error">{{ export_error }}</div>{% endif %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">{{ t('ui.administrator.audit') }}</span>
+    <h1>{{ t('nav.reports.technician_activity') }}</h1>
+    <p class="lede">{{ t('ui.review.work.led.or.assisted.by.a.technical.user.device.outcomes.evidence') }}</p>
+  </div>
+  <a class="btn btn-secondary" href="/reports">{{ t('nav.reports.service') }}</a>
+</div>
+
+<div class="card no-print">
+  <div class="card-body">
+    <form method="get" action="/reports/technician-audit">
+      <div class="filters">
+        <div class="field">
+          <label for="technician_id">{{ t('ui.technical.user') }}</label>
+          <select id="technician_id" name="technician_id" required>
+            <option value="">{{ t('ui.select.a.technical.user') }}</option>
+            {% for technician in technicians %}
+            <option value="{{ technician.id }}" {{ "selected" if technician_id == technician.id|string }}>
+              {{ technician.full_name }} · {{ technician.username }}{% if not technician.is_active %} {{ t('ui.inactive.with.separator') }}{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="type">{{ t('ui.record.type') }}</label>
+          <select id="type" name="type">
+            <option value="">{{ t('ui.all.record.types') }}</option>
+            <option value="installation" {{ "selected" if filters.type == "installation" }}>{{ t('ui.installation') }}</option>
+            <option value="maintenance" {{ "selected" if filters.type == "maintenance" }}>{{ t('ui.preventive.maintenance.title') }}</option>
+            <option value="general_maintenance" {{ "selected" if filters.type == "general_maintenance" }}>{{ t('nav.maintenance') }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="project_id">{{ t('ui.project') }}</label>
+          <select id="project_id" name="project_id">
+            <option value="">{{ t('ui.all.projects') }}</option>
+            {% for project in projects %}
+            <option value="{{ project.id }}" {{ "selected" if filters.project_id_value == project.id|string }}>
+              {{ project.name }}{% if not project.is_active %} {{ t('ui.inactive.with.separator') }}{% endif %}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="start">{{ t('ui.from') }}</label>
+          <input id="start" name="start" type="date" value="{{ filters.start }}">
+        </div>
+        <div class="field">
+          <label for="end">{{ t('ui.to') }}</label>
+          <input id="end" name="end" type="date" value="{{ filters.end }}">
+        </div>
+        <div class="filter-actions">
+          <button type="submit" class="btn btn-primary">{{ t('ui.review.activity') }}</button>
+          {% if audit %}<a class="btn btn-secondary" href="/reports/technician-audit">{{ t('ui.clear') }}</a>{% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if audit %}
+<div class="card no-print">
+  <div class="card-head">
+    <div>
+      <h2>{{ t('ui.export') }} {{ audit.technician.full_name }}</h2>
+      <p class="meta" style="margin:4px 0 0;">{{ t('ui.the.pdf.always.includes.the.full.filtered.ledger.and.device.notes') }}</p>
+    </div>
+  </div>
+  <div class="card-body">
+    <form method="get" action="/reports/technician-audit/pdf">
+      <input type="hidden" name="technician_id" value="{{ audit.technician.id }}">
+      <input type="hidden" name="type" value="{{ filters.type }}">
+      <input type="hidden" name="project_id" value="{{ filters.project_id_value }}">
+      <input type="hidden" name="start" value="{{ filters.start }}">
+      <input type="hidden" name="end" value="{{ filters.end }}">
+      <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+        <label style="display:flex;gap:8px;align-items:center;margin:0;">
+          <input type="checkbox" name="include_photos" value="1" style="width:auto;">
+          {{ t('ui.include.evidence.photos') }}
+        </label>
+        <button type="submit" class="btn btn-primary">{{ t('ui.download.technician.pdf') }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="stat-grid">
+  <div class="stat"><span class="stat-label">{{ t('ui.total.visits') }}</span><strong>{{ audit.summary.total_visits }}</strong></div>
+  <div class="stat"><span class="stat-label">{{ t('ui.visits.led') }}</span><strong>{{ audit.summary.led_visits }}</strong></div>
+  <div class="stat"><span class="stat-label">{{ t('ui.visits.assisted') }}</span><strong>{{ audit.summary.assisted_visits }}</strong></div>
+  <div class="stat"><span class="stat-label">{{ t('ui.devices.handled') }}</span><strong>{{ audit.summary.total_devices }}</strong></div>
+  <div class="stat"><span class="stat-label">{{ t('ui.evidence.photos') }}</span><strong>{{ audit.summary.total_photos }}</strong></div>
+  <div class="stat"><span class="stat-label">{{ t('ui.record.edits') }}</span><strong>{{ audit.summary.total_edits }}</strong></div>
+</div>
+
+<div class="grid-2" style="margin-top:18px;">
+  {% for title, rows in [
+    ('Record types', audit.summary.record_types),
+    ('Device results', audit.summary.results),
+    ('Projects', audit.summary.projects),
+    ('Sites', audit.summary.sites),
+    ('Services performed', audit.summary.services),
+    ('Devices handled', audit.summary.devices)
+  ] %}
+  <div class="card">
+    <div class="card-head"><h2>{{ title }}</h2></div>
+    <div class="card-body tight">
+      {% if rows %}
+      <table>
+        <tbody>{% for row in rows %}<tr><td>{{ row.label }}</td><td class="num"><strong>{{ row.count }}</strong></td></tr>{% endfor %}</tbody>
+      </table>
+      {% else %}
+      <p class="meta" style="padding:16px;">{{ t('ui.no.activity') }}</p>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card" style="margin-top:18px;">
+  <div class="card-head">
+    <h2>{{ t('ui.work.history') }}</h2>
+    <span class="meta">{{ audit.summary.total_visits }} {{ t('ui.visit') if audit.summary.total_visits == 1 else t('ui.visits') }}</span>
+  </div>
+  <div class="card-body">
+    {% if audit.records %}
+      {% for record in audit.records %}
+      <section style="padding:0 0 22px;margin:0 0 22px;border-bottom:1px solid var(--line);">
+        <div style="display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap;">
+          <div>
+            <a class="record-no" href="{{ record.href }}">{{ record.record_number }}</a>
+            <span class="tag">{{ t('record.type.' ~ record.record_key) }}</span>
+            <span class="tag">{{ record.technician_role }}</span>
+            <h3 style="margin:8px 0 2px;">{{ record.customer_name }} · {{ record.work_site_name or record.site_name }}</h3>
+            <p class="meta" style="margin:0;">{{ t('ui.submitted.by') }} {{ record.team_leader_name }} · {{ record.submitted_at | datetime }}</p>
+          </div>
+          <div>{{ ui.result_badge(record.result) }}</div>
+        </div>
+        <div class="table-wrap" style="margin-top:14px;">
+          <table>
+            <thead><tr><th>{{ t('ui.device.title') }}</th><th>{{ t('ui.serial.number') }}</th><th>{{ t('ui.service') }}</th><th>{{ t('ui.result') }}</th><th>{{ t('ui.notes.and.findings') }}</th><th>{{ t('ui.photos') }}</th></tr></thead>
+            <tbody>
+              {% for item in record['items'] %}
+              <tr>
+                <td>{{ item.device_name }}<br><span class="meta">{{ item.device_model }}</span></td>
+                <td class="mono">{{ item.serial_number or '—' }}</td>
+                <td>{{ item.service_name }}</td>
+                <td>{{ ui.result_badge(item.result) }}</td>
+                <td>
+                  {{ item.notes }}
+                  {% if item.issue_description %}<br><strong>{{ t('ui.issue') }}</strong> {{ item.issue_description }}{% endif %}
+                  {% if item.recommendations %}<br><strong>{{ t('ui.recommendation') }}</strong> {{ item.recommendations }}{% endif %}
+                  {% if item.handover_notes %}<br><strong>{{ t('ui.handover') }}</strong> {{ item.handover_notes }}{% endif %}
+                </td>
+                <td class="num">{{ item.photos|length }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      {% endfor %}
+    {% else %}
+      {{ ui.empty_state(t('ui.no.technician.activity.matches.these.filters'), t('ui.change.the.period.project.or.record.type')) }}
+    {% endif %}
+  </div>
+</div>
+
+<div class="card" style="margin-top:18px;">
+  <div class="card-head">
+    <h2>{{ t('ui.record.edit.history') }}</h2>
+    <span class="meta">{{ audit.summary.total_edits }} {{ t('ui.edit.lowercase') if audit.summary.total_edits == 1 else t('ui.edits') }}</span>
+  </div>
+  <div class="card-body tight">
+    {% if audit.revisions %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>{{ t('ui.edited') }}</th><th>{{ t('ui.action') }}</th><th>{{ t('ui.record') }}</th><th>{{ t('ui.type') }}</th><th>{{ t('ui.changed.fields') }}</th></tr></thead>
+        <tbody>
+          {% for revision in audit.revisions %}
+          <tr>
+            <td class="mono">{{ revision.created_at | datetime }}</td>
+            <td><span class="tag">{{ revision.action | title }}</span></td>
+            <td class="record-no">{{ revision.record_number }}</td>
+            <td>{{ revision.record_type | replace('_', ' ') | title }}</td>
+            <td>{{ revision.changes.keys() | map('replace', '_', ' ') | join(', ') | title if revision.changes else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <p class="meta" style="padding:18px;">{{ t('ui.this.technician.made.no.record.edits.in.the.selected.period') }}</p>
+    {% endif %}
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <div class="card-body">
+    {{ ui.empty_state(t('ui.select.a.technical.user'), t('ui.choose.a.technician.and.optional.filters.to.review.their.complete.work.history')) }}
+  </div>
+</div>
+{% endif %}
+{% endblock %}

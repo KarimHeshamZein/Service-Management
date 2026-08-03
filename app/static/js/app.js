@@ -1,0 +1,691 @@
+/* Progressive enhancement only — every form still works without this file,
+   except the upload progress bar. */
+(function () {
+  "use strict";
+
+  /* ---------------------------------------------------------- navigation */
+  var burger = document.querySelector("[data-nav-toggle]");
+  var scrim = document.querySelector(".scrim");
+  function closeNav() { document.body.classList.remove("nav-open"); }
+  if (burger) {
+    burger.addEventListener("click", function () {
+      document.body.classList.toggle("nav-open");
+    });
+  }
+  if (scrim) scrim.addEventListener("click", closeNav);
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") closeNav();
+  });
+
+  document.querySelectorAll("[data-nav-section]").forEach(function (section) {
+    var toggle = section.querySelector("[data-nav-group-toggle]");
+    if (!toggle) return;
+
+    var panel = document.getElementById(toggle.getAttribute("aria-controls"));
+    if (!panel) return;
+
+    var storageKey = "service-management.nav." + section.dataset.navSection;
+    var storedState = null;
+    try {
+      storedState = window.localStorage.getItem(storageKey);
+    } catch (error) {
+      storedState = null;
+    }
+
+    var isActive = section.dataset.active === "true";
+    var isOpen = isActive || storedState === "open";
+
+    function setGroupOpen(open, remember) {
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+      panel.hidden = !open;
+
+      if (remember) {
+        try {
+          window.localStorage.setItem(storageKey, open ? "open" : "closed");
+        } catch (error) {
+          // Navigation still works when browser storage is unavailable.
+        }
+      }
+    }
+
+    setGroupOpen(isOpen, false);
+    toggle.addEventListener("click", function () {
+      setGroupOpen(toggle.getAttribute("aria-expanded") !== "true", true);
+    });
+  });
+
+  /* -------------------------------------------------- pricing quotation */
+  var pricingForm = document.querySelector("[data-pricing-quotation-form]");
+  var catalogueNode = document.getElementById("pricing-catalogue-data");
+  if (pricingForm && catalogueNode) {
+    var pricingCatalogue = [];
+    try {
+      pricingCatalogue = JSON.parse(catalogueNode.textContent);
+    } catch (error) {
+      pricingCatalogue = [];
+    }
+    var pricingLines = pricingForm.querySelector("[data-pricing-lines]");
+    var addPricingLine = pricingForm.querySelector("[data-add-pricing-line]");
+    var nextPricingIndex = 0;
+
+    function catalogueItem(value) {
+      return pricingCatalogue.filter(function (item) {
+        return String(item.id) === String(value);
+      })[0];
+    }
+
+    function relatedSelection(section) {
+      try {
+        return JSON.parse(section.dataset.relatedSelection || "[]");
+      } catch (error) {
+        return [];
+      }
+    }
+
+    function renderRelatedItems(section, selected) {
+      var index = section.dataset.lineIndex;
+      var select = section.querySelector("[data-pricing-item-select]");
+      var container = section.querySelector("[data-pricing-related-items]");
+      var item = catalogueItem(select.value);
+      container.replaceChildren();
+      if (!item) return;
+
+      if (!item.related.length) {
+        var empty = document.createElement("p");
+        empty.className = "hint";
+        empty.textContent = "This main item has no optional related items.";
+        container.appendChild(empty);
+        return;
+      }
+
+      var title = document.createElement("p");
+      title.className = "section-title";
+      title.textContent = "Optional related items";
+      container.appendChild(title);
+
+      var optionalRows = [];
+      item.related.forEach(function (related) {
+        var previous = selected.filter(function (entry) {
+          return String(entry.id) === String(related.id);
+        })[0];
+        var row = document.createElement("div");
+        row.className = "pricing-related-choice";
+
+        var choice = document.createElement("label");
+        choice.className = "choice";
+        var checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.name = "line_" + index + "_related_ids";
+        checkbox.value = related.id;
+        checkbox.checked = Boolean(previous);
+        var labelText = document.createElement("span");
+        labelText.textContent = related.name + " — " + related.price;
+        choice.appendChild(checkbox);
+        choice.appendChild(labelText);
+
+        var quantityWrap = document.createElement("div");
+        quantityWrap.className = "field pricing-related-quantity";
+        quantityWrap.hidden = !checkbox.checked;
+        var quantityLabel = document.createElement("label");
+        var quantityId = "line-" + index + "-related-" + related.id;
+        quantityLabel.htmlFor = quantityId;
+        quantityLabel.textContent = "Quantity";
+        var quantityInput = document.createElement("input");
+        quantityInput.id = quantityId;
+        quantityInput.name = "line_" + index + "_related_qty_" + related.id;
+        quantityInput.type = "number";
+        quantityInput.min = "0.01";
+        quantityInput.step = "0.01";
+        quantityInput.value = previous && previous.quantity ? previous.quantity : "1";
+        quantityInput.required = checkbox.checked;
+        quantityWrap.appendChild(quantityLabel);
+        quantityWrap.appendChild(quantityInput);
+
+        var priceWrap = document.createElement("div");
+        priceWrap.className = "field pricing-related-price";
+        priceWrap.hidden = !checkbox.checked;
+        var priceLabel = document.createElement("label");
+        var priceId = quantityId + "-price";
+        priceLabel.htmlFor = priceId;
+        priceLabel.textContent = "Unit price";
+        var priceInput = document.createElement("input");
+        priceInput.id = priceId;
+        priceInput.name = "line_" + index + "_related_price_" + related.id;
+        priceInput.type = "number";
+        priceInput.min = "0";
+        priceInput.step = "0.01";
+        priceInput.className = "catalogue-price-input";
+        priceInput.value =
+          previous && previous.unit_price ? previous.unit_price : related.price;
+        priceInput.required = checkbox.checked;
+        priceWrap.appendChild(priceLabel);
+        priceWrap.appendChild(priceInput);
+
+        function setSelected(active) {
+          checkbox.checked = active;
+          quantityWrap.hidden = !active;
+          priceWrap.hidden = !active;
+          quantityInput.required = active;
+          priceInput.required = active;
+          if (!active) {
+            quantityInput.value = "1";
+            priceInput.value = related.price;
+          }
+        }
+
+        checkbox.addEventListener("change", function () {
+          setSelected(checkbox.checked);
+          if (checkbox.checked && skipCheckbox) {
+            skipCheckbox.checked = false;
+            section.dataset.skipOptional = "false";
+          }
+        });
+
+        row.appendChild(choice);
+        row.appendChild(quantityWrap);
+        row.appendChild(priceWrap);
+        container.appendChild(row);
+        optionalRows.push({ checkbox: checkbox, setSelected: setSelected });
+      });
+
+      var skipChoice = document.createElement("label");
+      skipChoice.className = "choice pricing-skip-optionals";
+      var skipCheckbox = document.createElement("input");
+      skipCheckbox.type = "checkbox";
+      skipCheckbox.name = "line_" + index + "_skip_optional_items";
+      skipCheckbox.value = "1";
+      skipCheckbox.checked = section.dataset.skipOptional === "true";
+      var skipText = document.createElement("span");
+      skipText.textContent = "Skip all optional items for this main item";
+      skipChoice.appendChild(skipCheckbox);
+      skipChoice.appendChild(skipText);
+      container.appendChild(skipChoice);
+
+      skipCheckbox.addEventListener("change", function () {
+        section.dataset.skipOptional = skipCheckbox.checked ? "true" : "false";
+        if (skipCheckbox.checked) {
+          optionalRows.forEach(function (entry) {
+            entry.setSelected(false);
+          });
+        }
+      });
+      if (skipCheckbox.checked) {
+        optionalRows.forEach(function (entry) {
+          entry.setSelected(false);
+        });
+      }
+    }
+
+    function updateMainItem(section, resetPrice) {
+      var select = section.querySelector("[data-pricing-item-select]");
+      var item = catalogueItem(select.value);
+      var priceInput = section.querySelector("[data-pricing-main-price]");
+      var image = section.querySelector("[data-pricing-item-image]");
+      if (!item) {
+        if (resetPrice) priceInput.value = "";
+        image.hidden = true;
+        image.removeAttribute("src");
+        image.alt = "";
+        return;
+      }
+      if (resetPrice || !priceInput.value) priceInput.value = item.price;
+      if (item.image_url) {
+        image.src = item.image_url;
+        image.alt = item.label;
+        image.hidden = false;
+      } else {
+        image.hidden = true;
+        image.removeAttribute("src");
+        image.alt = "";
+      }
+    }
+
+    function refreshRemoveButtons() {
+      var sections = pricingLines.querySelectorAll("[data-pricing-line]");
+      sections.forEach(function (section) {
+        section.querySelector("[data-remove-pricing-line]").disabled =
+          sections.length === 1;
+      });
+    }
+
+    function initialisePricingLine(section) {
+      var index = Number(section.dataset.lineIndex);
+      nextPricingIndex = Math.max(nextPricingIndex, index + 1);
+      var select = section.querySelector("[data-pricing-item-select]");
+      updateMainItem(section, false);
+      renderRelatedItems(section, relatedSelection(section));
+      select.addEventListener("change", function () {
+        section.dataset.relatedSelection = "[]";
+        section.dataset.skipOptional = "false";
+        updateMainItem(section, true);
+        renderRelatedItems(section, []);
+      });
+      section.querySelector("[data-remove-pricing-line]").addEventListener(
+        "click",
+        function () {
+          section.remove();
+          refreshRemoveButtons();
+        }
+      );
+    }
+
+    pricingLines.querySelectorAll("[data-pricing-line]").forEach(
+      initialisePricingLine
+    );
+    refreshRemoveButtons();
+
+    if (addPricingLine) {
+      addPricingLine.addEventListener("click", function () {
+        var source = pricingLines.querySelector("[data-pricing-line]");
+        if (!source) return;
+        var oldIndex = source.dataset.lineIndex;
+        var newIndex = String(nextPricingIndex++);
+        var section = source.cloneNode(true);
+        section.dataset.lineIndex = newIndex;
+        section.dataset.relatedSelection = "[]";
+        section.dataset.skipOptional = "false";
+        section.querySelectorAll("[name]").forEach(function (field) {
+          field.name = field.name.replace(
+            "line_" + oldIndex + "_",
+            "line_" + newIndex + "_"
+          );
+        });
+        section.querySelectorAll("[id]").forEach(function (field) {
+          field.id = field.id.replace("-" + oldIndex, "-" + newIndex);
+        });
+        section.querySelectorAll("label[for]").forEach(function (label) {
+          label.htmlFor = label.htmlFor.replace("-" + oldIndex, "-" + newIndex);
+        });
+        section.querySelectorAll(".field-error").forEach(function (error) {
+          error.remove();
+        });
+        section.querySelector("[data-pricing-item-select]").value = "";
+        section.querySelector(
+          'input[name="line_' + newIndex + '_quantity"]'
+        ).value = "1";
+        section.querySelector("[data-pricing-main-price]").value = "";
+        section.querySelector("[data-pricing-item-image]").hidden = true;
+        section.querySelector("[data-pricing-related-items]").replaceChildren();
+        pricingLines.appendChild(section);
+        initialisePricingLine(section);
+        refreshRemoveButtons();
+        section.querySelector("[data-pricing-item-select]").focus();
+      });
+    }
+  }
+
+  /* ------------------------------------------------------ dialog toggles */
+  document.querySelectorAll("[data-toggle-target]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var target = document.getElementById(btn.dataset.toggleTarget);
+      if (!target) return;
+      var open = target.hasAttribute("hidden");
+      if (open) { target.removeAttribute("hidden"); } else { target.setAttribute("hidden", ""); }
+      btn.setAttribute("aria-expanded", String(open));
+      if (open) { var f = target.querySelector("input, textarea, select"); if (f) f.focus(); }
+    });
+  });
+
+  /* --------------------------------------------------- searchable select */
+  document.querySelectorAll("[data-combo]").forEach(function (root) {
+    var input = root.querySelector(".combo-input");
+    var list = root.querySelector(".combo-list");
+    var hidden = root.querySelector("input[type=hidden]");
+    var options = Array.prototype.slice.call(list.querySelectorAll(".combo-option"));
+    var cursor = -1;
+
+    function visible() {
+      return options.filter(function (o) { return o.style.display !== "none"; });
+    }
+    function open() { list.removeAttribute("hidden"); input.setAttribute("aria-expanded", "true"); }
+    function close() {
+      list.setAttribute("hidden", "");
+      input.setAttribute("aria-expanded", "false");
+      cursor = -1;
+      options.forEach(function (o) { o.setAttribute("aria-selected", "false"); });
+      // Snap the text back to the committed choice.
+      var chosen = options.filter(function (o) { return o.dataset.value === hidden.value; })[0];
+      input.value = chosen ? chosen.dataset.label : "";
+    }
+    function filter(term) {
+      var t = term.trim().toLowerCase();
+      var shown = 0;
+      options.forEach(function (o) {
+        var match = !t || o.dataset.search.indexOf(t) !== -1;
+        var customerField = document.querySelector("[data-customer-select]");
+        if (o.dataset.customer && customerField && customerField.value) {
+          match = match && o.dataset.customer === customerField.value;
+        }
+        var siteField = document.querySelector("[data-site-combo] input[type=hidden]");
+        if (o.dataset.site && siteField && siteField.value) {
+          match = match && o.dataset.site === siteField.value;
+        }
+        o.style.display = match ? "" : "none";
+        if (match) shown++;
+      });
+      var empty = list.querySelector(".combo-empty");
+      if (empty) empty.style.display = shown ? "none" : "";
+    }
+    function choose(option) {
+      hidden.value = option.dataset.value;
+      input.value = option.dataset.label;
+      close();
+      hidden.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    function move(step) {
+      var vis = visible();
+      if (!vis.length) return;
+      cursor = (cursor + step + vis.length) % vis.length;
+      vis.forEach(function (o, i) { o.setAttribute("aria-selected", String(i === cursor)); });
+      vis[cursor].scrollIntoView({ block: "nearest" });
+    }
+
+    input.addEventListener("focus", function () { filter(""); open(); });
+    input.addEventListener("input", function () { hidden.value = ""; filter(input.value); open(); });
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "ArrowDown") { e.preventDefault(); open(); move(1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); open(); move(-1); }
+      else if (e.key === "Enter") {
+        var vis = visible();
+        if (!list.hasAttribute("hidden") && cursor >= 0 && vis[cursor]) { e.preventDefault(); choose(vis[cursor]); }
+      } else if (e.key === "Escape") { close(); }
+    });
+    options.forEach(function (o) {
+      o.addEventListener("mousedown", function (e) { e.preventDefault(); choose(o); });
+    });
+    document.addEventListener("click", function (e) { if (!root.contains(e.target)) close(); });
+  });
+
+  /* ------------------------------------------ selected site information */
+  var siteCombo = document.querySelector("[data-site-combo]");
+  var siteDetails = document.querySelector("[data-site-details]");
+  if (siteCombo && siteDetails) {
+    var siteValue = siteCombo.querySelector('input[type="hidden"]');
+    var customerSelect = document.querySelector("[data-customer-select]");
+    function syncSiteDetails() {
+      var option = siteCombo.querySelector(
+        '.combo-option[data-value="' + siteValue.value + '"]'
+      );
+      if (!option) {
+        siteDetails.setAttribute("hidden", "");
+        return;
+      }
+      var location = option.dataset.address || "";
+      if (option.dataset.city) location += (location ? " · " : "") + option.dataset.city;
+      var contact = option.dataset.contact || "";
+      if (option.dataset.phone) contact += (contact ? " · " : "") + option.dataset.phone;
+      siteDetails.querySelector("[data-site-address]").textContent =
+        location || "No address recorded.";
+      siteDetails.querySelector("[data-site-contact]").textContent = contact
+        ? "Contact: " + contact
+        : "No site contact recorded.";
+      siteDetails.removeAttribute("hidden");
+    }
+    siteValue.addEventListener("change", syncSiteDetails);
+    if (customerSelect) {
+      customerSelect.addEventListener("change", function () {
+        var chosen = siteCombo.querySelector(
+          '.combo-option[data-value="' + siteValue.value + '"]'
+        );
+        if (chosen && chosen.dataset.customer !== customerSelect.value) {
+          siteValue.value = "";
+          siteCombo.querySelector(".combo-input").value = "";
+          siteValue.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      });
+    }
+    syncSiteDetails();
+  }
+  if (siteCombo) {
+    var dependentSiteValue = siteCombo.querySelector('input[type="hidden"]');
+    var dependentCustomer = document.querySelector("[data-customer-select]");
+    var installedDeviceField = document.querySelector('input[name="installed_device_id"]');
+    function clearDependentDevice() {
+      if (!installedDeviceField || !installedDeviceField.value) return;
+      var selectedDevice = document.querySelector(
+        '.combo-option[data-value="' + installedDeviceField.value + '"][data-site]'
+      );
+      if (
+        selectedDevice &&
+        selectedDevice.dataset.site !== dependentSiteValue.value
+      ) {
+        installedDeviceField.value = "";
+        var deviceInput = installedDeviceField.closest(".combo").querySelector(".combo-input");
+        if (deviceInput) deviceInput.value = "";
+      }
+    }
+    if (dependentCustomer) {
+      dependentCustomer.addEventListener("change", function () {
+        var selectedSite = siteCombo.querySelector(
+          '.combo-option[data-value="' + dependentSiteValue.value + '"]'
+        );
+        if (selectedSite && selectedSite.dataset.customer !== dependentCustomer.value) {
+          dependentSiteValue.value = "";
+          siteCombo.querySelector(".combo-input").value = "";
+          dependentSiteValue.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+      });
+    }
+    dependentSiteValue.addEventListener("change", clearDependentDevice);
+    clearDependentDevice();
+  }
+
+  /* -------------------------------------------------------- photo input */
+  window.initializePhotoPicker = function (photoRoot) {
+    if (!photoRoot || photoRoot.dataset.photoReady === "true") return;
+    photoRoot.dataset.photoReady = "true";
+    var selected = [];
+    var fileInput = photoRoot.querySelector("input[type=file]");
+    var grid = photoRoot.querySelector(".preview-grid");
+    var zone = photoRoot.querySelector(".dropzone");
+    var counter = photoRoot.querySelector("[data-photo-count]");
+    var maxBytes = parseInt(photoRoot.dataset.maxBytes, 10);
+    var maxFiles = parseInt(photoRoot.dataset.maxFiles, 10);
+    var allowed = ["image/jpeg", "image/png", "image/webp"];
+    var errorBox = photoRoot.querySelector("[data-photo-error]");
+
+    function showError(msg) {
+      errorBox.textContent = msg || "";
+      errorBox.style.display = msg ? "" : "none";
+    }
+    function refresh() {
+      grid.innerHTML = "";
+      selected.forEach(function (file, index) {
+        var cell = document.createElement("div");
+        cell.className = "preview";
+        var img = document.createElement("img");
+        img.alt = file.name;
+        img.src = URL.createObjectURL(file);
+        img.addEventListener("load", function () { URL.revokeObjectURL(img.src); });
+        var name = document.createElement("span");
+        name.className = "name";
+        name.textContent = file.name;
+        var kill = document.createElement("button");
+        kill.type = "button"; kill.className = "remove"; kill.innerHTML = "&times;";
+        kill.setAttribute("aria-label", "Remove " + file.name);
+        kill.addEventListener("click", function () {
+          selected.splice(index, 1);
+          refresh();
+        });
+        cell.append(img, name, kill);
+        grid.appendChild(cell);
+      });
+      if (counter) {
+        counter.textContent = selected.length
+          ? selected.length + (selected.length === 1 ? " photo ready" : " photos ready")
+          : "No photos yet";
+      }
+      syncInput();
+    }
+    function syncInput() {
+      var dt = new DataTransfer();
+      selected.forEach(function (f) { dt.items.add(f); });
+      fileInput.files = dt.files;
+    }
+    function accept(files) {
+      showError("");
+      Array.prototype.forEach.call(files, function (file) {
+        if (selected.length >= maxFiles) { showError("You can attach up to " + maxFiles + " photos."); return; }
+        if (allowed.indexOf(file.type) === -1) { showError("“" + file.name + "” is not a JPEG, PNG or WebP file."); return; }
+        if (file.size > maxBytes) {
+          showError("“" + file.name + "” is larger than the " + (maxBytes / 1048576).toFixed(0) + " MB limit.");
+          return;
+        }
+        selected.push(file);
+      });
+      refresh();
+    }
+
+    // Two inputs (camera + gallery) feed one list; only the primary one is submitted.
+    photoRoot.querySelectorAll("input[type=file]").forEach(function (input) {
+      input.addEventListener("change", function (e) {
+        if (e.target !== fileInput) {
+          accept(e.target.files);
+          e.target.value = "";
+        } else {
+          accept(e.target.files);
+        }
+      });
+    });
+    photoRoot.querySelectorAll("[data-pick]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var target = photoRoot.querySelector("#" + btn.dataset.pick);
+        if (target) target.click();
+      });
+    });
+    ["dragenter", "dragover"].forEach(function (evt) {
+      zone.addEventListener(evt, function (e) { e.preventDefault(); zone.classList.add("dragging"); });
+    });
+    ["dragleave", "drop"].forEach(function (evt) {
+      zone.addEventListener(evt, function (e) { e.preventDefault(); zone.classList.remove("dragging"); });
+    });
+    zone.addEventListener("drop", function (e) {
+      if (e.dataTransfer && e.dataTransfer.files) accept(e.dataTransfer.files);
+    });
+  };
+  document.querySelectorAll("[data-photos]").forEach(window.initializePhotoPicker);
+
+  /* ------------------------------------ submit with progress + duplicate lock */
+  var submitForm = document.querySelector("[data-async-form]");
+  if (submitForm && window.XMLHttpRequest && window.FormData) {
+    var submitBtn = submitForm.querySelector("[data-submit]");
+    var progress = submitForm.querySelector(".progress");
+    var bar = progress ? progress.querySelector("span") : null;
+    var busy = false;
+    var dirtyGuardOff = false;
+    var submitLabel = submitBtn.dataset.label || submitBtn.textContent;
+    var savingLabel = submitBtn.dataset.savingLabel || "Saving record…";
+
+    submitForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      if (busy) return;
+      busy = true;
+      dirtyGuardOff = true;
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = '<span class="spinner" aria-hidden="true"></span> ' + savingLabel;
+      if (progress) { progress.removeAttribute("hidden"); bar.style.width = "0%"; }
+
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", submitForm.action, true);
+      xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+      xhr.upload.addEventListener("progress", function (evt) {
+        if (evt.lengthComputable && bar) bar.style.width = (evt.loaded / evt.total * 100).toFixed(0) + "%";
+      });
+      xhr.addEventListener("load", function () {
+        var data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (err) { data = {}; }
+        if (xhr.status >= 200 && xhr.status < 300 && data.redirect) {
+          if (bar) bar.style.width = "100%";
+          window.location.assign(data.redirect);
+          return;
+        }
+        busy = false;
+        dirtyGuardOff = false;
+        submitBtn.disabled = false;
+        submitBtn.textContent = submitLabel;
+        if (progress) progress.setAttribute("hidden", "");
+        renderErrors(data.errors || { form: "The record could not be saved. Try again." }, data.form_token);
+      });
+      xhr.addEventListener("error", function () {
+        busy = false; dirtyGuardOff = false;
+        submitBtn.disabled = false;
+        submitBtn.textContent = submitLabel;
+        if (progress) progress.setAttribute("hidden", "");
+        renderErrors({ form: "The connection dropped before the record was saved. Try again." });
+      });
+      xhr.send(new FormData(submitForm));
+    });
+
+    function renderErrors(errors, freshToken) {
+      if (freshToken) {
+        var tokenField = submitForm.querySelector('input[name=form_token]');
+        if (tokenField) tokenField.value = freshToken;
+      }
+      submitForm.querySelectorAll("[data-error-for]").forEach(function (slot) {
+        var key = slot.dataset.errorFor;
+        slot.textContent = errors[key] || "";
+        slot.style.display = errors[key] ? "" : "none";
+        var field = submitForm.querySelector('[name="' + key + '"]');
+        if (field) field.setAttribute("aria-invalid", errors[key] ? "true" : "false");
+      });
+      var top = submitForm.querySelector("[data-form-error]") ||
+        document.querySelector("[data-form-error]");
+      if (top) {
+        top.textContent = errors.form || "";
+        top.style.display = errors.form ? "" : "none";
+      }
+      var first = submitForm.querySelector('[data-error-for]:not([style*="display: none"])');
+      (first || submitForm).scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+
+    /* unsaved-changes guard */
+    var touched = false;
+    submitForm.addEventListener("input", function () { touched = true; });
+    submitForm.addEventListener("change", function () { touched = true; });
+    window.addEventListener("beforeunload", function (e) {
+      if (touched && !dirtyGuardOff) { e.preventDefault(); e.returnValue = ""; }
+    });
+  }
+
+  /* ------------------------------------------------------------ lightbox */
+  var lightbox = document.querySelector("[data-lightbox]");
+  if (lightbox) {
+    var stageImg = lightbox.querySelector("img");
+    var caption = lightbox.querySelector("[data-lb-caption]");
+    var thumbs = Array.prototype.slice.call(document.querySelectorAll("[data-lb-open]"));
+    var at = 0;
+    var lastFocus = null;
+
+    function show(i) {
+      at = (i + thumbs.length) % thumbs.length;
+      var src = thumbs[at].dataset.full;
+      stageImg.src = src;
+      stageImg.alt = thumbs[at].dataset.caption || "Proof photo";
+      caption.textContent = (at + 1) + " of " + thumbs.length + " · " + (thumbs[at].dataset.caption || "");
+    }
+    function open(i) {
+      lastFocus = document.activeElement;
+      lightbox.removeAttribute("hidden");
+      document.body.style.overflow = "hidden";
+      show(i);
+      lightbox.querySelector("[data-lb-close]").focus();
+    }
+    function close() {
+      lightbox.setAttribute("hidden", "");
+      document.body.style.overflow = "";
+      if (lastFocus) lastFocus.focus();
+    }
+    thumbs.forEach(function (t, i) { t.addEventListener("click", function () { open(i); }); });
+    lightbox.querySelector("[data-lb-close]").addEventListener("click", close);
+    var prev = lightbox.querySelector("[data-lb-prev]");
+    var next = lightbox.querySelector("[data-lb-next]");
+    if (prev) prev.addEventListener("click", function () { show(at - 1); });
+    if (next) next.addEventListener("click", function () { show(at + 1); });
+    document.addEventListener("keydown", function (e) {
+      if (lightbox.hasAttribute("hidden")) return;
+      if (e.key === "Escape") close();
+      if (e.key === "ArrowRight") show(at + 1);
+      if (e.key === "ArrowLeft") show(at - 1);
+    });
+  }
+})();

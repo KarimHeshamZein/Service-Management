@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as ui with context %}
+{% block title %}{{ t('ui.price.quotations') }} {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('nav.pricing.quotations') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div><span class="eyebrow">{{ t('nav.group.pricing') }}</span><h1>{{ t('nav.pricing.quotations') }}</h1><p class="lede">{{ t('ui.create.and.search.project.quotations.with.fixed.historical.item.and.price.snapshots') }}</p></div>
+  <a class="btn btn-primary" href="/pricing/quotations/new">{{ t('ui.create.quotation') }}</a>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>{{ page_info.total }} {{ t('ui.quotation.lowercase') if page_info.total == 1 else t('ui.quotations') }}</h2>
+    <form method="get" action="/pricing/quotations" style="display:flex;gap:8px;">
+      <input type="search" name="q" value="{{ q }}" placeholder="{{ t('ui.number.project.or.creator') }}" aria-label="{{ t('ui.search.quotations') }}" dir="auto">
+      <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.search') }}</button>
+      {% if q %}<a class="btn btn-quiet btn-sm" href="/pricing/quotations">{{ t('ui.clear') }}</a>{% endif %}
+    </form>
+  </div>
+  <div class="card-body tight">
+    {% if quotations %}
+    <div class="table-wrap"><table>
+      <thead><tr><th>{{ t('ui.quotation') }}</th><th>{{ t('ui.project') }}</th><th>{{ t('ui.date') }}</th><th>{{ t('ui.valid.until.label') }}</th><th>{{ t('ui.created.by') }}</th><th>{{ t('ui.total') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
+      <tbody>{% for quotation in quotations %}
+        <tr>
+          <td><a class="record-no" href="/pricing/quotations/{{ quotation.id }}">{{ quotation.quotation_number }}</a></td>
+          <td><strong>{{ quotation.project_name }}</strong></td>
+          <td class="num">{{ quotation.quotation_date|date }}</td>
+          <td class="num">{{ quotation.valid_until|date }}</td>
+          <td>{{ quotation.created_by_name }}</td>
+          <td class="num"><strong>{{ totals[quotation.id].grand_total|money }} {{ quotation.currency }}</strong></td>
+          <td style="white-space:nowrap;"><a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}">{{ t('ui.view') }}</a><a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}/edit">{{ t('ui.edit') }}</a></td>
+        </tr>
+      {% endfor %}</tbody>
+    </table></div>
+    {% if page_info.pages > 1 %}
+    <nav class="pagination" aria-label="{{ t('ui.quotation.pages') }}">
+      {% if page_info.page > 1 %}<a href="?q={{ q|urlencode }}&page={{ page_info.page - 1 }}">{{ t('ui.previous') }}</a>{% endif %}
+      <span>{{ t('ui.page') }} {{ page_info.page }} {{ t('ui.of') }} {{ page_info.pages }}</span>
+      {% if page_info.page < page_info.pages %}<a href="?q={{ q|urlencode }}&page={{ page_info.page + 1 }}">{{ t('ui.next') }}</a>{% endif %}
+    </nav>
+    {% endif %}
+    {% else %}
+    {{ ui.empty_state(t('ui.no.quotations.found'), t('ui.create.the.first.quotation.or.try.a.different.search'), '/pricing/quotations/new', t('ui.create.quotation')) }}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as ui with context %}
+{% block title %}{{ t('ui.items') }} {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('ui.pricing.items') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">{{ t('nav.group.pricing') }}</span>
+    <h1>{{ t('nav.pricing.items') }}</h1>
+    <p class="lede">{{ t('ui.maintain.main.items.and.the.optional.priced.items.that.depend.on.them') }}</p>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <button class="btn btn-secondary" data-toggle-target="add-related-item" aria-expanded="false">{{ t('ui.add.related.item') }}</button>
+    <button class="btn btn-primary" data-toggle-target="add-pricing-item" aria-expanded="false">{{ t('ui.add.main.item') }}</button>
+  </div>
+</div>
+
+<div class="card" id="add-pricing-item" hidden>
+  <div class="card-head"><h2>{{ t('ui.add.a.main.item') }}</h2></div>
+  <div class="card-body">
+    <form method="post" action="/pricing/items" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="grid cols-3">
+        <div class="field"><label for="pi-name">{{ t('ui.item.name') }} <span class="req">*</span></label>
+          <input id="pi-name" name="name" required maxlength="160" placeholder="Camera" dir="auto"></div>
+        <div class="field"><label for="pi-model">{{ t('ui.model') }}</label>
+          <input id="pi-model" name="model" maxlength="120" placeholder="P3265-LV" dir="auto"></div>
+        <div class="field"><label for="pi-price">{{ t('ui.unit.price') }}{{ currency }}) <span class="req">*</span></label>
+          <input id="pi-price" name="unit_price" type="number" min="0" max="999999999999.99" step="0.01" required></div>
+        <div class="field"><label for="pi-image">{{ t('ui.item.image') }}</label>
+          <input id="pi-image" name="image" type="file" accept="image/jpeg,image/png,image/webp">
+          <p class="hint">{{ t('ui.jpeg.png.or.webp.maximum') }} {{ settings.max_upload_mb|int }} MB.</p>
+        </div>
+      </div>
+      <button class="btn btn-primary" type="submit">{{ t('ui.create.main.item') }}</button>
+    </form>
+  </div>
+</div>
+
+<div class="card" id="add-related-item" hidden>
+  <div class="card-head"><h2>{{ t('ui.add.an.optional.related.item') }}</h2></div>
+  <div class="card-body">
+    {% if active_items %}
+    <form method="post" action="/pricing/related-items">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="grid cols-3">
+        <div class="field"><label for="pri-main">{{ t('ui.main.item') }} <span class="req">*</span></label>
+          <select id="pri-main" name="main_item_id" required>
+            <option value="">{{ t('ui.choose.a.main.item') }}</option>
+            {% for item in active_items %}<option value="{{ item.id }}">{{ item.display_label }}</option>{% endfor %}
+          </select>
+          <p class="hint">{{ t('ui.the.related.item.appears.only.when.this.main.item.is.selected.on') }}</p>
+        </div>
+        <div class="field"><label for="pri-name">{{ t('ui.related.item') }} <span class="req">*</span></label>
+          <input id="pri-name" name="name" required maxlength="160" placeholder="{{ t('ui.sim.card.transportation.engraving') }}" dir="auto"></div>
+        <div class="field"><label for="pri-price">{{ t('ui.unit.price') }}{{ currency }}) <span class="req">*</span></label>
+          <input id="pri-price" name="unit_price" type="number" min="0" max="999999999999.99" step="0.01" required></div>
+      </div>
+      <button class="btn btn-primary" type="submit">{{ t('ui.add.related.item') }}</button>
+    </form>
+    {% else %}
+    {{ ui.empty_state(t('ui.create.a.main.item.first'), t('ui.a.related.item.must.belong.to.an.active.main.item')) }}
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>{{ items|length }} {{ t('ui.item') if items|length == 1 else t('ui.items.lowercase') }}</h2>
+    <form method="get" action="/pricing/items" style="display:flex;gap:8px;">
+      <input type="search" name="q" value="{{ q }}" placeholder="{{ t('ui.search.name.or.model') }}" aria-label="{{ t('ui.search.pricing.items') }}" dir="auto">
+      <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.search') }}</button>
+      {% if q %}<a class="btn btn-quiet btn-sm" href="/pricing/items">{{ t('ui.clear') }}</a>{% endif %}
+    </form>
+  </div>
+  <div class="card-body tight">
+    {% if items %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>{{ t('ui.image') }}</th><th>{{ t('ui.main.item') }}</th><th>{{ t('ui.model') }}</th><th>{{ t('ui.unit.price.label') }}</th><th>{{ t('ui.related.items') }}</th><th>{{ t('ui.status') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
+        <tbody>
+        {% for item in items %}
+          <tr>
+            <td>{% if item.image_storage_key %}<img src="/pricing/items/{{ item.id }}/image?size=thumb" alt="{{ item.name }}" style="width:64px;height:48px;object-fit:cover;border-radius:6px;">{% else %}<span class="hint">{{ t('ui.no.image') }}</span>{% endif %}</td>
+            <td><strong>{{ item.name }}</strong></td>
+            <td>{{ item.model or '—' }}</td>
+            <td class="num">{{ item.unit_price|money }} {{ currency }}</td>
+            <td class="num">{{ item.related_items|length }}</td>
+            <td>{{ ui.status_badge(item.is_active) }}</td>
+            <td style="white-space:nowrap;">
+              <button class="btn btn-quiet btn-sm" data-toggle-target="pricing-item-{{ item.id }}" aria-expanded="false">{{ t('ui.manage') }}</button>
+              {% if can_delete %}
+              <form method="post" action="/pricing/items/{{ item.id }}/toggle" style="display:inline;"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-quiet btn-sm" type="submit">{{ t('ui.deactivate') if item.is_active else t('ui.activate') }}</button></form>
+              <form method="post" action="/pricing/items/{{ item.id }}/delete" style="display:inline;" onsubmit="return confirm('{{ t("ui.delete.this.pricing.item.and.its.related.items.existing.quotations.keep.their") }}');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-danger btn-sm" type="submit">{{ t('ui.delete') }}</button></form>
+              {% endif %}
+            </td>
+          </tr>
+          <tr id="pricing-item-{{ item.id }}" hidden>
+            <td colspan="7" style="background:#f7f9fa;">
+              <div class="grid cols-2">
+                <form method="post" action="/pricing/items/{{ item.id }}/edit" enctype="multipart/form-data">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <p class="section-title">{{ t('ui.main.item.details') }}</p>
+                  <div class="field"><label for="pin{{ item.id }}">{{ t('ui.item.name') }}</label><input id="pin{{ item.id }}" name="name" value="{{ item.name }}" required maxlength="160" dir="auto"></div>
+                  <div class="field"><label for="pim{{ item.id }}">{{ t('ui.model') }}</label><input id="pim{{ item.id }}" name="model" value="{{ item.model }}" maxlength="120" dir="auto"></div>
+                  <div class="field"><label for="pip{{ item.id }}">{{ t('ui.unit.price') }}{{ currency }})</label><input id="pip{{ item.id }}" name="unit_price" type="number" min="0" step="0.01" value="{{ item.unit_price }}" required></div>
+                  <div class="field"><label for="pii{{ item.id }}">{{ t('ui.replace.image') if item.image_storage_key else t('ui.add.image') }}</label><input id="pii{{ item.id }}" name="image" type="file" accept="image/jpeg,image/png,image/webp"></div>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                    <button class="btn btn-primary btn-sm" type="submit">{{ t('ui.save.main.item') }}</button>
+                    {% if item.image_storage_key %}<button class="btn btn-quiet btn-sm" type="submit" formaction="/pricing/items/{{ item.id }}/remove-image" formnovalidate>{{ t('ui.remove.image') }}</button>{% endif %}
+                  </div>
+                </form>
+                <div>
+                  <p class="section-title">{{ t('ui.optional.related.items') }}</p>
+                  {% if item.related_items %}
+                    {% for related in item.related_items %}
+                    <form method="post" action="/pricing/related-items/{{ related.id }}/edit" class="card" style="padding:12px;margin-bottom:10px;">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                      <div class="grid cols-2">
+                        <div class="field"><label for="rin{{ related.id }}">{{ t('ui.name') }}</label><input id="rin{{ related.id }}" name="name" value="{{ related.name }}" required maxlength="160" dir="auto"></div>
+                        <div class="field"><label for="rip{{ related.id }}">{{ t('ui.price') }}{{ currency }})</label><input id="rip{{ related.id }}" name="unit_price" type="number" min="0" step="0.01" value="{{ related.unit_price }}" required></div>
+                      </div>
+                      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                        <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.save') }}</button>
+                        {{ ui.status_badge(related.is_active) }}
+                        {% if can_delete %}
+                        <button class="btn btn-quiet btn-sm" type="submit" formaction="/pricing/related-items/{{ related.id }}/toggle">{{ t('ui.deactivate') if related.is_active else t('ui.activate') }}</button>
+                        <button class="btn btn-danger btn-sm" type="submit" formaction="/pricing/related-items/{{ related.id }}/delete" onclick="return confirm('{{ t("ui.delete.this.related.item.existing.quotations.keep.their.snapshots") }}');">{{ t('ui.delete') }}</button>
+                        {% endif %}
+                      </div>
+                    </form>
+                    {% endfor %}
+                  {% else %}<p class="hint">{{ t('ui.no.related.items.yet') }}</p>{% endif %}
+                </div>
+              </div>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    {{ ui.empty_state(t('ui.no.pricing.items.found'), t('ui.create.a.main.item.or.try.a.different.search')) }}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

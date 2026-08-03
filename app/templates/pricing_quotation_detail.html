@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ quotation.quotation_number }} · {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('ui.quotation') }} {{ quotation.quotation_number }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div><span class="eyebrow">{{ t('ui.price.quotation') }}</span><h1>{{ quotation.quotation_number }}</h1><p class="lede">{{ quotation.project_name }} {{ t('ui.valid.until') }} {{ quotation.valid_until|date }}</p></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;"><a class="btn btn-secondary" href="/pricing/quotations">{{ t('ui.back') }}</a><a class="btn btn-secondary" href="/pricing/quotations/{{ quotation.id }}/edit">{{ t('ui.edit') }}</a><a class="btn btn-primary" href="/pricing/quotations/{{ quotation.id }}/pdf">{{ t('ui.download.pdf') }}</a></div>
+</div>
+
+<div class="card"><div class="card-head"><h2>{{ t('ui.quotation.details') }}</h2></div><div class="card-body">
+  <dl class="detail-grid">
+    <div><dt>{{ t('ui.project') }}</dt><dd>{{ quotation.project_name }}</dd></div>
+    <div><dt>{{ t('ui.address') }}</dt><dd>{{ quotation.project_address }}{% if quotation.project_city %}, {{ quotation.project_city }}{% endif %}</dd></div>
+    <div><dt>{{ t('ui.contact') }}</dt><dd>{{ quotation.contact_person or '—' }}{% if quotation.contact_number %}<br>{{ quotation.contact_number }}{% endif %}</dd></div>
+    <div><dt>{{ t('ui.quotation.date') }}</dt><dd>{{ quotation.quotation_date|date }}</dd></div>
+    <div><dt>{{ t('ui.valid.until.label') }}</dt><dd>{{ quotation.valid_until|date }}</dd></div>
+    <div><dt>{{ t('ui.created.by') }}</dt><dd>{{ quotation.created_by_name }}</dd></div>
+  </dl>
+</div></div>
+
+<div class="card"><div class="card-head"><h2>{{ t('ui.priced.items') }}</h2></div><div class="card-body tight"><div class="table-wrap"><table>
+  <thead><tr><th>{{ t('ui.image') }}</th><th>{{ t('ui.item.title') }}</th><th>{{ t('ui.quantity') }}</th><th>{{ t('ui.unit.price.label') }}</th><th>{{ t('ui.total') }}</th></tr></thead>
+  <tbody>
+  {% for line in quotation.lines %}
+    <tr><td>{% if line.image_storage_key %}<img src="/pricing/quotations/{{ quotation.id }}/lines/{{ line.id }}/image?size=thumb" alt="{{ line.item_name }}" style="width:72px;height:54px;object-fit:cover;border-radius:6px;">{% else %}<span class="hint">{{ t('ui.no.image') }}</span>{% endif %}</td><td><strong>{{ line.item_name }}</strong>{% if line.item_model %}<br><span class="hint">{{ line.item_model }}</span>{% endif %}</td><td class="num">{{ line.quantity }}</td><td class="num">{{ line.unit_price|money }} {{ quotation.currency }}</td><td class="num">{{ line.main_total|money }} {{ quotation.currency }}</td></tr>
+    {% for related in line.related_items %}
+    <tr><td></td><td style="padding-left:30px;">↳ {{ related.item_name }}</td><td class="num">{{ related.quantity }}</td><td class="num">{{ related.unit_price|money }} {{ quotation.currency }}</td><td class="num">{{ related.total|money }} {{ quotation.currency }}</td></tr>
+    {% endfor %}
+    {% if line.skip_optional_items %}<tr><td></td><td style="padding-left:30px;"><span class="badge muted">{{ t('ui.optional.items.skipped') }}</span></td><td colspan="3">{{ t('ui.no.optional.item.was.included.for.this.main.item') }}</td></tr>{% endif %}
+  {% endfor %}
+  {% for charge in quotation.charges %}
+    <tr><td></td><td><strong>{{ charge.label }}</strong><br><span class="hint">{{ t('ui.required.quotation.charge.per') }} {{ charge.unit_label }}</span></td><td class="num">{{ charge.quantity }}</td><td class="num">{{ charge.unit_price|money }} {{ quotation.currency }}</td><td class="num">{{ charge.total|money }} {{ quotation.currency }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table></div></div></div>
+
+<div class="grid cols-2">
+  <div class="card"><div class="card-head"><h2>{{ t('ui.notes.and.terms') }}</h2></div><div class="card-body"><p class="section-title">{{ t('ui.notes') }}</p><p class="preline">{{ quotation.notes or '—' }}</p><p class="section-title">{{ t('ui.terms.and.conditions') }}</p><p class="preline">{{ quotation.terms or '—' }}</p></div></div>
+  <div class="card"><div class="card-head"><h2>{{ t('ui.totals') }}</h2></div><div class="card-body"><dl class="detail-grid">
+    <div><dt>{{ t('ui.subtotal') }}</dt><dd>{{ totals.subtotal|money }} {{ quotation.currency }}</dd></div>
+    <div><dt>{{ t('ui.discount') }}{{ quotation.discount_percent }}%)</dt><dd>− {{ totals.discount|money }} {{ quotation.currency }}</dd></div>
+    <div><dt>{{ t('ui.vat') }}{{ quotation.vat_rate }}%)</dt><dd>{{ totals.vat|money }} {{ quotation.currency }}</dd></div>
+    <div><dt>{{ t('ui.grand.total') }}</dt><dd><strong>{{ totals.grand_total|money }} {{ quotation.currency }}</strong></dd></div>
+  </dl></div></div>
+</div>
+
+{% if can_delete %}<form method="post" action="/pricing/quotations/{{ quotation.id }}/delete" onsubmit="return confirm('{{ t("ui.permanently.delete.this.quotation") }}');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-danger" type="submit">{{ t('ui.delete.quotation') }}</button></form>{% endif %}
+{% endblock %}

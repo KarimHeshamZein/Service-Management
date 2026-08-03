@@ -1,0 +1,11 @@
+{% if revisions %}
+<div class="card"><div class="card-head"><h2>{{ t('ui.change.history') }}</h2><span class="tag">{{ revisions|length }} {{ t('ui.revision') if revisions|length == 1 else t('ui.revisions') }}</span></div><div class="card-body">
+  {% for revision in revisions %}
+  <div style="padding:10px 0;{% if not loop.last %}border-bottom:1px solid var(--line);{% endif %}">
+    <strong>{{ revision.action|capitalize }}</strong> {{ t('ui.by.lowercase') }} {{ revision.editor_name }}
+    <div class="meta mono">{{ revision.created_at | datetime }}</div>
+    {% if revision.changes %}<ul style="margin-bottom:0;">{% for field, detail in revision.changes.items() %}<li><strong>{{ field.replace('_', ' ')|title }}:</strong> {% if detail is mapping and 'before' in detail %}{{ detail.before if detail.before not in [none, ''] else '—' }} → {{ detail.after if detail.after not in [none, ''] else '—' }}{% else %}{{ detail }}{% endif %}</li>{% endfor %}</ul>{% endif %}
+  </div>
+  {% endfor %}
+</div></div>
+{% endif %}

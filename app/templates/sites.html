@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as ui with context %}
+{% block title %}{{ t('ui.sites') }} {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('nav.management.sites') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">{{ t('ui.administration') }}</span>
+    <h1>{{ t('nav.management.sites') }}</h1>
+    <p class="lede">{{ t('ui.only.active.sites.appear.in.the.maintenance.form.sites.used.in.records') }}</p>
+  </div>
+  <button class="btn btn-primary" data-toggle-target="add-site" aria-expanded="false">{{ t('ui.add.site') }}</button>
+</div>
+
+<div class="card" id="add-site" hidden>
+  <div class="card-head"><h2>{{ t('ui.add.a.site') }}</h2></div>
+  <div class="card-body">
+    <form method="post" action="/sites">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="grid cols-2">
+        <div class="field"><label for="new-name">{{ t('ui.site.name') }} <span class="req">*</span></label>
+          <input id="new-name" name="name" type="text" required maxlength="160" dir="auto"></div>
+        <div class="field"><label for="new-customer">{{ t('user.role.customer') }} <span class="req">*</span></label>
+          <input id="new-customer" name="customer_name" type="text" required maxlength="160" dir="auto"></div>
+        <div class="field"><label for="new-address">{{ t('ui.address.or.location') }} <span class="req">*</span></label>
+          <input id="new-address" name="address" type="text" required maxlength="255" dir="auto"></div>
+        <div class="field"><label for="new-city">{{ t('ui.city') }}</label>
+          <input id="new-city" name="city" type="text" maxlength="80" dir="auto"></div>
+        <div class="field"><label for="new-contact">{{ t('ui.contact.person') }}</label>
+          <input id="new-contact" name="contact_person" type="text" maxlength="120" dir="auto"></div>
+        <div class="field"><label for="new-number">{{ t('ui.contact.number') }}</label>
+          <input id="new-number" name="contact_number" type="tel" maxlength="40"></div>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button type="submit" class="btn btn-primary">{{ t('ui.save.site') }}</button>
+        <button type="button" class="btn btn-secondary" data-toggle-target="add-site">{{ t('ui.cancel') }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>{{ sites | length }} {{ t('ui.site.lowercase') if sites|length == 1 else t('ui.sites.lowercase') }}</h2>
+    <form method="get" action="/sites" style="display:flex;gap:8px;">
+      <input type="search" name="q" value="{{ q }}" placeholder="{{ t('ui.search.sites') }}" aria-label="{{ t('ui.search.sites.aria') }}" style="min-width:200px;" dir="auto">
+      <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.search') }}</button>
+      {% if q %}<a class="btn btn-quiet btn-sm" href="/sites">{{ t('ui.clear') }}</a>{% endif %}
+    </form>
+  </div>
+  <div class="card-body tight">
+    {% if sites %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>{{ t('ui.site') }}</th><th>{{ t('user.role.customer') }}</th><th>{{ t('ui.location') }}</th><th>{{ t('ui.contact') }}</th><th>{{ t('nav.group.records') }}</th><th>{{ t('ui.status') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
+        <tbody>
+          {% for s in sites %}
+          <tr>
+            <td class="num">{{ s.id }}</td>
+            <td><strong>{{ s.name }}</strong></td>
+            <td>{{ s.customer_name }}</td>
+            <td>{{ s.address }}{% if s.city %}<br><span style="color:var(--slate);font-size:.8rem;">{{ s.city }}</span>{% endif %}</td>
+            <td>{{ s.contact_person or '—' }}{% if s.contact_number %}<br><span class="mono" style="font-size:.78rem;color:var(--slate);">{{ s.contact_number }}</span>{% endif %}</td>
+            <td class="num">{{ usage.get(s.id, 0) }}</td>
+            <td>{{ ui.status_badge(s.is_active) }}</td>
+            <td style="white-space:nowrap;">
+              <button class="btn btn-quiet btn-sm" data-toggle-target="site-{{ s.id }}" aria-expanded="false">{{ t('ui.edit') }}</button>
+              <form method="post" action="/sites/{{ s.id }}/toggle" style="display:inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn btn-quiet btn-sm" type="submit">{{ t('ui.deactivate') if s.is_active else t('ui.activate') }}</button>
+              </form>
+            </td>
+          </tr>
+          <tr id="site-{{ s.id }}" hidden>
+            <td colspan="8" style="background:#f7f9fa;">
+              <form method="post" action="/sites/{{ s.id }}/edit">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <div class="grid cols-3">
+                  <div class="field"><label for="n{{ s.id }}">{{ t('ui.site.name') }} <span class="req">*</span></label>
+                    <input id="n{{ s.id }}" name="name" value="{{ s.name }}" required dir="auto"></div>
+                  <div class="field"><label for="c{{ s.id }}">{{ t('user.role.customer') }} <span class="req">*</span></label>
+                    <input id="c{{ s.id }}" name="customer_name" value="{{ s.customer_name }}" required dir="auto"></div>
+                  <div class="field"><label for="a{{ s.id }}">{{ t('ui.address') }} <span class="req">*</span></label>
+                    <input id="a{{ s.id }}" name="address" value="{{ s.address }}" required dir="auto"></div>
+                  <div class="field"><label for="ct{{ s.id }}">{{ t('ui.city') }}</label>
+                    <input id="ct{{ s.id }}" name="city" value="{{ s.city or '' }}" dir="auto"></div>
+                  <div class="field"><label for="p{{ s.id }}">{{ t('ui.contact.person') }}</label>
+                    <input id="p{{ s.id }}" name="contact_person" value="{{ s.contact_person or '' }}" dir="auto"></div>
+                  <div class="field"><label for="ph{{ s.id }}">{{ t('ui.contact.number') }}</label>
+                    <input id="ph{{ s.id }}" name="contact_number" value="{{ s.contact_number or '' }}" dir="auto"></div>
+                </div>
+                <div style="display:flex;gap:10px;">
+                  <button class="btn btn-primary btn-sm" type="submit">{{ t('ui.save.changes') }}</button>
+                  <button class="btn btn-secondary btn-sm" type="button" data-toggle-target="site-{{ s.id }}">{{ t('ui.cancel') }}</button>
+                </div>
+                <p class="hint">{{ t('ui.renaming.does.not.change.records.already.submitted.for.this.site') }}</p>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="record-cards">
+      {% for s in sites %}
+      <div class="record-card">
+        <div class="row1"><strong>{{ s.name }}</strong>{{ ui.status_badge(s.is_active) }}</div>
+        <div class="meta">{{ s.customer_name }}</div>
+        <div class="meta">{{ s.address }}{% if s.city %} · {{ s.city }}{% endif %}</div>
+        <div class="foot">
+          <span class="meta mono">{{ usage.get(s.id, 0) }} {{ t('ui.records') }}</span>
+          <form method="post" action="/sites/{{ s.id }}/toggle">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.deactivate') if s.is_active else t('ui.activate') }}</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    {{ ui.empty_state(t('ui.no.sites.yet') if not q else t('ui.no.sites.match') ~ q ~ "”", t('ui.add.the.customer.locations.your.teams.visit')) }}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

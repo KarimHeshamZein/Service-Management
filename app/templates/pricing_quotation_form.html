@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}{{ t('ui.edit.prefix') ~ quotation.quotation_number if quotation else t('ui.create.quotation') }} · {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('ui.edit.quotation') if quotation else t('ui.create.quotation') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div><span class="eyebrow">{{ t('nav.group.pricing') }}</span><h1>{{ t('ui.edit.prefix') ~ quotation.quotation_number if quotation else t('ui.create.price.quotation') }}</h1><p class="lede">{{ t('ui.select.main.items.then.include.only.the.related.items.needed.for.this') }}</p></div>
+  <a class="btn btn-secondary" href="{{ "/pricing/quotations/" ~ quotation.id if quotation else "/pricing/quotations" }}">{{ t('ui.cancel') }}</a>
+</div>
+
+{% if errors.form %}<div class="alert error">{{ errors.form }}</div>{% endif %}
+<form method="post" action="{{ "/pricing/quotations/" ~ quotation.id ~ "/edit" if quotation else "/pricing/quotations" }}" data-pricing-quotation-form>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {% if not quotation %}<input type="hidden" name="form_token" value="{{ form_token }}">{% endif %}
+  <div class="card">
+    <div class="card-head"><h2>{{ t('ui.quotation.details') }}</h2></div>
+    <div class="card-body">
+      <div class="grid cols-3">
+        <div class="field"><label for="pq-project">{{ t('ui.project') }} <span class="req">*</span></label>
+          <select id="pq-project" name="project_id" required>
+            <option value="">{{ t('ui.choose.a.project') }}</option>
+            {% for project in projects %}<option value="{{ project.id }}" {{ "selected" if form.project_id|string == project.id|string }}>{{ project.name }}</option>{% endfor %}
+          </select>{% if errors.project_id %}<p class="field-error">{{ errors.project_id }}</p>{% endif %}
+        </div>
+        <div class="field"><label for="pq-date">{{ t('ui.quotation.date') }} <span class="req">*</span></label><input id="pq-date" name="quotation_date" type="date" value="{{ form.quotation_date }}" required>{% if errors.quotation_date %}<p class="field-error">{{ errors.quotation_date }}</p>{% endif %}</div>
+        <div class="field"><label for="pq-until">{{ t('ui.valid.until.label') }} <span class="req">*</span></label><input id="pq-until" name="valid_until" type="date" value="{{ form.valid_until }}" required>{% if errors.valid_until %}<p class="field-error">{{ errors.valid_until }}</p>{% endif %}</div>
+        <div class="field"><label for="pq-discount">{{ t('ui.discount.percent') }}</label><input id="pq-discount" name="discount_percent" type="number" min="0" max="100" step="0.01" value="{{ form.discount_percent }}" required>{% if errors.discount_percent %}<p class="field-error">{{ errors.discount_percent }}</p>{% endif %}</div>
+        <div class="field"><label for="pq-vat">{{ t('ui.vat.percent') }}</label><input id="pq-vat" name="vat_rate" type="number" min="0" max="100" step="0.01" value="{{ form.vat_rate }}" required>{% if errors.vat_rate %}<p class="field-error">{{ errors.vat_rate }}</p>{% endif %}</div>
+        <div class="field"><span class="field-label">{{ t('ui.currency') }}</span><p style="margin:10px 0 0;"><strong>{{ currency }}</strong></p><p class="hint">{{ t('ui.set.by.the.administrator.in.pricing.settings') }}</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div><h2>{{ t('nav.pricing.items') }}</h2><p class="hint" style="margin:4px 0 0;">{{ t('ui.prices.are.copied.from.the.items.tab.when.you.save') }}</p></div><button type="button" class="btn btn-secondary btn-sm" data-add-pricing-line>{{ t('ui.add.another.main.item') }}</button></div>
+    <div class="card-body" data-pricing-lines>
+      {% if errors.lines %}<p class="field-error">{{ errors.lines }}</p>{% endif %}
+      {% for line in form.lines %}
+      {% set idx = line.index if line.index is defined else loop.index0 %}
+      <section class="card pricing-line" data-pricing-line data-line-index="{{ idx }}" data-related-selection="{{ line.related|default([])|tojson|forceescape }}" data-skip-optional="{{ 'true' if line.skip_optional_items|default(false) else 'false' }}" style="padding:16px;margin-bottom:12px;">
+        <div class="grid cols-3">
+          <div class="field"><label for="pql-item-{{ idx }}">{{ t('ui.main.item') }} <span class="req">*</span></label>
+            <select id="pql-item-{{ idx }}" name="line_{{ idx }}_item_id" data-pricing-item-select required>
+              <option value="">{{ t('ui.choose.an.item') }}</option>
+              {% for item in catalogue %}<option value="{{ item.id }}" {{ 'selected' if line.item_id|default('')|string == item.id|string }}>{{ item.label }} — {{ item.price|money }} {{ currency }}</option>{% endfor %}
+            </select>{% if errors['line_' ~ idx ~ '_item_id'] %}<p class="field-error">{{ errors["line_" ~ idx ~ "_item_id"] }}</p>{% endif %}
+            <img data-pricing-item-image alt="" hidden style="width:120px;height:90px;object-fit:cover;border-radius:6px;margin-top:10px;">
+          </div>
+          <div class="field"><label for="pql-qty-{{ idx }}">{{ t('ui.quantity') }} <span class="req">*</span></label><input id="pql-qty-{{ idx }}" name="line_{{ idx }}_quantity" type="number" min="0.01" step="0.01" value="{{ line.quantity|default('1') }}" required>{% if errors['line_' ~ idx ~ '_quantity'] %}<p class="field-error">{{ errors["line_" ~ idx ~ "_quantity"] }}</p>{% endif %}</div>
+          <div class="field"><label for="pql-price-{{ idx }}">{{ t('ui.unit.price') }}{{ currency }}) <span class="req">*</span></label><input class="catalogue-price-input" id="pql-price-{{ idx }}" name="line_{{ idx }}_unit_price" data-pricing-main-price type="number" min="0" step="0.01" value="{{ line.unit_price|default('') }}" required>{% if errors['line_' ~ idx ~ '_unit_price'] %}<p class="field-error">{{ errors["line_" ~ idx ~ "_unit_price"] }}</p>{% endif %}<p class="hint">{{ t('ui.prefilled.from.items.edit.it.for.this.quotation.only') }}</p></div>
+        </div>
+        <div data-pricing-related-items></div>
+        {% if errors['line_' ~ idx ~ '_related'] %}<p class="field-error">{{ errors["line_" ~ idx ~ "_related"] }}</p>{% endif %}
+        <div style="display:flex;justify-content:flex-end;margin-top:10px;"><button type="button" class="btn btn-quiet btn-sm" data-remove-pricing-line>{{ t('ui.remove.item') }}</button></div>
+      </section>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head"><div><h2>{{ t('ui.required.quotation.charges') }}</h2><p class="hint" style="margin:4px 0 0;">{{ t('ui.these.three.charges.appear.on.every.quotation.and.cannot.be.removed') }}</p></div></div>
+    <div class="card-body">
+      <div class="pricing-charge-row">
+        <div><strong>{{ t('ui.manpower') }}</strong><p class="hint">{{ t('ui.number.of.workers.price.per.worker') }}</p></div>
+        <div class="field"><label for="charge-manpower-qty">{{ t('ui.workers') }} <span class="req">*</span></label><input id="charge-manpower-qty" name="charge_manpower_quantity" type="number" min="0.01" step="0.01" value="{{ form.charges.manpower.quantity }}" required>{% if errors.charge_manpower_quantity %}<p class="field-error">{{ errors.charge_manpower_quantity }}</p>{% endif %}</div>
+        <div class="field"><label for="charge-manpower-price">{{ t('ui.price.per.worker') }}{{ currency }}) <span class="req">*</span></label><input class="catalogue-price-input" id="charge-manpower-price" name="charge_manpower_unit_price" type="number" min="0" step="0.01" value="{{ form.charges.manpower.unit_price }}" required>{% if errors.charge_manpower_unit_price %}<p class="field-error">{{ errors.charge_manpower_unit_price }}</p>{% endif %}</div>
+      </div>
+      <div class="pricing-charge-row">
+        <div><strong>{{ t('ui.transportation') }}</strong><p class="hint">{{ t('ui.one.transportation.cost.for.this.quotation') }}</p></div>
+        <div class="field"><label>{{ t('ui.quantity') }}</label><input value="1" disabled dir="auto"></div>
+        <div class="field"><label for="charge-transport-price">{{ t('ui.transportation.cost') }}{{ currency }}) <span class="req">*</span></label><input class="catalogue-price-input" id="charge-transport-price" name="charge_transportation_unit_price" type="number" min="0" step="0.01" value="{{ form.charges.transportation.unit_price }}" required>{% if errors.charge_transportation_unit_price %}<p class="field-error">{{ errors.charge_transportation_unit_price }}</p>{% endif %}</div>
+      </div>
+      <div class="pricing-charge-row">
+        <div><strong>{{ t('ui.installation') }}</strong><p class="hint">{{ t('ui.number.of.days.price.per.day') }}</p></div>
+        <div class="field"><label for="charge-install-qty">{{ t('ui.days') }} <span class="req">*</span></label><input id="charge-install-qty" name="charge_installation_quantity" type="number" min="0.01" step="0.01" value="{{ form.charges.installation.quantity }}" required>{% if errors.charge_installation_quantity %}<p class="field-error">{{ errors.charge_installation_quantity }}</p>{% endif %}</div>
+        <div class="field"><label for="charge-install-price">{{ t('ui.price.per.day') }}{{ currency }}) <span class="req">*</span></label><input class="catalogue-price-input" id="charge-install-price" name="charge_installation_unit_price" type="number" min="0" step="0.01" value="{{ form.charges.installation.unit_price }}" required>{% if errors.charge_installation_unit_price %}<p class="field-error">{{ errors.charge_installation_unit_price }}</p>{% endif %}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card"><div class="card-head"><h2>{{ t('ui.notes.and.terms') }}</h2></div><div class="card-body grid cols-2">
+    <div class="field"><label for="pq-notes">{{ t('ui.notes') }}</label><textarea id="pq-notes" name="notes" rows="6" dir="auto">{{ form.notes }}</textarea></div>
+    <div class="field"><label for="pq-terms">{{ t('ui.terms.and.conditions') }}</label><textarea id="pq-terms" name="terms" rows="6" dir="auto">{{ form.terms }}</textarea></div>
+  </div></div>
+  <button class="btn btn-primary" type="submit">{{ t('ui.save.quotation') if quotation else t('ui.create.quotation') }}</button>
+</form>
+<script type="application/json" id="pricing-catalogue-data">{{ catalogue|tojson }}</script>
+{% endblock %}

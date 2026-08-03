@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as ui with context %}
+{% block title %}{{ record.record_number }} · {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ record.record_number }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">{{ t('ui.preventive.maintenance.record.controlled.record') }}</span>
+    <h1 class="mono" style="letter-spacing:.03em;">{{ record.record_number }}</h1>
+    <p class="lede">{{ record.customer_name }} · {{ record.site_name }}</p>
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;" class="no-print">
+    {{ ui.result_badge(record.result) }}
+    {% if user.can_submit_records %}<a class="btn btn-secondary btn-sm" href="/maintenance/records/{{ record.id }}/edit">{{ t('ui.edit.record') }}</a>{% endif %}
+    {% if user.is_admin %}<form method="post" action="/maintenance/records/{{ record.id }}/delete" style="display:inline;" onsubmit="return confirm('{{ t("ui.permanently.delete.this.preventive.maintenance.record.and.its.photos") }}');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-danger btn-sm" type="submit">{{ t('ui.delete.record') }}</button></form>{% endif %}
+    <a class="btn btn-secondary btn-sm" href="/maintenance/records">{{ t('ui.back.to.records') }}</a>
+  </div>
+</div>
+
+<div class="alert info no-print" role="note">
+  {{ t('ui.administrators.and.technical.users.can.correct.work.details.every.change.is.recorded') }}
+</div>
+
+<div class="detail-grid">
+  <div>
+    {% if record.work_items %}
+    {% for item in record.work_items %}
+    <div class="card">
+      <div class="card-head"><h2>{{ t('nav.maintenance') }} {{ loop.index }} · {{ item.device_name }}</h2>{{ ui.result_badge(item.result) }}</div>
+      <div class="card-body">
+        <dl class="kv"><dt>{{ t('ui.service') }}</dt><dd>{{ item.service_name }}</dd><dt>{{ t('ui.device.title') }}</dt><dd>{{ item.device_name }} — {{ item.device_model }}</dd><dt>{{ t('ui.serial.number') }}</dt><dd class="mono">{{ item.serial_number }}</dd></dl>
+        <p class="section-title">{{ t('ui.maintenance.notes') }}</p><p class="prose">{{ item.notes }}</p>
+        {% if item.issue_description %}<p class="section-title">{{ t('ui.issue.found') }}</p><p class="prose">{{ item.issue_description }}</p>{% endif %}
+        {% if item.recommendations %}<p class="section-title">{{ t('ui.recommendations') }}</p><p class="prose">{{ item.recommendations }}</p>{% endif %}
+        {{ ui.staged_evidence(item.photos, "/media/maintenance-item-photo") }}
+      </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div class="card">
+      <div class="card-head"><h2>{{ t('ui.preventive.maintenance.notes') }}</h2></div>
+      <div class="card-body">
+        <p class="prose" style="margin:0;">{{ record.notes }}</p>
+      </div>
+    </div>
+
+    {% if record.issue_description %}
+    <div class="card">
+      <div class="card-head"><h2>{{ t('ui.issue.found') }}</h2></div>
+      <div class="card-body"><p class="prose" style="margin:0;">{{ record.issue_description }}</p></div>
+    </div>
+    {% endif %}
+
+    {% if record.recommendations %}
+    <div class="card">
+      <div class="card-head"><h2>{{ t('ui.recommendations') }}</h2></div>
+      <div class="card-body"><p class="prose" style="margin:0;">{{ record.recommendations }}</p></div>
+    </div>
+    {% endif %}
+    <div class="card">
+      <div class="card-head"><h2>{{ t('ui.maintained.devices') }}</h2><span class="tag">{{ (1 if record.device_evidence else 0) + record.additional_device_evidence|length }} {{ t('ui.device') if record.additional_device_evidence|length == 0 else t('ui.devices.lowercase') }}</span></div>
+      <div class="card-body">
+        <div class="table-wrap"><table><thead><tr><th>{{ t('ui.service') }}</th><th>{{ t('ui.device.title') }}</th><th>{{ t('ui.serial.number') }}</th></tr></thead><tbody>
+          {% if record.device_evidence %}<tr><td>{{ record.service_name }}</td><td>{{ record.device_evidence.device_name }} — {{ record.device_evidence.device_model }}</td><td class="mono">{{ record.device_evidence.serial_number }}</td></tr>{% endif %}
+          {% for item in record.additional_device_evidence %}<tr><td>{{ item.service_name }}</td><td>{{ item.device_name }} — {{ item.device_model }}</td><td class="mono">{{ item.serial_number }}</td></tr>{% endfor %}
+        </tbody></table></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>{{ t('ui.proof.photos') }}</h2>
+        <span class="mono" style="font-size:.76rem;color:var(--slate);">
+          {{ record.photos | length }} {{ t('ui.photo') if record.photos|length == 1 else t('ui.photos.lowercase') }}
+        </span>
+      </div>
+      <div class="card-body">
+        {% if record.photos %}
+        <div class="evidence-strip">
+          {% for p in record.photos %}
+          <button type="button" data-lb-open
+                  data-full="/media/photo/{{ p.id }}"
+                  data-caption="{{ p.original_filename }} · {{ p.file_size | filesize }}"
+                  aria-label="{{ t('ui.open.proof.photo') }} {{ loop.index }} {{ t('ui.of') }} {{ record.photos | length }}">
+            <img src="/media/photo/{{ p.id }}?size=thumb" alt="{{ t('ui.proof.photo') }} {{ loop.index }}: {{ p.original_filename }}" loading="lazy">
+          </button>
+          {% endfor %}
+        </div>
+        {% else %}
+        <p style="color:var(--slate);margin:0;">{{ t('ui.no.photos.are.attached.to.this.record') }}</p>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div>
+    <div class="card">
+      <div class="card-head"><h2>{{ t('ui.record.details') }}</h2></div>
+      <div class="card-body">
+        <dl class="kv">
+          <dt>{{ t('ui.record.number') }}</dt><dd class="mono">{{ record.record_number }}</dd>
+          <dt>{{ t('ui.project') }}</dt><dd>{{ record.customer_name }}</dd>
+          <dt>{{ t('ui.site') }}</dt><dd>{{ record.site_name }}</dd>
+          <dt>{{ t('ui.location') }}</dt><dd>{{ record.site_address or '—' }}</dd>
+          <dt>{{ t('nav.management.devices') }}</dt><dd>{{ record.work_items|length if record.work_items else (1 if record.device_evidence else 0) + record.additional_device_evidence|length }}</dd>
+          {% if user.can_access_pricing and record.quotation_number %}<dt>{{ t('ui.quotation.id') }}</dt><dd class="mono">{{ record.quotation_number }}</dd>{% endif %}
+          <dt>{{ t('ui.submitted.by') }}</dt><dd>{{ record.team_leader_name }}</dd>
+          <dt>{{ t('ui.submitted') }}</dt><dd class="mono">{{ record.submitted_at | datetime }} ({{ display_tz_label }})</dd>
+          <dt>{{ t('ui.recorded') }}</dt><dd class="mono">{{ record.created_at | datetime }}</dd>
+        </dl>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><h2>{{ t('ui.who.was.on.site') }}</h2></div>
+      <div class="card-body">
+        <p class="section-title">{{ t('ui.submitted.by') }}</p>
+        <p style="margin:0 0 14px;">{{ record.team_leader_name }}</p>
+        <p class="section-title">{{ t('ui.worked.with') }}</p>
+        {% if record.participants %}
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          {% for p in record.participants %}<span class="tag">{{ p.name }}</span>{% endfor %}
+        </div>
+        {% else %}
+        <p style="margin:0;color:var(--slate);">{{ t('ui.worked.alone') }}</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{% include "partials/record_revisions.html" %}
+
+{% if record.photos or record.work_items %}
+<div class="lightbox" data-lightbox hidden role="dialog" aria-modal="true" aria-label="{{ t('ui.proof.photo.viewer') }}">
+  <div class="lightbox-bar">
+    <span data-lb-caption class="mono"></span>
+    <span style="display:flex;gap:8px;">
+      {% if record.photos | length > 1 %}
+      <button type="button" data-lb-prev aria-label="{{ t('ui.previous.photo') }}">&#8592;</button>
+      <button type="button" data-lb-next aria-label="{{ t('ui.next.photo') }}">&#8594;</button>
+      {% endif %}
+      <button type="button" data-lb-close aria-label="{{ t('ui.close.photo.viewer') }}">&times;</button>
+    </span>
+  </div>
+  <div class="lightbox-stage"><img src="" alt=""></div>
+</div>
+{% endif %}
+{% endblock %}

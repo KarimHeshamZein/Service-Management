@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}{{ t('ui.invalid.recovery.link') }} {{ settings.app_name }}{% endblock %}
+{% block bare %}
+<div class="auth-wrap"><section class="auth-brand"><div><span class="brand-mark">{{ t('app.brand.field_service') }}</span><h1>{{ t('ui.recovery.link.unavailable') }}</h1></div></section>
+<section class="auth-panel"><div class="auth-card"><div class="card"><div class="card-body"><div class="alert error">{{ t('ui.this.recovery.link.is.invalid.or.has.expired') }}</div><a class="btn btn-primary btn-block" href="/login">{{ t('ui.back.to.login') }}</a></div></div></div></section></div>
+{% endblock %}

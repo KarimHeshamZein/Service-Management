@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{{ t('ui.edit') }} {{ record.record_number }} · {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('ui.edit') }} {{ record.record_number }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><span class="eyebrow">{{ t('record.label.' ~ record_kind) }} {{ t('ui.audited.edit') }}</span><h1>{{ t('ui.edit') }} <span class="mono">{{ record.record_number }}</span></h1>
+  <p class="lede">{{ t('ui.project.record.number.submitter.and.timestamps.remain.unchanged.every.saved.change.is') }}</p></div>
+  <a class="btn btn-secondary" href="{{ detail_url }}">{{ t('ui.cancel') }}</a>
+</div>
+{% if error %}<div class="alert error" role="alert">{{ error }}</div>{% endif %}
+<form method="post" action="{{ edit_url }}" enctype="multipart/form-data">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="card"><div class="card-head"><h2>{{ t('ui.fixed.record.identity') }}</h2></div><div class="card-body"><dl class="kv">
+    <dt>{{ t('ui.project') }}</dt><dd>{{ project_name }}</dd><dt>{{ t('ui.site') }}</dt><dd>{{ record.site_name }}</dd>
+    <dt>{{ t('ui.submitted.by') }}</dt><dd>{{ record.team_leader_name }}</dd><dt>{{ t('ui.submitted') }}</dt><dd>{{ record.submitted_at | datetime }}</dd>
+  </dl></div></div>
+
+  {% for wrapper in edit_items %}
+  {% set item_index = loop.index0 %}
+  {% set item = wrapper.data %}
+  <div class="card"><div class="card-head"><h2>{{ t('ui.item.title') }} {{ loop.index }} · {{ wrapper.device_label }}</h2></div><div class="card-body">
+    <dl class="kv"><dt>{{ t('ui.service') }}</dt><dd>{{ wrapper.service_label }}</dd><dt>{{ t('ui.device.title') }}</dt><dd>{{ wrapper.device_label }}</dd>{% if wrapper.serial_number %}<dt>{{ t('ui.serial.number') }}</dt><dd class="mono">{{ wrapper.serial_number }}</dd>{% endif %}</dl>
+    <div class="field"><span class="field-label">{{ t('ui.result') }} <span class="req">*</span></span><div class="choice-list">
+      {% for result in results %}<label class="choice"><input type="radio" name="result_{{ item_index }}" value="{{ result.value }}" {{ "checked" if item.result.value == result.value }}><span><span class="choice-title">{{ t('record.result.' ~ result.value) }}</span></span></label>{% endfor %}
+    </div></div>
+    <div class="field"><label>{{ t('ui.notes') }} <span class="req">*</span></label><textarea name="notes_{{ item_index }}" maxlength="5000" required dir="auto">{{ item.notes }}</textarea></div>
+    {% if record_kind == 'installation' %}
+    <div class="field"><label>{{ t('ui.handover.notes') }}</label><textarea name="handover_notes_{{ item_index }}" maxlength="5000" dir="auto">{{ item.handover_notes or '' }}</textarea></div>
+    {% else %}
+    <div class="field"><label>{{ t('ui.issue.found') }}</label><textarea name="issue_description_{{ item_index }}" maxlength="5000" dir="auto">{{ item.issue_description or '' }}</textarea></div>
+    <div class="field"><label>{{ t('ui.recommendations') }}</label><textarea name="recommendations_{{ item_index }}" maxlength="5000" dir="auto">{{ item.recommendations or '' }}</textarea></div>
+    {% endif %}
+    <div class="field"><span class="field-label">{{ t('ui.existing.photos') }}</span>
+      {% if wrapper.photos %}<div class="choice-list">{% for photo in wrapper.photos %}<label class="choice"><input type="checkbox" name="remove_photo_{{ item_index }}" value="{{ photo.id }}"><span>{{ t('ui.remove') }} {{ t('photo.stage.' ~ photo.stage.value) if photo.stage else t('photo.stage.legacy') }} · {{ photo.original_filename }}</span></label>{% endfor %}</div>
+      {% else %}<p class="hint">{{ t('ui.no.photos.attached') }}</p>{% endif %}
+    </div>
+    <div class="grid cols-2">
+      <div class="field"><label>{{ t('ui.add.before.photos') }}</label><input type="file" name="add_before_photos_{{ item_index }}" accept="image/jpeg,image/png,image/webp" multiple></div>
+      <div class="field"><label>{{ t('ui.add.after.photos') }}</label><input type="file" name="add_after_photos_{{ item_index }}" accept="image/jpeg,image/png,image/webp" multiple></div>
+    </div>
+    <p class="hint">{{ t('ui.each.item.must.keep.at.least.one.photo.maximum.10.before.and') }}</p>
+  </div></div>
+  {% endfor %}
+
+  <div class="card"><div class="card-head"><h2>{{ t('ui.people.on.site') }}</h2></div><div class="card-body">
+    {% include "partials/technical_participant_picker.html" %}
+  </div></div>
+  <div style="display:flex;gap:10px;"><button class="btn btn-primary" type="submit">{{ t('ui.save.audited.changes') }}</button><a class="btn btn-secondary" href="{{ detail_url }}">{{ t('ui.cancel') }}</a></div>
+</form>
+{% endblock %}

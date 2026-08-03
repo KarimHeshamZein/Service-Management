@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as ui with context %}
+{% block title %}{{ t('ui.users') }} {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('nav.management.users') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">{{ t('ui.administration') }}</span>
+    <h1>{{ t('nav.management.users') }}</h1>
+    <p class="lede">{{ t('ui.administrators.manage.access.technical.users.run.field.operations.and.customers.see.records') }}</p>
+  </div>
+  <button class="btn btn-primary" data-toggle-target="add-user" aria-expanded="false">{{ t('ui.add.user') }}</button>
+</div>
+
+<div class="card" id="add-user" hidden>
+  <div class="card-head"><h2>{{ t('ui.add.a.user') }}</h2></div>
+  <div class="card-body">
+    <form method="post" action="/users">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="grid cols-2">
+        <div class="field"><label for="u-name">{{ t('ui.full.name') }} <span class="req">*</span></label>
+          <input id="u-name" name="full_name" type="text" required maxlength="120" dir="auto"></div>
+        <div class="field"><label for="u-username">{{ t('login.field.username') }} <span class="req">*</span></label>
+          <input id="u-username" name="username" type="text" required maxlength="120" autocapitalize="none" spellcheck="false" dir="auto"></div>
+        <div class="field"><label for="u-password">{{ t('login.table.password') }} <span class="req">*</span></label>
+          <input id="u-password" name="password" type="text" required minlength="8" autocomplete="new-password" dir="auto">
+          <p class="hint">{{ t('ui.at.least.8.characters.share.it.with.the.user.and.ask.them') }}</p></div>
+        <div class="field"><label for="u-role">{{ t('ui.user.type') }} <span class="req">*</span></label>
+          <select id="u-role" name="role">
+            <option value="technical">{{ t('user.role.technical') }}</option>
+            <option value="customer">{{ t('user.role.customer') }}</option>
+            <option value="admin">{{ t('user.role.admin') }}</option>
+          </select></div>
+        <div class="field"><span class="field-label">{{ t('ui.additional.access') }}</span>
+          <label class="choice"><input type="checkbox" name="pricing_access" value="1"><span>{{ t('ui.pricing.access') }}</span></label>
+          <p class="hint">{{ t('ui.applies.to.technical.users.administrators.always.have.pricing.access') }}</p>
+        </div>
+        <div class="field"><span class="field-label">{{ t('ui.assigned.projects') }}</span>
+          <p class="hint">{{ t('ui.required.for.customer.accounts.and.ignored.for.other.roles') }}</p>
+          {% for project in projects %}
+          <label class="choice"><input type="checkbox" name="project_ids" value="{{ project.id }}"><span>{{ project.name }}</span></label>
+          {% endfor %}
+        </div>
+        <div class="field"><label for="u-phone">{{ t('ui.phone.number') }}</label>
+          <input id="u-phone" name="phone" type="tel" maxlength="40"></div>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button type="submit" class="btn btn-primary">{{ t('ui.create.user') }}</button>
+        <button type="button" class="btn btn-secondary" data-toggle-target="add-user">{{ t('ui.cancel') }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>{{ users | length }} {{ t('ui.user') if users|length == 1 else t('ui.users.lowercase') }}</h2>
+    <form method="get" action="/users" style="display:flex;gap:8px;">
+      <input type="search" name="q" value="{{ q }}" placeholder="{{ t('ui.search.users') }}" aria-label="{{ t('ui.search.users.aria') }}" style="min-width:200px;" dir="auto">
+      <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.search') }}</button>
+      {% if q %}<a class="btn btn-quiet btn-sm" href="/users">{{ t('ui.clear') }}</a>{% endif %}
+    </form>
+  </div>
+  <div class="card-body tight">
+    {% if users %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>{{ t('ui.name') }}</th><th>{{ t('ui.login') }}</th><th>{{ t('ui.type') }}</th><th>{{ t('ui.phone') }}</th><th>{{ t('nav.group.records') }}</th><th>{{ t('ui.created') }}</th><th>{{ t('ui.status') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
+        <tbody>
+          {% for u in users %}
+          <tr>
+            <td class="num">{{ u.id }}</td>
+            <td><strong>{{ u.full_name }}</strong></td>
+            <td class="mono" style="font-size:.82rem;">{{ u.username }}</td>
+            <td>{{ t('user.role.' ~ u.role.value) }}{% if u.can_access_pricing %}<br><span class="badge note">{{ t('nav.group.pricing') }}</span>{% endif %}</td>
+            <td class="mono" style="font-size:.82rem;">{{ u.phone or '—' }}</td>
+            <td class="num">{{ usage.get(u.id, 0) }}</td>
+            <td class="num">{{ u.created_at | date }}</td>
+            <td>{{ ui.status_badge(u.is_active) }}</td>
+            <td style="white-space:nowrap;">
+              <button class="btn btn-quiet btn-sm" data-toggle-target="user-{{ u.id }}" aria-expanded="false">{{ t('ui.manage') }}</button>
+              {% if u.id != user.id %}
+              <form method="post" action="/users/{{ u.id }}/toggle" style="display:inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn btn-quiet btn-sm" type="submit">{{ t('ui.deactivate') if u.is_active else t('ui.activate') }}</button>
+              </form>
+              <form method="post" action="/users/{{ u.id }}/delete" style="display:inline;" onsubmit="return confirm('{{ t("ui.delete.this.user.users.referenced.by.records.will.be.deactivated.instead") }}');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn btn-danger btn-sm" type="submit">{{ t('ui.delete') }}</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          <tr id="user-{{ u.id }}" hidden>
+            <td colspan="9" style="background:#f7f9fa;">
+              {% set recovery = recovery_contacts.get(u.id) %}
+              <div class="grid cols-2">
+                <form method="post" action="/users/{{ u.id }}/edit">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <p class="section-title">{{ t('ui.basic.information') }}</p>
+                  <div class="field"><label for="un{{ u.id }}">{{ t('ui.full.name') }} <span class="req">*</span></label>
+                    <input id="un{{ u.id }}" name="full_name" value="{{ u.full_name }}" required dir="auto"></div>
+                  <div class="field"><label for="uu{{ u.id }}">{{ t('login.field.username') }} <span class="req">*</span></label>
+                    <input id="uu{{ u.id }}" name="username" value="{{ u.username }}" required autocapitalize="none" spellcheck="false" dir="auto"></div>
+                  <div class="field"><label for="up{{ u.id }}">{{ t('ui.phone.number') }}</label>
+                    <input id="up{{ u.id }}" name="phone" value="{{ u.phone or '' }}" dir="auto"></div>
+                  <div class="field"><label for="ur{{ u.id }}">{{ t('ui.user.type') }}</label>
+                    <select id="ur{{ u.id }}" name="role">
+                      <option value="technical" {{ "selected" if u.role.value == "technical" }}>{{ t('user.role.technical') }}</option>
+                      <option value="customer" {{ "selected" if u.role.value == "customer" }}>{{ t('user.role.customer') }}</option>
+                      <option value="admin" {{ "selected" if u.role.value == "admin" }}>{{ t('user.role.admin') }}</option>
+                    </select></div>
+                  <div class="field"><span class="field-label">{{ t('ui.additional.access') }}</span>
+                    <label class="choice"><input type="checkbox" name="pricing_access" value="1" {{ "checked" if u.pricing_access }}><span>{{ t('ui.pricing.access') }}</span></label>
+                    <p class="hint">{{ t('ui.applies.to.technical.users.administrators.always.have.pricing.access') }}</p>
+                  </div>
+                  <div class="field"><span class="field-label">{{ t('ui.assigned.projects') }}</span>
+                    <p class="hint">{{ t('ui.required.for.customer.accounts.and.ignored.for.other.roles') }}</p>
+                    {% for project in projects %}
+                    <label class="choice"><input type="checkbox" name="project_ids" value="{{ project.id }}" {{ "checked" if project.id in u.assigned_project_ids }}><span>{{ project.name }}</span></label>
+                    {% endfor %}
+                  </div>
+                  <button class="btn btn-primary btn-sm" type="submit">{{ t('ui.save.changes') }}</button>
+                  <p class="hint">{{ t('ui.past.records.keep.the.name.used.when.they.were.submitted') }}</p>
+                </form>
+
+                <form method="post" action="/users/{{ u.id }}/reset-password">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <p class="section-title">{{ t('ui.reset.password') }}</p>
+                  <div class="field"><label for="pw{{ u.id }}">{{ t('ui.new.password') }}</label>
+                    <input id="pw{{ u.id }}" name="password" type="text" minlength="8" autocomplete="new-password" placeholder="{{ t('ui.at.least.8.characters') }}" dir="auto"></div>
+                  <button class="btn btn-danger btn-sm" type="submit">{{ t('ui.reset.password') }}</button>
+                  <p class="hint">{{ t('ui.the.old.password.stops.working.immediately') }}</p>
+                </form>
+
+                {% if u.is_admin %}
+                <form method="post" action="/users/{{ u.id }}/recovery-email">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <p class="section-title">{{ t('ui.administrator.recovery.email') }}</p>
+                  <div class="field"><label for="re{{ u.id }}">{{ t('ui.recovery.email') }}</label>
+                    <input id="re{{ u.id }}" name="recovery_email" type="email"
+                           value="{{ recovery.email if recovery else '' }}"
+                           autocomplete="email" required>
+                    <p class="hint">
+                      {% if recovery and recovery.verified_at %}
+                      {{ t('ui.verified') }} {{ recovery.verified_at | datetime }}.
+                      {% elif recovery %}
+                      {{ t('ui.not.verified.send.another.verification.link.if.needed') }}
+                      {% else %}
+                      {{ t('ui.required.before.forgot.password.can.send.a.reset.link') }}
+                      {% endif %}
+                    </p>
+                  </div>
+                  <button class="btn btn-secondary btn-sm" type="submit">
+                    {{ t('ui.resend.verification') if recovery and not recovery.verified_at else t('ui.save.and.verify.email') }}
+                  </button>
+                  {% if not settings.email_delivery_configured %}<p class="hint">{{ t('ui.smtp.is.not.configured.on.this.server') }}</p>{% endif %}
+                </form>
+                {% endif %}
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="record-cards">
+      {% for u in users %}
+      <div class="record-card">
+        <div class="row1"><strong>{{ u.full_name }}</strong>{{ ui.status_badge(u.is_active) }}</div>
+        <div class="meta mono">{{ u.username }}</div>
+        <div class="meta">{{ t('user.role.' ~ u.role.value) }} · {{ usage.get(u.id, 0) }} {{ t('ui.records') }}</div>
+        {% if u.id != user.id %}
+        <div class="foot">
+          <span></span>
+          <div style="display:flex;gap:6px;"><form method="post" action="/users/{{ u.id }}/toggle">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.deactivate') if u.is_active else t('ui.activate') }}</button>
+          </form><form method="post" action="/users/{{ u.id }}/delete" onsubmit="return confirm('{{ t("ui.delete.this.user.users.referenced.by.records.will.be.deactivated.instead") }}');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-danger btn-sm" type="submit">{{ t('ui.delete') }}</button></form></div>
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    {{ ui.empty_state(t('ui.no.users.match') ~ q ~ "”", t('ui.try.a.different.name.or.login')) }}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

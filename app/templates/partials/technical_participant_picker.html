@@ -1,0 +1,24 @@
+<div class="field">
+  <span class="field-label" id="people-label">{{ t('ui.people.who.worked.with.you') }}</span>
+  {% if technical_users %}
+  <details class="participant-picker">
+    <summary>{{ t('ui.select.technical.users') }}</summary>
+    <div class="choice-list" aria-labelledby="people-label">
+      {% for technical_user in technical_users %}
+      <label class="choice">
+        <input type="checkbox" name="participant_ids" value="{{ technical_user.id }}"
+               {{ "checked" if technical_user.id|string in selected_participant_ids }}>
+        <span>
+          <span class="choice-title">{{ technical_user.full_name }}</span>
+          <span class="choice-meta">{{ technical_user.username }}</span>
+        </span>
+      </label>
+      {% endfor %}
+    </div>
+  </details>
+  <p class="hint">{{ t('ui.select.one.or.more.active.technical.users.leave.empty.if.you.worked') }}</p>
+  {% else %}
+  <p class="hint">{{ t('ui.no.other.active.technical.users.are.available.this.record.will.show.that') }}</p>
+  {% endif %}
+  {% if participant_error %}<p class="error-text">{{ participant_error }}</p>{% endif %}
+</div>

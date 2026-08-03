@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="{{ lang }}" dir="{{ dir }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="icon" href="/static/img/logo.ico" type="image/x-icon">
+</head>
+<body>
+{% if layout == 'bare' %}
+  {% block bare %}{% endblock %}
+{% else %}
+<div class="shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <span class="brand-logo-frame brand-logo-plate">
+        <img class="brand-logo-image" src="/static/img/afaqylogo.png" alt="{{ t('app.brand.logo_alt') }}">
+      </span>
+      <span class="sr-only">{{ t('app.brand.field_service') }}</span>
+      <span class="brand-name">{{ t('app.brand.service_management') }}</span>
+    </div>
+
+    <nav class="nav" aria-label="{{ t('nav.main') }}">
+      {% if user and not user.is_customer %}
+      <a href="/dashboard" class="{{ 'active' if active_nav == 'dashboard' }}">{{ t('nav.dashboard') }}</a>
+      <div class="nav-section" data-nav-section="data-entry" data-active="{{ 'true' if active_nav in ['installation_submit', 'maintenance', 'general_maintenance'] else 'false' }}">
+        <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-data-entry">
+          <span>{{ t('nav.group.data_entry') }}</span><span class="nav-chevron" aria-hidden="true"></span>
+        </button>
+        <div class="nav-group-panel" id="nav-data-entry">
+          <a href="/installations" class="sub {{ 'active' if active_nav == 'installation_submit' }}">{{ t('nav.installations') }}</a>
+          <a href="/maintenance" class="sub {{ 'active' if active_nav == 'maintenance' }}">{{ t('nav.preventive_maintenance') }}</a>
+          <a href="/general-maintenance" class="sub {{ 'active' if active_nav == 'general_maintenance' }}">{{ t('nav.maintenance') }}</a>
+        </div>
+      </div>
+      {% endif %}
+
+      <div class="nav-section" data-nav-section="records" data-active="{{ 'true' if active_nav in ['all_records', 'installation_records', 'records', 'general_maintenance_records'] else 'false' }}">
+        <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-records">
+          <span>{{ t('nav.group.records') }}</span><span class="nav-chevron" aria-hidden="true"></span>
+        </button>
+        <div class="nav-group-panel" id="nav-records">
+          <a href="/records" class="sub {{ 'active' if active_nav == 'all_records' }}">{{ t('nav.records.all') }}</a>
+          <a href="/installations/records" class="sub {{ 'active' if active_nav == 'installation_records' }}">{{ t('nav.records.installation') }}</a>
+          <a href="/maintenance/records" class="sub {{ 'active' if active_nav == 'records' }}">{{ t('nav.records.preventive_maintenance') }}</a>
+          <a href="/general-maintenance/records" class="sub {{ 'active' if active_nav == 'general_maintenance_records' }}">{{ t('nav.records.maintenance') }}</a>
+        </div>
+      </div>
+
+      <div class="nav-section" data-nav-section="reports" data-active="{{ 'true' if active_nav in ['reports', 'technician_audit'] else 'false' }}">
+        <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-reports">
+          <span>{{ t('nav.group.reports') }}</span><span class="nav-chevron" aria-hidden="true"></span>
+        </button>
+        <div class="nav-group-panel" id="nav-reports">
+          <a href="/reports" class="sub {{ 'active' if active_nav == 'reports' }}">{{ t('nav.reports.service') }}</a>
+          {% if user and user.is_admin %}
+          <a href="/reports/technician-audit" class="sub {{ 'active' if active_nav == 'technician_audit' }}">{{ t('nav.reports.technician_activity') }}</a>
+          {% endif %}
+        </div>
+      </div>
+
+      {% if user and user.can_access_pricing %}
+      <div class="nav-section" data-nav-section="pricing" data-active="{{ 'true' if active_nav in ['pricing_quotations', 'pricing_items', 'pricing_settings'] else 'false' }}">
+        <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-pricing">
+          <span>{{ t('nav.group.pricing') }}</span><span class="nav-chevron" aria-hidden="true"></span>
+        </button>
+        <div class="nav-group-panel" id="nav-pricing">
+          <a href="/pricing/quotations" class="sub {{ 'active' if active_nav == 'pricing_quotations' }}">{{ t('nav.pricing.quotations') }}</a>
+          <a href="/pricing/items" class="sub {{ 'active' if active_nav == 'pricing_items' }}">{{ t('nav.pricing.items') }}</a>
+          {% if user.is_admin %}
+          <a href="/pricing/settings" class="sub {{ 'active' if active_nav == 'pricing_settings' }}">{{ t('nav.pricing.settings') }}</a>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+      {% if user and user.can_manage_catalogs %}
+      <div class="nav-section" data-nav-section="management" data-active="{{ 'true' if active_nav in ['projects', 'sites', 'services', 'devices', 'users', 'settings'] else 'false' }}">
+        <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-management">
+          <span>{{ t('nav.group.management') }}</span><span class="nav-chevron" aria-hidden="true"></span>
+        </button>
+        <div class="nav-group-panel" id="nav-management">
+          <a href="/projects" class="sub {{ 'active' if active_nav == 'projects' }}">{{ t('nav.management.projects') }}</a>
+          <a href="/sites" class="sub {{ 'active' if active_nav == 'sites' }}">{{ t('nav.management.sites') }}</a>
+          <a href="/service-types" class="sub {{ 'active' if active_nav == 'services' }}">{{ t('nav.management.service_types') }}</a>
+          <a href="/devices" class="sub {{ 'active' if active_nav == 'devices' }}">{{ t('nav.management.devices') }}</a>
+          {% if user.is_admin %}
+          <a href="/users" class="sub {{ 'active' if active_nav == 'users' }}">{{ t('nav.management.users') }}</a>
+          <a href="/settings" class="sub {{ 'active' if active_nav == 'settings' }}">{{ t('nav.management.settings') }}</a>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+    </nav>
+
+    <div class="sidebar-foot">
+      {% if user %}
+      <div class="who">{{ user.full_name }}</div>
+      <div class="who-role">{{ t('user.role.' ~ user.role.value) }}</div>
+      <form method="post" action="/language" class="language-switcher">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="next" value="{{ language_next }}">
+        <label for="sidebar-language">{{ t('language.label') }}</label>
+        <div class="language-controls">
+          <select id="sidebar-language" name="language">
+            {% for choice in languages %}<option value="{{ choice.code }}" {{ 'selected' if choice.code == lang }}>{{ choice.name }}</option>{% endfor %}
+          </select>
+          <button type="submit">{{ t('language.change') }}</button>
+        </div>
+      </form>
+      <form method="post" action="/logout">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="logout-btn">{{ t('auth.logout') }}</button>
+      </form>
+      {% endif %}
+    </div>
+  </aside>
+
+  <div class="scrim"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="burger" data-nav-toggle aria-label="{{ t('nav.open') }}" aria-controls="sidebar">
+        <span></span>
+      </button>
+      <strong>{% block topbar_title %}{{ settings.app_name }}{% endblock %}</strong>
+    </header>
+
+    <main class="content">
+      {% for flash in flashes %}
+      <div class="alert {{ flash.level }}" role="status">{{ flash.message }}</div>
+      {% endfor %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% endif %}
+<script src="/static/js/app.js" defer></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as ui with context %}
+{% block title %}{{ t('ui.dashboard') }} {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('nav.dashboard') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">{{ t('ui.field.service') }}</span>
+    <h1>{{ t('ui.hello') }} {{ user.full_name.split()[0] }}</h1>
+    <p class="lede">{{ t('ui.finished.a.visit.file.the.evidence.while.you.are.still.on.site') }}</p>
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <a class="btn btn-primary" href="/installations">{{ t('ui.new.installation') }}</a>
+    <a class="btn btn-secondary" href="/maintenance">{{ t('ui.new.preventive.maintenance') }}</a>
+    <a class="btn btn-secondary" href="/general-maintenance">{{ t('ui.new.maintenance') }}</a>
+  </div>
+</div>
+
+<div class="stat-grid">
+  <div class="stat t-accent">
+    <div class="label">{{ t('ui.your.records') }}</div>
+    <div class="value">{{ total }}</div>
+  </div>
+  <div class="stat t-accent">
+    <div class="label">{{ t('ui.submitted.today') }}</div>
+    <div class="value">{{ today }}</div>
+  </div>
+  <div class="stat t-ok">
+    <div class="label">{{ t('ui.completed.successfully') }}</div>
+    <div class="value">{{ counts.completed_successfully }}</div>
+  </div>
+  <div class="stat t-warn">
+    <div class="label">{{ t('ui.further.action.required') }}</div>
+    <div class="value">{{ counts.further_action_required }}</div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:18px;">
+  <div class="card-head">
+    <h2>{{ t('ui.your.recent.submissions') }}</h2>
+    <a class="btn btn-quiet" href="/maintenance/records">{{ t('ui.see.all') }}</a>
+  </div>
+  <div class="card-body tight">
+    {{ ui.recent_list(recent, show_leader=False) }}
+  </div>
+</div>
+{% endblock %}

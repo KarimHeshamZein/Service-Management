@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}{{ t('login.title') }} · {{ settings.app_name }}{% endblock %}
+
+{% block bare %}
+<div class="auth-wrap">
+  <section class="auth-brand">
+    <div>
+      <span class="brand-logo-frame brand-logo-plate">
+        <img class="brand-logo-image" src="/static/img/afaqylogo.png" alt="{{ t('app.brand.logo_alt') }}">
+      </span>
+      <span class="sr-only">{{ t('app.brand.field_service') }}</span>
+      <h1>{{ t('login.hero.title') }}</h1>
+      <p>{{ t('login.hero.description') }}</p>
+      <ol class="auth-steps">
+        <li><span class="n">01</span> {{ t('login.step.finish') }}</li>
+        <li><span class="n">02</span> {{ t('login.step.select') }}</li>
+        <li><span class="n">03</span> {{ t('login.step.evidence') }}</li>
+        <li><span class="n">04</span> {{ t('login.step.submit') }}</li>
+      </ol>
+    </div>
+    <p class="mono" style="font-size:.72rem;letter-spacing:.12em;text-transform:uppercase;color:#8797a3;">
+      {{ t('login.modules') }}
+    </p>
+  </section>
+
+  <section class="auth-panel">
+    <div class="auth-card">
+      <form method="post" action="/language" class="language-switcher auth-language-switcher">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="next" value="{{ language_next }}">
+        <label for="login-language">{{ t('language.label') }}</label>
+        <div class="language-controls">
+          <select id="login-language" name="language">
+            {% for choice in languages %}<option value="{{ choice.code }}" {{ 'selected' if choice.code == lang }}>{{ choice.name }}</option>{% endfor %}
+          </select>
+          <button type="submit" class="btn btn-secondary btn-sm">{{ t('language.change') }}</button>
+        </div>
+      </form>
+      <div class="card">
+        <div class="card-body">
+          <h1 style="margin-bottom:4px;">{{ t('login.title') }}</h1>
+          <p style="color:var(--slate);font-size:.88rem;margin:0 0 18px;">{{ t('login.subtitle') }}</p>
+
+          {% if errors.form %}
+          <div class="alert error" role="alert">{{ errors.form }}</div>
+          {% endif %}
+
+          <form method="post" action="/login" novalidate>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="next" value="{{ next }}">
+
+            <div class="field">
+              <label for="username">{{ t('login.field.username') }} <span class="req" aria-hidden="true">*</span></label>
+              <input id="username" name="username" type="text" autocomplete="username" required
+                     inputmode="email" autocapitalize="none" spellcheck="false" dir="auto"
+                     value="{{ form.username or '' }}"
+                     aria-invalid="{{ 'true' if errors.username else 'false' }}"
+                     {% if errors.username %}aria-describedby="username-error"{% endif %}>
+              {% if errors.username %}<p class="error-text" id="username-error">{{ errors.username }}</p>{% endif %}
+            </div>
+
+            <div class="field">
+              <label for="password">{{ t('login.field.password') }} <span class="req" aria-hidden="true">*</span></label>
+              <input id="password" name="password" type="password" autocomplete="current-password" required
+                     aria-invalid="{{ 'true' if errors.password else 'false' }}"
+                     {% if errors.password %}aria-describedby="password-error"{% endif %}>
+              {% if errors.password %}<p class="error-text" id="password-error">{{ errors.password }}</p>{% endif %}
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-block">{{ t('login.action.submit') }}</button>
+            <a class="btn btn-quiet btn-block" href="/forgot-password">{{ t('login.action.forgot_password') }}</a>
+          </form>
+        </div>
+      </div>
+
+      {% if settings.environment != 'production' %}
+      <details class="dev-accounts">
+        <summary>{{ t('login.development_accounts') }}</summary>
+        <table>
+          <tr><th>{{ t('login.table.role') }}</th><th>{{ t('login.table.username') }}</th><th>{{ t('login.table.password') }}</th></tr>
+          <tr><td>{{ t('user.role.admin') }}</td><td class="mono">admin</td><td class="mono">admin123</td></tr>
+          <tr><td>{{ t('user.role.technical') }}</td><td class="mono">omar@afaqy.local</td><td class="mono">Leader@12345</td></tr>
+          <tr><td>{{ t('user.role.technical') }}</td><td class="mono">yousef@afaqy.local</td><td class="mono">Leader@12345</td></tr>
+        </table>
+      </details>
+      {% endif %}
+    </div>
+  </section>
+</div>
+{% endblock %}

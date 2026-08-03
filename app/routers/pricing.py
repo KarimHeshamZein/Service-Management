@@ -1,0 +1,1396 @@
+"""Permission-controlled item catalogue and commercial quotations."""
+from __future__ import annotations
+
+import re
+from datetime import date, timedelta
+from decimal import Decimal
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import FileResponse, RedirectResponse, Response
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session, selectinload
+from starlette.datastructures import UploadFile
+
+from ..config import settings as app_settings
+from ..database import get_db
+from ..deps import require_admin, require_pricing_access
+from ..helpers import entity_id, flash, paginate, render
+from ..models import (
+    PricingItem,
+    PricingQuotation,
+    PricingQuotationCharge,
+    PricingQuotationLine,
+    PricingQuotationRelatedLine,
+    PricingRelatedItem,
+    PricingSettings,
+    Site,
+    User,
+    utcnow,
+)
+from ..pricing import (
+    money,
+    next_quotation_number,
+    percentage,
+    quantity,
+    quotation_totals,
+)
+from ..pricing_pdf import build_quotation_pdf
+from ..security import (
+    consume_form_token,
+    csrf_valid,
+    form_token_available,
+    issue_form_token,
+)
+from ..uploads import UploadError, delete_stored, resolve_storage_path, store_image
+
+router = APIRouter(
+    prefix="/pricing",
+    dependencies=[Depends(require_pricing_access)],
+)
+
+DEFAULT_SETTINGS = {
+    "currency": "SAR",
+    "default_vat_rate": Decimal("15.00"),
+    "default_validity_days": 30,
+    "quotation_prefix": "QUO",
+    "company_name": "",
+    "company_address": "",
+    "company_phone": "",
+    "company_email": "",
+    "default_terms": "",
+    "default_manpower_price": Decimal("0.00"),
+    "default_transportation_price": Decimal("0.00"),
+    "default_installation_price": Decimal("0.00"),
+}
+LINE_ITEM_RE = re.compile(r"^line_(\d+)_item_id$")
+
+
+def _redirect(path: str) -> RedirectResponse:
+    return RedirectResponse(path, status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _csrf_error(request: Request, submitted: object) -> bool:
+    if csrf_valid(request, str(submitted or "")):
+        return False
+    flash(request, "Your session expired. Reload the page and try again.", "error")
+    return True
+
+
+def _settings_values(saved: PricingSettings | None) -> dict:
+    if saved is None:
+        return dict(DEFAULT_SETTINGS)
+    return {
+        key: getattr(saved, key)
+        for key in DEFAULT_SETTINGS
+    }
+
+
+def _pricing_settings(db: Session) -> dict:
+    return _settings_values(db.get(PricingSettings, 1))
+
+
+def _catalogue(db: Session, *, include_inactive: bool = False) -> list[PricingItem]:
+    stmt = (
+        select(PricingItem)
+        .options(selectinload(PricingItem.related_items))
+        .order_by(PricingItem.name, PricingItem.model)
+    )
+    if not include_inactive:
+        stmt = stmt.where(PricingItem.is_active.is_(True))
+    return list(db.scalars(stmt))
+
+
+def _catalogue_payload(items: list[PricingItem]) -> list[dict]:
+    return [
+        {
+            "id": item.id,
+            "label": item.display_label,
+            "price": str(item.unit_price),
+            "image_url": (
+                f"/pricing/items/{item.id}/image?size=thumb"
+                if item.image_storage_key
+                else ""
+            ),
+            "related": [
+                {
+                    "id": related.id,
+                    "name": related.name,
+                    "price": str(related.unit_price),
+                }
+                for related in item.related_items
+                if related.is_active
+            ],
+        }
+        for item in items
+        if item.is_active
+    ]
+
+
+def _item_context(
+    db: Session,
+    user: User,
+    *,
+    q: str = "",
+) -> dict:
+    term = q.strip()
+    stmt = (
+        select(PricingItem)
+        .options(selectinload(PricingItem.related_items))
+        .order_by(PricingItem.is_active.desc(), PricingItem.name, PricingItem.model)
+    )
+    if term:
+        like = f"%{term}%"
+        stmt = stmt.where(
+            or_(PricingItem.name.ilike(like), PricingItem.model.ilike(like))
+        )
+    return {
+        "active_nav": "pricing_items",
+        "items": list(db.scalars(stmt)),
+        "active_items": _catalogue(db),
+        "q": term,
+        "currency": _pricing_settings(db)["currency"],
+        "can_delete": user.is_admin,
+    }
+
+
+@router.get("")
+def pricing_root(user: User = Depends(require_pricing_access)):
+    return _redirect("/pricing/quotations")
+
+
+@router.get("/items")
+def items_page(
+    request: Request,
+    q: str = "",
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    return render(request, "pricing_items.html", _item_context(db, user, q=q))
+
+
+@router.post("/items")
+async def create_item(
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    name = str(form.get("name") or "").strip()
+    model = str(form.get("model") or "").strip()
+    unit_price = money(form.get("unit_price"))
+    image = form.get("image")
+    if not name:
+        flash(request, "Enter the main item name.", "error")
+        return _redirect("/pricing/items")
+    if unit_price is None:
+        flash(request, "Enter a valid non-negative item price.", "error")
+        return _redirect("/pricing/items")
+    clash = db.scalar(
+        select(PricingItem).where(
+            func.lower(PricingItem.name) == name.lower(),
+            func.lower(PricingItem.model) == model.lower(),
+        )
+    )
+    if clash:
+        flash(request, f"“{clash.display_label}” already exists.", "error")
+        return _redirect("/pricing/items")
+    stored = None
+    if isinstance(image, UploadFile) and image.filename:
+        try:
+            stored = store_image(image.filename, await image.read())
+        except UploadError as exc:
+            flash(request, str(exc), "error")
+            return _redirect("/pricing/items")
+    item = PricingItem(name=name, model=model, unit_price=unit_price)
+    if stored:
+        item.image_storage_key = stored.storage_key
+        item.image_thumbnail_key = stored.thumbnail_key
+        item.image_original_filename = stored.original_filename
+        item.image_content_type = stored.content_type
+        item.image_file_size = stored.file_size
+    db.add(item)
+    db.commit()
+    flash(request, f"Main item “{name}” created.")
+    return _redirect("/pricing/items")
+
+
+@router.post("/items/{item_id}/edit")
+async def edit_item(
+    item_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    item = db.get(PricingItem, item_id)
+    name = str(form.get("name") or "").strip()
+    model = str(form.get("model") or "").strip()
+    unit_price = money(form.get("unit_price"))
+    image = form.get("image")
+    if item is None:
+        flash(request, "That pricing item no longer exists.", "error")
+        return _redirect("/pricing/items")
+    if not name or unit_price is None:
+        flash(request, "Enter a valid item name and non-negative price.", "error")
+        return _redirect("/pricing/items")
+    clash = db.scalar(
+        select(PricingItem).where(
+            PricingItem.id != item.id,
+            func.lower(PricingItem.name) == name.lower(),
+            func.lower(PricingItem.model) == model.lower(),
+        )
+    )
+    if clash:
+        flash(request, f"“{clash.display_label}” already exists.", "error")
+        return _redirect("/pricing/items")
+    stored = None
+    if isinstance(image, UploadFile) and image.filename:
+        try:
+            stored = store_image(image.filename, await image.read())
+        except UploadError as exc:
+            flash(request, str(exc), "error")
+            return _redirect("/pricing/items")
+    old_keys = (item.image_storage_key, item.image_thumbnail_key)
+    item.name = name
+    item.model = model
+    item.unit_price = unit_price
+    if stored:
+        item.image_storage_key = stored.storage_key
+        item.image_thumbnail_key = stored.thumbnail_key
+        item.image_original_filename = stored.original_filename
+        item.image_content_type = stored.content_type
+        item.image_file_size = stored.file_size
+    item.updated_at = utcnow()
+    db.commit()
+    if stored:
+        delete_stored(*old_keys)
+    flash(request, "Pricing item updated. Existing quotations keep their snapshots.")
+    return _redirect("/pricing/items")
+
+
+@router.post(
+    "/items/{item_id}/toggle",
+    dependencies=[Depends(require_admin)],
+)
+async def toggle_item(
+    item_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    item = db.get(PricingItem, item_id)
+    if item is None:
+        flash(request, "That pricing item no longer exists.", "error")
+        return _redirect("/pricing/items")
+    item.is_active = not item.is_active
+    item.updated_at = utcnow()
+    db.commit()
+    flash(request, f"Pricing item {'activated' if item.is_active else 'deactivated'}.")
+    return _redirect("/pricing/items")
+
+
+@router.post(
+    "/items/{item_id}/delete",
+    dependencies=[Depends(require_admin)],
+)
+async def delete_item(
+    item_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    item = db.get(PricingItem, item_id)
+    if item is None:
+        flash(request, "That pricing item no longer exists.", "error")
+        return _redirect("/pricing/items")
+    label = item.display_label
+    stored_keys = (item.image_storage_key, item.image_thumbnail_key)
+    db.delete(item)
+    db.commit()
+    delete_stored(*stored_keys)
+    flash(request, f"Pricing item “{label}” deleted. Quotations keep their snapshots.")
+    return _redirect("/pricing/items")
+
+
+@router.post("/items/{item_id}/remove-image")
+async def remove_item_image(
+    item_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    item = db.get(PricingItem, item_id)
+    if item is None:
+        flash(request, "That pricing item no longer exists.", "error")
+        return _redirect("/pricing/items")
+    stored_keys = (item.image_storage_key, item.image_thumbnail_key)
+    item.image_storage_key = None
+    item.image_thumbnail_key = None
+    item.image_original_filename = None
+    item.image_content_type = None
+    item.image_file_size = None
+    item.updated_at = utcnow()
+    db.commit()
+    delete_stored(*stored_keys)
+    flash(request, "Item image removed.")
+    return _redirect("/pricing/items")
+
+
+@router.get("/items/{item_id}/image")
+def item_image(
+    item_id: int,
+    size: str = "original",
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    item = db.get(PricingItem, item_id)
+    if item is None or not item.image_storage_key:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item image not found.")
+    key = (
+        item.image_thumbnail_key
+        if size == "thumb" and item.image_thumbnail_key
+        else item.image_storage_key
+    )
+    try:
+        path = resolve_storage_path(key)
+    except UploadError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item image not found.")
+    return FileResponse(
+        path,
+        media_type=("image/jpeg" if key == item.image_thumbnail_key else item.image_content_type),
+        headers={"Cache-Control": "private, max-age=600"},
+    )
+
+
+@router.post("/related-items")
+async def create_related_item(
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    raw_main_id = str(form.get("main_item_id") or "")
+    main_item_id = entity_id(raw_main_id)
+    main_item = db.get(PricingItem, main_item_id) if main_item_id is not None else None
+    name = str(form.get("name") or "").strip()
+    unit_price = money(form.get("unit_price"))
+    if main_item is None or not main_item.is_active:
+        flash(request, "Choose an active main item.", "error")
+        return _redirect("/pricing/items")
+    if not name or unit_price is None:
+        flash(request, "Enter a related item name and valid price.", "error")
+        return _redirect("/pricing/items")
+    clash = db.scalar(
+        select(PricingRelatedItem).where(
+            PricingRelatedItem.main_item_id == main_item.id,
+            func.lower(PricingRelatedItem.name) == name.lower(),
+        )
+    )
+    if clash:
+        flash(request, f"“{name}” is already related to this item.", "error")
+        return _redirect("/pricing/items")
+    db.add(
+        PricingRelatedItem(
+            main_item_id=main_item.id,
+            name=name,
+            unit_price=unit_price,
+        )
+    )
+    db.commit()
+    flash(request, f"Related item “{name}” added to “{main_item.display_label}”.")
+    return _redirect("/pricing/items")
+
+
+@router.post("/related-items/{related_id}/edit")
+async def edit_related_item(
+    related_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    related = db.get(PricingRelatedItem, related_id)
+    name = str(form.get("name") or "").strip()
+    unit_price = money(form.get("unit_price"))
+    if related is None:
+        flash(request, "That related item no longer exists.", "error")
+        return _redirect("/pricing/items")
+    if not name or unit_price is None:
+        flash(request, "Enter a related item name and valid price.", "error")
+        return _redirect("/pricing/items")
+    clash = db.scalar(
+        select(PricingRelatedItem).where(
+            PricingRelatedItem.id != related.id,
+            PricingRelatedItem.main_item_id == related.main_item_id,
+            func.lower(PricingRelatedItem.name) == name.lower(),
+        )
+    )
+    if clash:
+        flash(request, f"“{name}” is already related to this item.", "error")
+        return _redirect("/pricing/items")
+    related.name = name
+    related.unit_price = unit_price
+    related.updated_at = utcnow()
+    db.commit()
+    flash(request, "Related item updated. Existing quotations keep their snapshots.")
+    return _redirect("/pricing/items")
+
+
+@router.post(
+    "/related-items/{related_id}/toggle",
+    dependencies=[Depends(require_admin)],
+)
+async def toggle_related_item(
+    related_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    related = db.get(PricingRelatedItem, related_id)
+    if related is None:
+        flash(request, "That related item no longer exists.", "error")
+        return _redirect("/pricing/items")
+    related.is_active = not related.is_active
+    related.updated_at = utcnow()
+    db.commit()
+    flash(request, f"Related item {'activated' if related.is_active else 'deactivated'}.")
+    return _redirect("/pricing/items")
+
+
+@router.post(
+    "/related-items/{related_id}/delete",
+    dependencies=[Depends(require_admin)],
+)
+async def delete_related_item(
+    related_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    related = db.get(PricingRelatedItem, related_id)
+    if related is None:
+        flash(request, "That related item no longer exists.", "error")
+        return _redirect("/pricing/items")
+    name = related.name
+    db.delete(related)
+    db.commit()
+    flash(request, f"Related item “{name}” deleted. Quotations keep their snapshots.")
+    return _redirect("/pricing/items")
+
+
+def _quotation_query():
+    return select(PricingQuotation).options(
+        selectinload(PricingQuotation.lines).selectinload(
+            PricingQuotationLine.related_items
+        ),
+        selectinload(PricingQuotation.charges),
+    )
+
+
+def _quotation_or_404(db: Session, quotation_id: int) -> PricingQuotation:
+    quotation = db.scalar(
+        _quotation_query().where(PricingQuotation.id == quotation_id)
+    )
+    if quotation is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Quotation not found.")
+    return quotation
+
+
+@router.get("/quotations")
+def quotations_page(
+    request: Request,
+    q: str = "",
+    page: int = 1,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    term = q.strip()
+    stmt = _quotation_query().order_by(
+        PricingQuotation.quotation_date.desc(),
+        PricingQuotation.id.desc(),
+    )
+    if term:
+        like = f"%{term}%"
+        stmt = stmt.where(
+            or_(
+                PricingQuotation.quotation_number.ilike(like),
+                PricingQuotation.project_name.ilike(like),
+                PricingQuotation.created_by_name.ilike(like),
+            )
+        )
+    count_stmt = select(func.count(PricingQuotation.id))
+    if term:
+        count_stmt = count_stmt.where(
+            or_(
+                PricingQuotation.quotation_number.ilike(like),
+                PricingQuotation.project_name.ilike(like),
+                PricingQuotation.created_by_name.ilike(like),
+            )
+        )
+    total = int(db.scalar(count_stmt) or 0)
+    page_info = paginate(total, page, app_settings.page_size)
+    visible = list(
+        db.scalars(
+            stmt.offset(page_info["offset"]).limit(page_info["per_page"])
+        )
+    )
+    return render(
+        request,
+        "pricing_quotations.html",
+        {
+            "active_nav": "pricing_quotations",
+            "quotations": visible,
+            "totals": {
+                quotation.id: quotation_totals(quotation)
+                for quotation in visible
+            },
+            "page_info": page_info,
+            "q": term,
+            "can_delete": user.is_admin,
+        },
+    )
+
+
+def _default_quote_form(db: Session) -> dict:
+    values = _pricing_settings(db)
+    today = date.today()
+    return {
+        "project_id": "",
+        "quotation_date": today.isoformat(),
+        "valid_until": (
+            today + timedelta(days=values["default_validity_days"])
+        ).isoformat(),
+        "discount_percent": "0.00",
+        "vat_rate": str(values["default_vat_rate"]),
+        "notes": "",
+        "terms": values["default_terms"],
+        "lines": [{}],
+        "charges": {
+            "manpower": {
+                "quantity": "1",
+                "unit_price": str(values["default_manpower_price"]),
+            },
+            "transportation": {
+                "quantity": "1",
+                "unit_price": str(values["default_transportation_price"]),
+            },
+            "installation": {
+                "quantity": "1",
+                "unit_price": str(values["default_installation_price"]),
+            },
+        },
+    }
+
+
+def _quotation_form_context(
+    request: Request,
+    db: Session,
+    *,
+    quotation: PricingQuotation | None = None,
+    form: dict | None = None,
+    errors: dict | None = None,
+    form_token: str | None = None,
+) -> dict:
+    items = _catalogue(db)
+    return {
+        "active_nav": "pricing_quotations",
+        "quotation": quotation,
+        "projects": list(
+            db.scalars(
+                select(Site).where(Site.is_active.is_(True)).order_by(Site.name)
+            )
+        ),
+        "catalogue": _catalogue_payload(items),
+        "form": form or _default_quote_form(db),
+        "errors": errors or {},
+        "form_token": form_token or issue_form_token(request),
+        "currency": _pricing_settings(db)["currency"],
+    }
+
+
+def _submitted_lines(form) -> list[dict]:
+    indexes = sorted(
+        {
+            int(match.group(1))
+            for key in form.keys()
+            if (match := LINE_ITEM_RE.match(str(key)))
+        }
+    )
+    lines = []
+    for index in indexes:
+        related_ids = [str(value) for value in form.getlist(f"line_{index}_related_ids")]
+        lines.append(
+            {
+                "index": index,
+                "item_id": str(form.get(f"line_{index}_item_id") or ""),
+                "quantity": str(form.get(f"line_{index}_quantity") or ""),
+                "unit_price": str(form.get(f"line_{index}_unit_price") or ""),
+                "skip_optional_items": (
+                    str(form.get(f"line_{index}_skip_optional_items") or "")
+                    == "1"
+                ),
+                "related": [
+                    {
+                        "id": related_id,
+                        "quantity": str(
+                            form.get(f"line_{index}_related_qty_{related_id}") or ""
+                        ),
+                        "unit_price": str(
+                            form.get(f"line_{index}_related_price_{related_id}") or ""
+                        ),
+                    }
+                    for related_id in related_ids
+                ],
+            }
+        )
+    return lines
+
+
+def _build_quote_lines(
+    db: Session,
+    submitted: list[dict],
+    errors: dict[str, str],
+) -> list[PricingQuotationLine]:
+    if not submitted:
+        errors["lines"] = "Add at least one item."
+        return []
+    if len(submitted) > 50:
+        errors["lines"] = "A quotation can contain up to 50 main items."
+        return []
+
+    built: list[PricingQuotationLine] = []
+    selected_main_ids: set[int] = set()
+    for position, line_data in enumerate(submitted, start=1):
+        index = line_data["index"]
+        raw_item_id = line_data["item_id"]
+        item_id = entity_id(raw_item_id)
+        item = db.get(PricingItem, item_id) if item_id is not None else None
+        line_quantity = quantity(line_data["quantity"])
+        line_price = money(line_data["unit_price"])
+        if item is None or not item.is_active:
+            errors[f"line_{index}_item_id"] = "Choose an active main item."
+            continue
+        if item.id in selected_main_ids:
+            errors[f"line_{index}_item_id"] = "Each main item can be selected once."
+            continue
+        selected_main_ids.add(item.id)
+        if line_quantity is None:
+            errors[f"line_{index}_quantity"] = "Enter a quantity greater than zero."
+            continue
+        if line_price is None:
+            errors[f"line_{index}_unit_price"] = "Enter a valid non-negative price."
+            continue
+
+        active_related_ids = {
+            related.id
+            for related in item.related_items
+            if related.is_active
+        }
+        skip_optional_items = bool(line_data["skip_optional_items"])
+        selected_related_ids = {
+            parsed
+            for selected in line_data["related"]
+            if (parsed := entity_id(selected["id"])) is not None
+        }
+        if active_related_ids:
+            if skip_optional_items and selected_related_ids:
+                errors[f"line_{index}_related"] = (
+                    "Select optional items or skip them, not both."
+                )
+            elif not skip_optional_items and not selected_related_ids:
+                errors[f"line_{index}_related"] = (
+                    "Select at least one optional item or tick Skip optional items."
+                )
+        else:
+            skip_optional_items = False
+
+        line = PricingQuotationLine(
+            source_item_id=item.id,
+            item_name=item.name,
+            item_model=item.model,
+            quantity=line_quantity,
+            unit_price=line_price,
+            position=position,
+            skip_optional_items=skip_optional_items,
+        )
+        seen_related: set[int] = set()
+        for selected in line_data["related"]:
+            raw_related_id = selected["id"]
+            related_id = entity_id(raw_related_id)
+            related = (
+                db.get(PricingRelatedItem, related_id)
+                if related_id is not None
+                else None
+            )
+            related_quantity = quantity(selected["quantity"])
+            related_price = money(selected["unit_price"])
+            if (
+                related is None
+                or not related.is_active
+                or related.main_item_id != item.id
+                or related.id in seen_related
+            ):
+                errors[f"line_{index}_related"] = (
+                    "One selected related item is unavailable."
+                )
+                continue
+            seen_related.add(related.id)
+            if related_quantity is None:
+                errors[f"line_{index}_related"] = (
+                    "Enter a quantity for every selected related item."
+                )
+                continue
+            if related_price is None:
+                errors[f"line_{index}_related"] = (
+                    "Enter a valid price for every selected related item."
+                )
+                continue
+            line.related_items.append(
+                PricingQuotationRelatedLine(
+                    source_related_item_id=related.id,
+                    item_name=related.name,
+                    quantity=related_quantity,
+                    unit_price=related_price,
+                )
+            )
+        built.append(line)
+    return built
+
+
+def _line_image_keys(lines: list[PricingQuotationLine]) -> list[str | None]:
+    return [
+        key
+        for line in lines
+        for key in (line.image_storage_key, line.image_thumbnail_key)
+    ]
+
+
+def _snapshot_line_images(
+    db: Session,
+    lines: list[PricingQuotationLine],
+) -> list[str | None]:
+    stored_keys: list[str | None] = []
+    try:
+        for line in lines:
+            if not line.source_item_id:
+                continue
+            item = db.get(PricingItem, line.source_item_id)
+            if item is None or not item.image_storage_key:
+                continue
+            source = resolve_storage_path(item.image_storage_key)
+            stored = store_image(
+                item.image_original_filename or "pricing-item.jpg",
+                source.read_bytes(),
+            )
+            line.image_storage_key = stored.storage_key
+            line.image_thumbnail_key = stored.thumbnail_key
+            line.image_original_filename = stored.original_filename
+            line.image_content_type = stored.content_type
+            line.image_file_size = stored.file_size
+            stored_keys.extend((stored.storage_key, stored.thumbnail_key))
+    except (UploadError, OSError) as exc:
+        delete_stored(*stored_keys)
+        raise UploadError(
+            "An item image could not be copied into the quotation. "
+            "Replace that catalogue image and try again."
+        ) from exc
+    return stored_keys
+
+
+def _quote_form_values(form, submitted: list[dict]) -> dict:
+    return {
+        "project_id": str(form.get("project_id") or ""),
+        "quotation_date": str(form.get("quotation_date") or ""),
+        "valid_until": str(form.get("valid_until") or ""),
+        "discount_percent": str(form.get("discount_percent") or ""),
+        "vat_rate": str(form.get("vat_rate") or ""),
+        "notes": str(form.get("notes") or ""),
+        "terms": str(form.get("terms") or ""),
+        "lines": submitted or [{}],
+        "charges": {
+            "manpower": {
+                "quantity": str(form.get("charge_manpower_quantity") or ""),
+                "unit_price": str(form.get("charge_manpower_unit_price") or ""),
+            },
+            "transportation": {
+                "quantity": "1",
+                "unit_price": str(
+                    form.get("charge_transportation_unit_price") or ""
+                ),
+            },
+            "installation": {
+                "quantity": str(form.get("charge_installation_quantity") or ""),
+                "unit_price": str(
+                    form.get("charge_installation_unit_price") or ""
+                ),
+            },
+        },
+    }
+
+
+def _build_quote_charges(form, errors: dict[str, str]) -> list[PricingQuotationCharge]:
+    definitions = (
+        ("manpower", "Manpower", "worker", 1),
+        ("transportation", "Transportation", "quotation", 2),
+        ("installation", "Installation", "day", 3),
+    )
+    charges: list[PricingQuotationCharge] = []
+    for charge_type, label, unit_label, position in definitions:
+        charge_quantity = (
+            Decimal("1.00")
+            if charge_type == "transportation"
+            else quantity(form.get(f"charge_{charge_type}_quantity"))
+        )
+        unit_price = money(form.get(f"charge_{charge_type}_unit_price"))
+        if charge_quantity is None:
+            errors[f"charge_{charge_type}_quantity"] = (
+                "Enter a quantity greater than zero."
+            )
+        if unit_price is None:
+            errors[f"charge_{charge_type}_unit_price"] = (
+                "Enter a valid non-negative cost."
+            )
+        if charge_quantity is not None and unit_price is not None:
+            charges.append(
+                PricingQuotationCharge(
+                    charge_type=charge_type,
+                    label=label,
+                    quantity=charge_quantity,
+                    unit_price=unit_price,
+                    unit_label=unit_label,
+                    position=position,
+                )
+            )
+    return charges
+
+
+def _validate_quote_header(form, db: Session) -> tuple[dict, dict]:
+    errors: dict[str, str] = {}
+    raw_project_id = str(form.get("project_id") or "")
+    project_id = entity_id(raw_project_id)
+    project = db.get(Site, project_id) if project_id is not None else None
+    try:
+        quotation_date = date.fromisoformat(str(form.get("quotation_date") or ""))
+    except ValueError:
+        quotation_date = None
+    try:
+        valid_until = date.fromisoformat(str(form.get("valid_until") or ""))
+    except ValueError:
+        valid_until = None
+    discount = percentage(form.get("discount_percent"))
+    vat_rate = percentage(form.get("vat_rate"))
+    if project is None or not project.is_active:
+        errors["project_id"] = "Choose an active Project."
+    if quotation_date is None:
+        errors["quotation_date"] = "Enter a valid quotation date."
+    if valid_until is None:
+        errors["valid_until"] = "Enter a valid expiry date."
+    elif quotation_date and valid_until < quotation_date:
+        errors["valid_until"] = "The expiry date cannot be before the quotation date."
+    if discount is None:
+        errors["discount_percent"] = "Enter a discount from 0 to 100."
+    if vat_rate is None:
+        errors["vat_rate"] = "Enter a VAT rate from 0 to 100."
+    return {
+        "project": project,
+        "quotation_date": quotation_date,
+        "valid_until": valid_until,
+        "discount_percent": discount,
+        "vat_rate": vat_rate,
+        "notes": str(form.get("notes") or "").strip(),
+        "terms": str(form.get("terms") or "").strip(),
+    }, errors
+
+
+def _apply_quote_header(
+    quotation: PricingQuotation,
+    values: dict,
+    pricing_settings: dict,
+) -> None:
+    project = values["project"]
+    quotation.project_id = project.id
+    quotation.project_name = project.name
+    quotation.project_address = project.address or ""
+    quotation.project_city = project.city or ""
+    quotation.contact_person = project.contact_person or ""
+    quotation.contact_number = project.contact_number or ""
+    quotation.quotation_date = values["quotation_date"]
+    quotation.valid_until = values["valid_until"]
+    quotation.currency = pricing_settings["currency"]
+    quotation.discount_percent = values["discount_percent"]
+    quotation.vat_rate = values["vat_rate"]
+    quotation.notes = values["notes"]
+    quotation.terms = values["terms"]
+    quotation.company_name = pricing_settings["company_name"]
+    quotation.company_address = pricing_settings["company_address"]
+    quotation.company_phone = pricing_settings["company_phone"]
+    quotation.company_email = pricing_settings["company_email"]
+    quotation.updated_at = utcnow()
+
+
+@router.get("/quotations/new")
+def new_quotation_page(
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    return render(
+        request,
+        "pricing_quotation_form.html",
+        _quotation_form_context(request, db),
+    )
+
+
+@router.post("/quotations")
+async def create_quotation(
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    submitted = _submitted_lines(form)
+    form_values = _quote_form_values(form, submitted)
+    values, errors = _validate_quote_header(form, db)
+    if not csrf_valid(request, str(form.get("csrf_token") or "")):
+        errors["form"] = "Your session expired. Reload the page and try again."
+    if not form_token_available(request, str(form.get("form_token") or "")):
+        errors["form"] = "This quotation was already submitted. Check the quotations list."
+    lines = _build_quote_lines(db, submitted, errors)
+    charges = _build_quote_charges(form, errors)
+    if errors:
+        return render(
+            request,
+            "pricing_quotation_form.html",
+            _quotation_form_context(
+                request,
+                db,
+                form=form_values,
+                errors=errors,
+                form_token=issue_form_token(request),
+            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    try:
+        snapshot_keys = _snapshot_line_images(db, lines)
+    except UploadError as exc:
+        errors["form"] = str(exc)
+        return render(
+            request,
+            "pricing_quotation_form.html",
+            _quotation_form_context(
+                request,
+                db,
+                form=form_values,
+                errors=errors,
+                form_token=issue_form_token(request),
+            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    if not consume_form_token(request, str(form.get("form_token") or "")):
+        delete_stored(*snapshot_keys)
+        flash(request, "This quotation was already submitted.", "error")
+        return _redirect("/pricing/quotations")
+
+    pricing_settings = _pricing_settings(db)
+    quotation = PricingQuotation(
+        quotation_number=next_quotation_number(
+            db,
+            prefix=pricing_settings["quotation_prefix"],
+            quotation_date=values["quotation_date"],
+        ),
+        project_id=values["project"].id,
+        project_name=values["project"].name,
+        quotation_date=values["quotation_date"],
+        valid_until=values["valid_until"],
+        currency=pricing_settings["currency"],
+        discount_percent=values["discount_percent"],
+        vat_rate=values["vat_rate"],
+        created_by_id=user.id,
+        created_by_name=user.full_name,
+    )
+    _apply_quote_header(quotation, values, pricing_settings)
+    quotation.lines = lines
+    quotation.charges = charges
+    db.add(quotation)
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        delete_stored(*snapshot_keys)
+        errors["form"] = (
+            "The quotation could not be saved. Review the form and try again."
+        )
+        return render(
+            request,
+            "pricing_quotation_form.html",
+            _quotation_form_context(
+                request,
+                db,
+                form=form_values,
+                errors=errors,
+                form_token=issue_form_token(request),
+            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    flash(request, f"Quotation {quotation.quotation_number} created.")
+    return _redirect(f"/pricing/quotations/{quotation.id}")
+
+
+@router.get("/quotations/{quotation_id}")
+def quotation_detail(
+    quotation_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    quotation = _quotation_or_404(db, quotation_id)
+    return render(
+        request,
+        "pricing_quotation_detail.html",
+        {
+            "active_nav": "pricing_quotations",
+            "quotation": quotation,
+            "totals": quotation_totals(quotation),
+            "can_delete": user.is_admin,
+        },
+    )
+
+
+@router.get("/quotations/{quotation_id}/pdf")
+def quotation_pdf(
+    quotation_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    quotation = _quotation_or_404(db, quotation_id)
+    return Response(
+        content=build_quotation_pdf(quotation),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{quotation.quotation_number}.pdf"'
+            ),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.get("/quotations/{quotation_id}/lines/{line_id}/image")
+def quotation_line_image(
+    quotation_id: int,
+    line_id: int,
+    size: str = "original",
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    quotation = _quotation_or_404(db, quotation_id)
+    line = next((candidate for candidate in quotation.lines if candidate.id == line_id), None)
+    if line is None or not line.image_storage_key:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Quotation item image not found.")
+    key = (
+        line.image_thumbnail_key
+        if size == "thumb" and line.image_thumbnail_key
+        else line.image_storage_key
+    )
+    try:
+        path = resolve_storage_path(key)
+    except UploadError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Quotation item image not found.")
+    return FileResponse(
+        path,
+        media_type=("image/jpeg" if key == line.image_thumbnail_key else line.image_content_type),
+        headers={"Cache-Control": "private, max-age=600"},
+    )
+
+
+def _existing_quote_form(quotation: PricingQuotation) -> dict:
+    charge_values = {
+        "manpower": {"quantity": "1", "unit_price": "0.00"},
+        "transportation": {"quantity": "1", "unit_price": "0.00"},
+        "installation": {"quantity": "1", "unit_price": "0.00"},
+    }
+    for charge in quotation.charges:
+        charge_values[charge.charge_type] = {
+            "quantity": str(charge.quantity),
+            "unit_price": str(charge.unit_price),
+        }
+    return {
+        "project_id": str(quotation.project_id),
+        "quotation_date": quotation.quotation_date.isoformat(),
+        "valid_until": quotation.valid_until.isoformat(),
+        "discount_percent": str(quotation.discount_percent),
+        "vat_rate": str(quotation.vat_rate),
+        "notes": quotation.notes,
+        "terms": quotation.terms,
+        "lines": [
+            {
+                "index": index,
+                "item_id": str(line.source_item_id or ""),
+                "quantity": str(line.quantity),
+                "unit_price": str(line.unit_price),
+                "skip_optional_items": line.skip_optional_items,
+                "related": [
+                    {
+                        "id": str(related.source_related_item_id or ""),
+                        "quantity": str(related.quantity),
+                        "unit_price": str(related.unit_price),
+                    }
+                    for related in line.related_items
+                    if related.source_related_item_id
+                ],
+            }
+            for index, line in enumerate(quotation.lines)
+        ],
+        "charges": charge_values,
+    }
+
+
+@router.get("/quotations/{quotation_id}/edit")
+def edit_quotation_page(
+    quotation_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    quotation = _quotation_or_404(db, quotation_id)
+    return render(
+        request,
+        "pricing_quotation_form.html",
+        _quotation_form_context(
+            request,
+            db,
+            quotation=quotation,
+            form=_existing_quote_form(quotation),
+        ),
+    )
+
+
+@router.post("/quotations/{quotation_id}/edit")
+async def edit_quotation(
+    quotation_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    quotation = _quotation_or_404(db, quotation_id)
+    form = await request.form()
+    submitted = _submitted_lines(form)
+    form_values = _quote_form_values(form, submitted)
+    values, errors = _validate_quote_header(form, db)
+    if not csrf_valid(request, str(form.get("csrf_token") or "")):
+        errors["form"] = "Your session expired. Reload the page and try again."
+    lines = _build_quote_lines(db, submitted, errors)
+    charges = _build_quote_charges(form, errors)
+    if errors:
+        return render(
+            request,
+            "pricing_quotation_form.html",
+            _quotation_form_context(
+                request,
+                db,
+                quotation=quotation,
+                form=form_values,
+                errors=errors,
+            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    try:
+        new_snapshot_keys = _snapshot_line_images(db, lines)
+    except UploadError as exc:
+        errors["form"] = str(exc)
+        return render(
+            request,
+            "pricing_quotation_form.html",
+            _quotation_form_context(
+                request,
+                db,
+                quotation=quotation,
+                form=form_values,
+                errors=errors,
+            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    old_snapshot_keys = _line_image_keys(quotation.lines)
+    _apply_quote_header(quotation, values, _pricing_settings(db))
+    quotation.lines.clear()
+    db.flush()
+    quotation.lines = lines
+    quotation.charges.clear()
+    db.flush()
+    quotation.charges = charges
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        delete_stored(*new_snapshot_keys)
+        errors["form"] = (
+            "The quotation could not be saved. Review the form and try again."
+        )
+        return render(
+            request,
+            "pricing_quotation_form.html",
+            _quotation_form_context(
+                request,
+                db,
+                quotation=quotation,
+                form=form_values,
+                errors=errors,
+            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    delete_stored(*old_snapshot_keys)
+    flash(request, f"Quotation {quotation.quotation_number} updated.")
+    return _redirect(f"/pricing/quotations/{quotation.id}")
+
+
+@router.post(
+    "/quotations/{quotation_id}/delete",
+    dependencies=[Depends(require_admin)],
+)
+async def delete_quotation(
+    quotation_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/quotations")
+    quotation = _quotation_or_404(db, quotation_id)
+    number = quotation.quotation_number
+    snapshot_keys = _line_image_keys(quotation.lines)
+    db.delete(quotation)
+    db.commit()
+    delete_stored(*snapshot_keys)
+    flash(request, f"Quotation {number} deleted.")
+    return _redirect("/pricing/quotations")
+
+
+@router.get("/settings", dependencies=[Depends(require_admin)])
+def pricing_settings_page(
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    return render(
+        request,
+        "pricing_settings.html",
+        {
+            "active_nav": "pricing_settings",
+            "profile": _pricing_settings(db),
+            "errors": {},
+            "saved": db.get(PricingSettings, 1),
+        },
+    )
+
+
+@router.post("/settings", dependencies=[Depends(require_admin)])
+async def update_pricing_settings(
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    profile = {
+        "currency": str(form.get("currency") or "").strip().upper(),
+        "default_vat_rate": percentage(form.get("default_vat_rate")),
+        "default_validity_days": str(
+            form.get("default_validity_days") or ""
+        ).strip(),
+        "quotation_prefix": str(form.get("quotation_prefix") or "")
+        .strip()
+        .upper(),
+        "company_name": str(form.get("company_name") or "").strip(),
+        "company_address": str(form.get("company_address") or "").strip(),
+        "company_phone": str(form.get("company_phone") or "").strip(),
+        "company_email": str(form.get("company_email") or "").strip(),
+        "default_terms": str(form.get("default_terms") or "").strip(),
+        "default_manpower_price": money(form.get("default_manpower_price")),
+        "default_transportation_price": money(
+            form.get("default_transportation_price")
+        ),
+        "default_installation_price": money(form.get("default_installation_price")),
+    }
+    errors: dict[str, str] = {}
+    if not csrf_valid(request, str(form.get("csrf_token") or "")):
+        errors["form"] = "Your session expired. Reload the page and try again."
+    if not re.fullmatch(r"[A-Z]{3}", profile["currency"]):
+        errors["currency"] = "Enter a three-letter currency code such as SAR."
+    if profile["default_vat_rate"] is None:
+        errors["default_vat_rate"] = "Enter a VAT rate from 0 to 100."
+    if not profile["default_validity_days"].isdigit() or not (
+        1 <= int(profile["default_validity_days"]) <= 365
+    ):
+        errors["default_validity_days"] = "Enter a validity period from 1 to 365 days."
+    if not re.fullmatch(r"[A-Z0-9-]{1,12}", profile["quotation_prefix"]):
+        errors["quotation_prefix"] = (
+            "Use up to 12 letters, numbers, or hyphens."
+        )
+    if len(profile["company_name"]) > 160:
+        errors["company_name"] = "Company name must be 160 characters or fewer."
+    if len(profile["company_phone"]) > 40:
+        errors["company_phone"] = "Phone number must be 40 characters or fewer."
+    if len(profile["company_email"]) > 254 or (
+        profile["company_email"]
+        and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", profile["company_email"])
+    ):
+        errors["company_email"] = "Enter a valid company email address."
+    for key, label in (
+        ("default_manpower_price", "manpower"),
+        ("default_transportation_price", "transportation"),
+        ("default_installation_price", "installation"),
+    ):
+        if profile[key] is None:
+            errors[key] = f"Enter a valid non-negative default {label} cost."
+    if errors:
+        return render(
+            request,
+            "pricing_settings.html",
+            {
+                "active_nav": "pricing_settings",
+                "profile": profile,
+                "errors": errors,
+                "saved": db.get(PricingSettings, 1),
+            },
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+
+    saved = db.get(PricingSettings, 1)
+    if saved is None:
+        saved = PricingSettings(
+            id=1,
+            updated_by_id=admin.id,
+            updated_by_name=admin.full_name,
+        )
+        db.add(saved)
+    for key in DEFAULT_SETTINGS:
+        value = profile[key]
+        if key == "default_validity_days":
+            value = int(value)
+        setattr(saved, key, value)
+    saved.updated_by_id = admin.id
+    saved.updated_by_name = admin.full_name
+    saved.updated_at = utcnow()
+    db.commit()
+    flash(request, "Pricing settings saved. Existing quotations keep their snapshots.")
+    return _redirect("/pricing/settings")

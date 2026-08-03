@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as ui with context %}
+{% block title %}{{ t('ui.projects') }} {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('nav.management.projects') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">{{ t('ui.administration') }}</span>
+    <h1>{{ t('nav.management.projects') }}</h1>
+    <p class="lede">{{ t('ui.manage.the.projects.available.for.installation.and.maintenance.data.entry') }}</p>
+  </div>
+  <button class="btn btn-primary" data-toggle-target="add-project" aria-expanded="false">{{ t('ui.add.project') }}</button>
+</div>
+
+<div class="card" id="add-project" hidden>
+  <div class="card-head"><h2>{{ t('ui.add.a.project') }}</h2></div>
+  <div class="card-body">
+    <form method="post" action="/projects">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="grid cols-2">
+        <div class="field">
+          <label for="project-name">{{ t('ui.project.name') }} <span class="req">*</span></label>
+          <input id="project-name" name="name" required maxlength="160" dir="auto">
+        </div>
+        <div class="field">
+          <label for="project-address">{{ t('ui.address.or.location') }} <span class="req">*</span></label>
+          <input id="project-address" name="address" required maxlength="255" dir="auto">
+        </div>
+        <div class="field">
+          <label for="project-city">{{ t('ui.city') }}</label>
+          <input id="project-city" name="city" maxlength="80" dir="auto">
+        </div>
+        <div class="field">
+          <label for="project-contact">{{ t('ui.contact.person') }}</label>
+          <input id="project-contact" name="contact_person" maxlength="120" dir="auto">
+        </div>
+        <div class="field">
+          <label for="project-phone">{{ t('ui.contact.number') }}</label>
+          <input id="project-phone" name="contact_number" maxlength="40" dir="auto">
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button class="btn btn-primary" type="submit">{{ t('ui.save.project') }}</button>
+        <button class="btn btn-secondary" type="button" data-toggle-target="add-project">{{ t('ui.cancel') }}</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>{{ projects|length }} {{ t('ui.project.lowercase') if projects|length == 1 else t('ui.projects.lowercase') }}</h2>
+    <form method="get" action="/projects" style="display:flex;gap:8px;">
+      <input type="search" name="q" value="{{ q }}" placeholder="{{ t('ui.search.projects') }}" aria-label="{{ t('ui.search.projects.aria') }}" dir="auto">
+      <button class="btn btn-secondary btn-sm">{{ t('ui.search') }}</button>
+      {% if q %}<a class="btn btn-quiet btn-sm" href="/projects">{{ t('ui.clear') }}</a>{% endif %}
+    </form>
+  </div>
+  <div class="card-body tight">
+    {% if projects %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>{{ t('ui.project.name') }}</th><th>{{ t('ui.address.or.location') }}</th><th>{{ t('ui.city') }}</th><th>{{ t('ui.contact.person') }}</th><th>{{ t('ui.contact.number') }}</th><th>{{ t('nav.group.records') }}</th><th>{{ t('ui.status') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
+        <tbody>
+          {% for p in projects %}
+          <tr>
+            <td><strong>{{ p.name }}</strong></td><td>{{ p.address }}</td><td>{{ p.city or '—' }}</td>
+            <td>{{ p.contact_person or '—' }}</td><td class="mono">{{ p.contact_number or '—' }}</td>
+            <td class="num">{{ usage.get(p.id, 0) }}</td><td>{{ ui.status_badge(p.is_active) }}</td>
+            <td style="white-space:nowrap;">
+              <button class="btn btn-quiet btn-sm" data-toggle-target="project-{{ p.id }}">{{ t('ui.edit') }}</button>
+              {% if user.is_admin %}
+              <form method="post" action="/projects/{{ p.id }}/toggle" style="display:inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn btn-quiet btn-sm">{{ t('ui.deactivate') if p.is_active else t('ui.activate') }}</button>
+              </form>
+              <form method="post" action="/projects/{{ p.id }}/delete" style="display:inline;" onsubmit="return confirm('{{ t("ui.delete.this.project.referenced.projects.will.be.deactivated.instead") }}');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn btn-danger btn-sm" type="submit">{{ t('ui.delete') }}</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          <tr id="project-{{ p.id }}" hidden>
+            <td colspan="8" style="background:#f7f9fa;">
+              <form method="post" action="/projects/{{ p.id }}/edit">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <div class="grid cols-2">
+                  <div class="field"><label>{{ t('ui.project.name') }} <span class="req">*</span></label><input name="name" value="{{ p.name }}" required dir="auto"></div>
+                  <div class="field"><label>{{ t('ui.address.or.location') }} <span class="req">*</span></label><input name="address" value="{{ p.address }}" required dir="auto"></div>
+                  <div class="field"><label>{{ t('ui.city') }}</label><input name="city" value="{{ p.city or '' }}" dir="auto"></div>
+                  <div class="field"><label>{{ t('ui.contact.person') }}</label><input name="contact_person" value="{{ p.contact_person or '' }}" dir="auto"></div>
+                  <div class="field"><label>{{ t('ui.contact.number') }}</label><input name="contact_number" value="{{ p.contact_number or '' }}" dir="auto"></div>
+                </div>
+                <button class="btn btn-primary btn-sm">{{ t('ui.save.changes') }}</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    {{ ui.empty_state(t('ui.no.projects.yet'), t('ui.add.the.first.project.used.for.installation.and.maintenance.work')) }}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

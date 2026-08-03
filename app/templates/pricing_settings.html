@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ t('ui.pricing.settings') }} {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('nav.pricing.settings') }}{% endblock %}
+
+{% block content %}
+<div class="page-head"><div><span class="eyebrow">{{ t('ui.pricing.administrator') }}</span><h1>{{ t('nav.pricing.settings') }}</h1><p class="lede">{{ t('ui.set.quotation.defaults.and.the.company.details.printed.on.future.pdfs') }}</p></div></div>
+{% if errors.form %}<div class="alert error">{{ errors.form }}</div>{% endif %}
+<form method="post" action="/pricing/settings">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="card"><div class="card-head"><h2>{{ t('ui.quotation.defaults') }}</h2></div><div class="card-body grid cols-3">
+    <div class="field"><label for="ps-currency">{{ t('ui.currency') }} <span class="req">*</span></label><input id="ps-currency" name="currency" value="{{ profile.currency }}" maxlength="3" required placeholder="SAR" dir="auto">{% if errors.currency %}<p class="field-error">{{ errors.currency }}</p>{% endif %}</div>
+    <div class="field"><label for="ps-vat">{{ t('ui.default.vat.percent') }} <span class="req">*</span></label><input id="ps-vat" name="default_vat_rate" type="number" min="0" max="100" step="0.01" value="{{ profile.default_vat_rate }}" required>{% if errors.default_vat_rate %}<p class="field-error">{{ errors.default_vat_rate }}</p>{% endif %}</div>
+    <div class="field"><label for="ps-validity">{{ t('ui.default.validity.days') }} <span class="req">*</span></label><input id="ps-validity" name="default_validity_days" type="number" min="1" max="365" value="{{ profile.default_validity_days }}" required>{% if errors.default_validity_days %}<p class="field-error">{{ errors.default_validity_days }}</p>{% endif %}</div>
+    <div class="field"><label for="ps-prefix">{{ t('ui.quotation.prefix') }} <span class="req">*</span></label><input id="ps-prefix" name="quotation_prefix" value="{{ profile.quotation_prefix }}" maxlength="12" required placeholder="QUO" dir="auto">{% if errors.quotation_prefix %}<p class="field-error">{{ errors.quotation_prefix }}</p>{% endif %}<p class="hint">{{ t('ui.creates.numbers.such.as.quo.2026.00001') }}</p></div>
+  </div></div>
+  <div class="card"><div class="card-head"><div><h2>{{ t('ui.required.charge.defaults') }}</h2><p class="hint" style="margin:4px 0 0;">{{ t('ui.these.prefill.new.quotations.the.quotation.creator.can.change.every.cost') }}</p></div></div><div class="card-body grid cols-3">
+    <div class="field"><label for="ps-manpower">{{ t('ui.manpower.price.per.worker') }}</label><input id="ps-manpower" name="default_manpower_price" type="number" min="0" step="0.01" value="{{ profile.default_manpower_price }}" required>{% if errors.default_manpower_price %}<p class="field-error">{{ errors.default_manpower_price }}</p>{% endif %}</div>
+    <div class="field"><label for="ps-transportation">{{ t('ui.transportation.cost.label') }}</label><input id="ps-transportation" name="default_transportation_price" type="number" min="0" step="0.01" value="{{ profile.default_transportation_price }}" required>{% if errors.default_transportation_price %}<p class="field-error">{{ errors.default_transportation_price }}</p>{% endif %}</div>
+    <div class="field"><label for="ps-installation">{{ t('ui.installation.price.per.day') }}</label><input id="ps-installation" name="default_installation_price" type="number" min="0" step="0.01" value="{{ profile.default_installation_price }}" required>{% if errors.default_installation_price %}<p class="field-error">{{ errors.default_installation_price }}</p>{% endif %}</div>
+  </div></div>
+  <div class="card"><div class="card-head"><h2>{{ t('ui.company.details') }}</h2></div><div class="card-body grid cols-2">
+    <div class="field"><label for="ps-company">{{ t('ui.company.name') }}</label><input id="ps-company" name="company_name" value="{{ profile.company_name }}" maxlength="160" dir="auto">{% if errors.company_name %}<p class="field-error">{{ errors.company_name }}</p>{% endif %}</div>
+    <div class="field"><label for="ps-phone">{{ t('ui.phone') }}</label><input id="ps-phone" name="company_phone" value="{{ profile.company_phone }}" maxlength="40" dir="auto">{% if errors.company_phone %}<p class="field-error">{{ errors.company_phone }}</p>{% endif %}</div>
+    <div class="field"><label for="ps-email">{{ t('ui.email') }}</label><input id="ps-email" name="company_email" type="email" value="{{ profile.company_email }}" maxlength="254">{% if errors.company_email %}<p class="field-error">{{ errors.company_email }}</p>{% endif %}</div>
+    <div class="field"><label for="ps-address">{{ t('ui.address') }}</label><textarea id="ps-address" name="company_address" rows="3" dir="auto">{{ profile.company_address }}</textarea></div>
+    <div class="field" style="grid-column:1/-1;"><label for="ps-terms">{{ t('ui.default.terms.and.conditions') }}</label><textarea id="ps-terms" name="default_terms" rows="7" dir="auto">{{ profile.default_terms }}</textarea><p class="hint">{{ t('ui.copied.into.each.new.quotation.and.editable.there') }}</p></div>
+  </div></div>
+  <button class="btn btn-primary" type="submit">{{ t('ui.save.pricing.settings') }}</button>
+</form>
+{% if saved %}<p class="hint" style="margin-top:14px;">{{ t('ui.last.updated.by') }} {{ saved.updated_by_name }} {{ t('ui.on') }} {{ saved.updated_at|datetime }}.</p>{% endif %}
+{% endblock %}

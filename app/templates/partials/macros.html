@@ -1,0 +1,98 @@
+{% macro result_badge(result) %}
+<span class="badge {{ result.tone }}">{{ t('record.result.' ~ result.value) }}</span>
+{% endmacro %}
+
+{% macro record_device_summary(record) -%}
+{{ record.device }}{% if record.device_total > 1 %} | {{ t('record.device.more', count=record.device_total - 1) }}{% endif %}
+{%- endmacro %}
+
+{% macro status_badge(is_active) %}
+{% if is_active %}<span class="badge ok">{{ t('ui.active') }}</span>{% else %}<span class="badge muted">{{ t('ui.inactive') }}</span>{% endif %}
+{% endmacro %}
+
+{% macro empty_state(title, message, action_href=None, action_label=None) %}
+<div class="empty">
+  <p class="empty-title">{{ title }}</p>
+  <p>{{ message }}</p>
+  {% if action_href %}<p style="margin-top:14px;"><a class="btn btn-primary" href="{{ action_href }}">{{ action_label }}</a></p>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro bars(rows, title) %}
+<div class="card">
+  <div class="card-head"><h2>{{ title }}</h2></div>
+  <div class="card-body">
+    {% if rows %}
+    {% set top = rows[0][1] %}
+    <div class="bars">
+      {% for name, count in rows %}
+      <div class="bar-row">
+        <span class="name" title="{{ name }}">{{ name }}</span>
+        <span class="bar-track"><span class="bar-fill" style="width: {{ (count / top * 100) | round(0, "floor") }}%"></span></span>
+        <span class="count">{{ count }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p style="color:var(--slate);font-size:.88rem;margin:0;">{{ t('ui.nothing.recorded.yet') }}</p>
+    {% endif %}
+  </div>
+</div>
+{% endmacro %}
+
+{% macro recent_list(records, show_leader=True) %}
+{% if records %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>{{ t('ui.record') }}</th><th>{{ t('ui.site') }}</th><th>{{ t('ui.service') }}</th><th>{{ t('ui.result') }}</th>
+        {% if show_leader %}<th>{{ t('ui.submitted.by') }}</th>{% endif %}<th>{{ t('ui.submitted') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in records %}
+      <tr>
+        <td><a class="record-no" href="/maintenance/records/{{ r.id }}">{{ r.record_number }}</a></td>
+        <td>{{ r.site_name }}<br><span style="color:var(--slate);font-size:.8rem;">{{ r.customer_name }}</span></td>
+        <td>{{ r.service_name }}</td>
+        <td>{{ result_badge(r.result) }}</td>
+        {% if show_leader %}<td>{{ r.team_leader_name }}</td>{% endif %}
+        <td class="num">{{ r.submitted_at | datetime }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="record-cards">
+  {% for r in records %}
+  <div class="record-card">
+    <div class="row1">
+      <a class="record-no" href="/maintenance/records/{{ r.id }}">{{ r.record_number }}</a>
+      {{ result_badge(r.result) }}
+    </div>
+    <div class="site">{{ r.site_name }}</div>
+    <div class="meta">{{ r.customer_name }} · {{ r.service_name }}</div>
+    <div class="meta mono">{{ r.submitted_at | datetime }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+  {{ empty_state(t('ui.no.submissions.yet'), t('ui.service.records.appear.after.submission')) }}
+{% endif %}
+{% endmacro %}
+{% macro staged_evidence(photos, media_path) %}
+  {% for stage_value, stage_label in [('before', 'Before photos'), ('after', 'After photos'), ('legacy', 'Existing evidence')] %}
+    {% set stage_photos = photos | selectattr('stage.value', 'equalto', stage_value) | list %}
+    {% if stage_photos %}
+      <p class="section-title">{{ stage_label }}</p>
+      <div class="evidence-strip">
+        {% for photo in stage_photos %}
+          <button type="button" data-lb-open data-full="{{ media_path }}/{{ photo.id }}" data-caption="{{ stage_label }} · {{ photo.original_filename }} · {{ photo.file_size | filesize }}">
+            <img src="{{ media_path }}/{{ photo.id }}?size=thumb" alt="{{ stage_label }} {{ loop.index }}" loading="lazy">
+          </button>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endfor %}
+{% endmacro %}

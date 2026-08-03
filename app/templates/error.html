@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ title }}{% endblock %}
+
+{% macro body() %}
+<div class="card" style="max-width:520px;margin:40px auto;">
+  <div class="card-body" style="text-align:center;padding:36px 24px;">
+    <p class="mono" style="font-size:.72rem;letter-spacing:.18em;color:var(--slate);margin:0;">{{ t('ui.error') }} {{ code }}</p>
+    <h1 style="margin:10px 0 8px;">{{ title }}</h1>
+    <p style="color:var(--slate);margin:0 0 22px;">{{ detail }}</p>
+    <a class="btn btn-primary" href="/dashboard">{{ t('ui.go.to.dashboard') }}</a>
+  </div>
+</div>
+{% endmacro %}
+
+{% block bare %}{{ body() }}{% endblock %}
+{% block content %}{{ body() }}{% endblock %}

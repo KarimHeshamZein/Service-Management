@@ -1,0 +1,443 @@
+"""Polished PDF output for one saved price quotation."""
+from __future__ import annotations
+
+import html
+import io
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+from PIL import Image as PilImage
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_RIGHT
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    Image as PdfImage,
+    KeepTogether,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
+
+from .models import PricingQuotation
+from .pricing import quotation_totals
+from .uploads import UploadError, resolve_storage_path
+
+NAVY = colors.HexColor("#17324D")
+BLUE = colors.HexColor("#1F6F8B")
+SLATE = colors.HexColor("#526575")
+LIGHT = colors.HexColor("#F4F7F9")
+BORDER = colors.HexColor("#D7E0E6")
+WHITE = colors.white
+BRAND_LOGO_PATH = Path(__file__).resolve().parent / "static" / "img" / "afaqylogo.png"
+BRAND_LOGO_WIDTH = 35 * mm
+BRAND_LOGO_HEIGHT = BRAND_LOGO_WIDTH * 133 / 380
+
+
+def _text(value: Any, fallback: str = "-") -> str:
+    if value is None or value == "":
+        return fallback
+    normalized = (
+        str(value)
+        .replace("\u2010", "-")
+        .replace("\u2011", "-")
+        .replace("\u2012", "-")
+        .replace("\u2013", "-")
+        .replace("\u2014", "-")
+        .replace("\u00b7", "|")
+    )
+    return html.escape(normalized, quote=False).replace("\n", "<br/>")
+
+
+def _amount(value: Decimal, currency: str) -> str:
+    return f"{value:,.2f} {_text(currency)}"
+
+
+def _styles() -> dict[str, ParagraphStyle]:
+    sample = getSampleStyleSheet()
+    return {
+        "title": ParagraphStyle(
+            "QuotationTitle",
+            parent=sample["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=21,
+            leading=25,
+            textColor=NAVY,
+            spaceAfter=2 * mm,
+        ),
+        "number": ParagraphStyle(
+            "QuotationNumber",
+            parent=sample["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=10,
+            leading=13,
+            textColor=BLUE,
+            spaceAfter=5 * mm,
+        ),
+        "section": ParagraphStyle(
+            "QuotationSection",
+            parent=sample["Heading2"],
+            fontName="Helvetica-Bold",
+            fontSize=11,
+            leading=14,
+            textColor=NAVY,
+            spaceBefore=4 * mm,
+            spaceAfter=2 * mm,
+        ),
+        "body": ParagraphStyle(
+            "QuotationBody",
+            parent=sample["BodyText"],
+            fontName="Helvetica",
+            fontSize=8.5,
+            leading=11.5,
+            textColor=NAVY,
+        ),
+        "small": ParagraphStyle(
+            "QuotationSmall",
+            parent=sample["BodyText"],
+            fontName="Helvetica",
+            fontSize=7.5,
+            leading=10,
+            textColor=SLATE,
+        ),
+        "table_header": ParagraphStyle(
+            "QuotationTableHeader",
+            parent=sample["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=7.5,
+            leading=9.5,
+            textColor=WHITE,
+        ),
+        "right": ParagraphStyle(
+            "QuotationRight",
+            parent=sample["BodyText"],
+            fontName="Helvetica",
+            fontSize=8,
+            leading=10,
+            alignment=TA_RIGHT,
+            textColor=NAVY,
+        ),
+        "right_bold": ParagraphStyle(
+            "QuotationRightBold",
+            parent=sample["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=9,
+            leading=11,
+            alignment=TA_RIGHT,
+            textColor=NAVY,
+        ),
+    }
+
+
+def _paragraph(value: Any, style: ParagraphStyle, fallback: str = "-") -> Paragraph:
+    return Paragraph(_text(value, fallback), style)
+
+
+def _page_footer(canvas, document) -> None:
+    canvas.saveState()
+    width, height = A4
+    PdfImage(
+        str(BRAND_LOGO_PATH),
+        width=BRAND_LOGO_WIDTH,
+        height=BRAND_LOGO_HEIGHT,
+    ).drawOn(canvas, 18 * mm, height - 15 * mm)
+    canvas.setStrokeColor(BORDER)
+    canvas.line(18 * mm, 13 * mm, width - 18 * mm, 13 * mm)
+    canvas.setFont("Helvetica", 7)
+    canvas.setFillColor(SLATE)
+    canvas.drawString(18 * mm, 8.5 * mm, "Price quotation")
+    canvas.drawRightString(
+        width - 18 * mm,
+        8.5 * mm,
+        f"Page {document.page}",
+    )
+    canvas.restoreState()
+
+
+def _item_image(line, styles: dict[str, ParagraphStyle]):
+    if not line.image_storage_key:
+        return _paragraph("-", styles["small"])
+    try:
+        key = line.image_thumbnail_key or line.image_storage_key
+        path = resolve_storage_path(key)
+        with PilImage.open(path) as probe:
+            width, height = probe.size
+    except (UploadError, OSError, ValueError):
+        return _paragraph("-", styles["small"])
+    max_width = 22 * mm
+    max_height = 18 * mm
+    scale = min(max_width / width, max_height / height)
+    image = PdfImage(str(path), width=width * scale, height=height * scale)
+    image.hAlign = "CENTER"
+    return image
+
+
+def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
+    styles = _styles()
+    buffer = io.BytesIO()
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=20 * mm,
+        bottomMargin=19 * mm,
+        title=f"Price quotation {quotation.quotation_number}",
+        author=quotation.company_name or quotation.created_by_name,
+        subject=f"Price quotation for {quotation.project_name}",
+    )
+    story: list[Any] = []
+
+    seller_lines = [
+        quotation.company_name,
+        quotation.company_address,
+        quotation.company_phone,
+        quotation.company_email,
+    ]
+    seller = "<br/>".join(_text(value) for value in seller_lines if value)
+    header = Table(
+        [
+            [
+                Paragraph("PRICE QUOTATION", styles["title"]),
+                Paragraph(seller or " ", styles["small"]),
+            ]
+        ],
+        colWidths=[105 * mm, 65 * mm],
+    )
+    header.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]
+        )
+    )
+    story.extend(
+        [
+            header,
+            Paragraph(_text(quotation.quotation_number), styles["number"]),
+        ]
+    )
+
+    project_address = quotation.project_address
+    if quotation.project_city:
+        project_address = (
+            f"{project_address}, {quotation.project_city}"
+            if project_address
+            else quotation.project_city
+        )
+    details = Table(
+        [
+            [
+                Paragraph("<b>Project</b>", styles["small"]),
+                _paragraph(quotation.project_name, styles["body"]),
+                Paragraph("<b>Quotation date</b>", styles["small"]),
+                _paragraph(quotation.quotation_date.isoformat(), styles["body"]),
+            ],
+            [
+                Paragraph("<b>Address</b>", styles["small"]),
+                _paragraph(project_address, styles["body"]),
+                Paragraph("<b>Valid until</b>", styles["small"]),
+                _paragraph(quotation.valid_until.isoformat(), styles["body"]),
+            ],
+            [
+                Paragraph("<b>Contact</b>", styles["small"]),
+                _paragraph(
+                    " | ".join(
+                        value
+                        for value in (
+                            quotation.contact_person,
+                            quotation.contact_number,
+                        )
+                        if value
+                    ),
+                    styles["body"],
+                ),
+                Paragraph("<b>Prepared by</b>", styles["small"]),
+                _paragraph(quotation.created_by_name, styles["body"]),
+            ],
+        ],
+        colWidths=[23 * mm, 62 * mm, 28 * mm, 57 * mm],
+    )
+    details.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
+                ("BACKGROUND", (0, 0), (0, -1), LIGHT),
+                ("BACKGROUND", (2, 0), (2, -1), LIGHT),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    story.extend([details, Paragraph("Priced items", styles["section"])])
+
+    rows: list[list[Any]] = [
+        [
+            _paragraph("#", styles["table_header"]),
+            _paragraph("Image", styles["table_header"]),
+            _paragraph("Item", styles["table_header"]),
+            _paragraph("Qty", styles["table_header"]),
+            _paragraph("Unit price", styles["table_header"]),
+            _paragraph("Total", styles["table_header"]),
+        ]
+    ]
+    row_index = 0
+    for position, line in enumerate(quotation.lines, start=1):
+        rows.append(
+            [
+                _paragraph(position, styles["small"]),
+                _item_image(line, styles),
+                Paragraph(
+                    f"<b>{_text(line.item_name)}</b>"
+                    + (
+                        f"<br/><font color='#526575'>{_text(line.item_model)}</font>"
+                        if line.item_model
+                        else ""
+                    ),
+                    styles["body"],
+                ),
+                _paragraph(line.quantity, styles["right"]),
+                _paragraph(_amount(line.unit_price, quotation.currency), styles["right"]),
+                _paragraph(_amount(line.main_total, quotation.currency), styles["right"]),
+            ]
+        )
+        row_index += 1
+        for related in line.related_items:
+            rows.append(
+                [
+                    "",
+                    "",
+                    _paragraph(f"- {related.item_name}", styles["small"]),
+                    _paragraph(related.quantity, styles["right"]),
+                    _paragraph(
+                        _amount(related.unit_price, quotation.currency),
+                        styles["right"],
+                    ),
+                    _paragraph(_amount(related.total, quotation.currency), styles["right"]),
+                ]
+            )
+            row_index += 1
+        if line.skip_optional_items:
+            rows.append(
+                [
+                    "",
+                    "",
+                    _paragraph("- Optional items intentionally skipped", styles["small"]),
+                    "",
+                    "",
+                    "",
+                ]
+            )
+            row_index += 1
+    for charge in quotation.charges:
+        rows.append(
+            [
+                _paragraph(f"C{charge.position}", styles["small"]),
+                "",
+                Paragraph(
+                    f"<b>{_text(charge.label)}</b>"
+                    f"<br/><font color='#526575'>Required charge - per {_text(charge.unit_label)}</font>",
+                    styles["body"],
+                ),
+                _paragraph(charge.quantity, styles["right"]),
+                _paragraph(
+                    _amount(charge.unit_price, quotation.currency),
+                    styles["right"],
+                ),
+                _paragraph(_amount(charge.total, quotation.currency), styles["right"]),
+            ]
+        )
+
+    item_table = Table(
+        rows,
+        colWidths=[8 * mm, 25 * mm, 50 * mm, 17 * mm, 32 * mm, 38 * mm],
+        repeatRows=1,
+    )
+    item_table.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
+                ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, LIGHT]),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    story.append(item_table)
+
+    totals = quotation_totals(quotation)
+    summary_rows = [
+        [
+            _paragraph("Subtotal", styles["body"]),
+            _paragraph(_amount(totals["subtotal"], quotation.currency), styles["right"]),
+        ],
+        [
+            _paragraph(
+                f"Discount ({quotation.discount_percent}%)",
+                styles["body"],
+            ),
+            _paragraph(
+                f"- {_amount(totals['discount'], quotation.currency)}",
+                styles["right"],
+            ),
+        ],
+        [
+            _paragraph(f"VAT ({quotation.vat_rate}%)", styles["body"]),
+            _paragraph(_amount(totals["vat"], quotation.currency), styles["right"]),
+        ],
+        [
+            Paragraph("<b>Grand total</b>", styles["body"]),
+            _paragraph(
+                _amount(totals["grand_total"], quotation.currency),
+                styles["right_bold"],
+            ),
+        ],
+    ]
+    summary = Table(summary_rows, colWidths=[45 * mm, 45 * mm], hAlign="RIGHT")
+    summary.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
+                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#EAF3F6")),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
+    story.extend([Spacer(1, 4 * mm), KeepTogether(summary)])
+
+    if quotation.notes:
+        story.extend(
+            [
+                Paragraph("Notes", styles["section"]),
+                _paragraph(quotation.notes, styles["body"]),
+            ]
+        )
+    if quotation.terms:
+        story.extend(
+            [
+                Paragraph("Terms and conditions", styles["section"]),
+                _paragraph(quotation.terms, styles["body"]),
+            ]
+        )
+
+    document.build(story, onFirstPage=_page_footer, onLaterPages=_page_footer)
+    return buffer.getvalue()

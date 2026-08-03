@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as ui with context %}
+{% block title %}{{ t('ui.installation.records') }} {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('nav.records.installation') }}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">{{ t('ui.new.installations') }}</span>
+    <h1>{{ t('nav.records.installation') }}</h1>
+    <p class="lede">{% if user.is_customer %}{{ t('ui.installation.records.for.your.assigned.projects') }}{% else %}{{ t('ui.every.submitted.installation.record') }}{% endif %}</p>
+  </div>
+  {% if user.can_submit_records %}<a class="btn btn-primary" href="/installations">{{ t('ui.new.installation.entry') }}</a>{% endif %}
+</div>
+
+<div class="card no-print">
+  <div class="card-body">
+    <form method="get" action="/installations/records">
+      <div class="filters">
+        <div class="field">
+          <label for="q">{{ t('ui.search') }}</label>
+          <input id="q" name="q" type="search" value="{{ filters.q }}" placeholder="{{ t('ui.record.site.model.serial') }}" dir="auto">
+        </div>
+        <div class="field"><label for="project_id">{{ t('ui.project') }}</label><select id="project_id" name="project_id"><option value="">{{ t('ui.all.projects') }}</option>{% for p in projects %}<option value="{{ p.id }}" {{ "selected" if filters.project_id == p.id|string }}>{{ p.name }}</option>{% endfor %}</select></div>
+        <div class="field">
+          <label for="work_site_id">{{ t('ui.site') }}</label>
+          <select id="work_site_id" name="work_site_id">
+            <option value="">{{ t('ui.all.sites') }}</option>
+            {% for s in work_sites %}<option value="{{ s.id }}" {{ "selected" if filters.work_site_id == s.id|string }}>{{ s.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="service_type_id">{{ t('ui.installation.type') }}</label>
+          <select id="service_type_id" name="service_type_id">
+            <option value="">{{ t('ui.all.types') }}</option>
+            {% for s in services %}<option value="{{ s.id }}" {{ "selected" if filters.service_type_id == s.id|string }}>{{ s.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field"><label for="device_id">{{ t('ui.device.title') }}</label><select id="device_id" name="device_id"><option value="">{{ t('ui.all.devices') }}</option>{% for d in devices %}<option value="{{ d.id }}" {{ "selected" if filters.device_id == d.id|string }}>{{ d.display_label }}</option>{% endfor %}</select></div>
+        {% if user.can_view_all_records %}
+        <div class="field">
+          <label for="leader_id">{{ t('ui.submitted.by') }}</label>
+          <select id="leader_id" name="leader_id">
+            <option value="">{{ t('ui.all.submitters') }}</option>
+            {% for l in leaders %}<option value="{{ l.id }}" {{ "selected" if filters.leader_id == l.id|string }}>{{ l.full_name }}</option>{% endfor %}
+          </select>
+        </div>
+        {% endif %}
+        <div class="field">
+          <label for="result">{{ t('ui.result') }}</label>
+          <select id="result" name="result">
+            <option value="">{{ t('ui.all.results') }}</option>
+            {% for r in results %}<option value="{{ r.value }}" {{ "selected" if filters.result == r.value }}>{{ t('record.result.' ~ r.value) }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field"><label for="date_from">{{ t('ui.submitted.from') }}</label><input id="date_from" name="date_from" type="date" value="{{ filters.date_from }}"></div>
+        <div class="field"><label for="date_to">{{ t('ui.submitted.to') }}</label><input id="date_to" name="date_to" type="date" value="{{ filters.date_to }}"></div>
+        <div class="filter-actions">
+          <button type="submit" class="btn btn-primary">{{ t('ui.apply.filters') }}</button>
+          {% if has_filters %}<a class="btn btn-secondary" href="/installations/records">{{ t('ui.clear.filters') }}</a>{% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-head"><h2>{{ page_info.total }} {{ t('ui.record.lowercase') if page_info.total == 1 else t('ui.records') }}</h2><span class="mono" style="font-size:.76rem;color:var(--slate);">{{ t('ui.times.in') }} {{ display_tz_label }}</span></div>
+  <div class="card-body tight">
+    {% if records %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>{{ t('ui.record') }}</th><th>{{ t('ui.project') }}</th><th>{{ t('ui.site') }}</th><th>{{ t('ui.service') }}</th><th>{{ t('ui.device.title') }}</th><th>{{ t('ui.result') }}</th>{% if user.can_view_all_records %}<th>{{ t('ui.submitted.by') }}</th>{% endif %}<th>{{ t('ui.submitted') }}</th><th><span class="sr-only">{{ t('ui.actions') }}</span></th></tr></thead>
+        <tbody>
+          {% for r in records %}
+          <tr>
+            <td><a class="record-no" href="/installations/records/{{ r.id }}">{{ r.record_number }}</a></td>
+            <td>{{ r.customer_name }}</td>
+            <td>{{ r.site_name }}</td>
+            <td>{{ r.service_name }}{% if r.additional_devices %}<br><span class="meta">+ {{ r.additional_devices|length }} {{ t('ui.more.item') if r.additional_devices|length == 1 else t('ui.more.items') }}</span>{% endif %}</td>
+            {% set device_total = r.work_items|length if r.work_items else 1 + r.additional_devices|length %}
+            <td>{{ r.equipment_model }}<br><span class="mono" style="color:var(--slate);font-size:.8rem;">{{ r.serial_number }}</span>{% if device_total > 1 %}<br><span class="tag">{{ t('record.device.more', count=device_total - 1) }}</span>{% endif %}</td>
+            <td>{{ ui.result_badge(r.result) }}</td>
+            {% if user.can_view_all_records %}<td>{{ r.team_leader_name }}</td>{% endif %}
+            <td class="num">{{ r.submitted_at | datetime }}</td>
+            <td><a class="btn btn-quiet btn-sm" href="/installations/records/{{ r.id }}">{{ t('ui.view.details') }}</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="record-cards">
+      {% for r in records %}
+      <div class="record-card">
+        <div class="row1"><a class="record-no" href="/installations/records/{{ r.id }}">{{ r.record_number }}</a>{{ ui.result_badge(r.result) }}</div>
+        <div class="site">{{ r.site_name }}</div>
+        <div class="meta">{{ r.customer_name }} · {{ r.service_name }}</div>
+        {% set device_total = r.work_items|length if r.work_items else 1 + r.additional_devices|length %}
+        <div class="meta">{{ r.equipment_model }} · <span class="mono">{{ r.serial_number }}</span>{% if device_total > 1 %} · {{ t('record.device.more', count=device_total - 1) }}{% endif %}</div>
+        {% if user.can_view_all_records %}<div class="meta">{{ t('ui.by') }} {{ r.team_leader_name }}</div>{% endif %}
+        <div class="foot"><span class="meta mono">{{ r.submitted_at | datetime }}</span><a class="btn btn-secondary btn-sm" href="/installations/records/{{ r.id }}">{{ t('ui.view') }}</a></div>
+      </div>
+      {% endfor %}
+    </div>
+    {% if page_info.pages > 1 %}
+    <div class="pagination no-print">
+      {% if page_info.has_prev %}<a class="btn btn-secondary btn-sm" href="{{ query_string(filters, page=page_info.page - 1) }}">{{ t('ui.previous') }}</a>{% else %}<span></span>{% endif %}
+      <span class="page-info">{{ t('ui.page') }} {{ page_info.page }} {{ t('ui.of') }} {{ page_info.pages }}</span>
+      {% if page_info.has_next %}<a class="btn btn-secondary btn-sm" href="{{ query_string(filters, page=page_info.page + 1) }}">{{ t('ui.next') }}</a>{% else %}<span></span>{% endif %}
+    </div>
+    {% endif %}
+    {% elif has_filters %}
+    {{ ui.empty_state(t('ui.no.installation.records.match.those.filters'), t('ui.widen.the.search.or.clear.the.filters')) }}
+    {% else %}
+    {{ ui.empty_state(t('ui.no.installation.records.yet'), t('ui.records.appear.here.after.completed.installation.evidence.is.submitted'), '/installations', t('ui.new.installation.entry')) }}
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
