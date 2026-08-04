@@ -24,6 +24,7 @@ from app.machine_config.env_file import (
     update_env_file,
 )
 from app.machine_config.firewall import (
+    FirewallRule,
     apply_firewall_rules,
     detect_firewall_state,
     expected_rules,
@@ -60,6 +61,7 @@ def _profile(**overrides):
         "public_port": 8993,
         "allowed_remote_ips": "198.51.100.0/24\n198.51.100.7/32",
         "local_ip": "192.168.10.50",
+        "configure_static_local_ip": True,
         "local_port": 8993,
         "internal_port": 8993,
     }
@@ -167,6 +169,45 @@ def test_firewall_state_is_detected_per_complete_profile():
     )
     assert stale_public.state == "drifted"
     assert stale_public.unexpected == ("SMS Public HTTP",)
+
+
+def test_dhcp_profile_always_gets_a_local_subnet_firewall_rule():
+    rules = expected_rules(
+        _profile(
+            local_ip="192.168.10.50",
+            configure_static_local_ip=False,
+            public_enabled=False,
+        )
+    )
+
+    assert rules == (
+        FirewallRule("SMS Local HTTP", "Any", 8993, ("LocalSubnet",)),
+    )
+
+
+def test_dhcp_validation_accepts_an_empty_local_address():
+    profile, errors = validate_network(
+        {"local_ip": "", "configure_static_local_ip": False},
+        base={
+            **_profile(public_enabled=False),
+            "local_interface": "Ethernet",
+            "local_prefix_length": 24,
+            "local_gateway": "",
+            "local_dns_servers": "",
+            "postgres_host": "127.0.0.1",
+            "postgres_port": 5432,
+            "backup_enabled": False,
+            "backup_interval_days": 1,
+            "backup_retention_count": 30,
+            "backup_include_uploads": True,
+            "backup_upload_retention_count": 7,
+            "backup_directory": r"C:\ServiceManagement\backups\scheduled",
+            "pg_dump_executable": r"C:\Program Files\PostgreSQL\16\bin\pg_dump.exe",
+        },
+    )
+
+    assert "local_ip" not in errors
+    assert profile["local_ip"] == ""
 
 
 def test_firewall_writer_wraps_an_empty_rule_set_for_windows_powershell():

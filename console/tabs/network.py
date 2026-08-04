@@ -8,6 +8,12 @@ from ..config_store import load_profile
 from ..network_core import NetworkController
 
 
+def initial_adapter(saved: object, adapters: tuple[str, ...]) -> str:
+    """Prefer the saved active adapter, otherwise select the first active one."""
+    saved_name = str(saved or "").strip()
+    return saved_name if saved_name in adapters else (adapters[0] if adapters else "")
+
+
 class NetworkTab(ttk.Frame):
     FIELDS = (
         ("local_ip", "LAN IPv4 address"),
@@ -24,14 +30,22 @@ class NetworkTab(ttk.Frame):
         self.controller = controller
         profile = load_profile(controller.paths.machine_settings)
         self.values = {key: tk.StringVar(value=str(profile.get(key) or "")) for key, _ in self.FIELDS}
-        self.adapter = tk.StringVar(value=str(profile.get("local_interface") or ""))
+        adapters = controller.adapters()
+        self.adapter = tk.StringVar(
+            value=initial_adapter(profile.get("local_interface"), adapters)
+        )
         self.fixed = tk.BooleanVar(value=bool(profile.get("configure_static_local_ip")))
         self.public = tk.BooleanVar(value=bool(profile.get("public_enabled")))
         ttk.Label(self, text="Network and firewall", font=("Segoe UI", 14, "bold")).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 12)
         )
         ttk.Label(self, text="Adapter").grid(row=1, column=0, sticky="w", pady=4)
-        ttk.Combobox(self, textvariable=self.adapter, values=controller.adapters()).grid(row=1, column=1, sticky="ew", pady=4)
+        ttk.Combobox(
+            self,
+            textvariable=self.adapter,
+            values=adapters,
+            state="readonly",
+        ).grid(row=1, column=1, sticky="ew", pady=4)
         ttk.Checkbutton(self, text="Use a fixed LAN address", variable=self.fixed).grid(row=2, column=1, sticky="w", pady=4)
         ttk.Checkbutton(self, text="Enable public access", variable=self.public).grid(row=3, column=1, sticky="w", pady=4)
         for row, (key, label) in enumerate(self.FIELDS, start=4):

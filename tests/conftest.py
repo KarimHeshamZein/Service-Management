@@ -34,6 +34,7 @@ from app.models import (  # noqa: E402
     InstalledDevice,
     InstalledDeviceSite,
     MaintenanceResult,
+    PricingItem,
     PricingQuotation,
     ServiceType,
     Site,
@@ -108,6 +109,18 @@ def fresh_database():
                 WorkSite(name="Gate 2"),
                 WorkSite(name="Gate 3"),
             ]
+        )
+        db.flush()
+        catalog_device = db.get(DeviceCatalog, 1)
+        db.add(
+            PricingItem(
+                name="IP Camera",
+                model="P3265-LV",
+                unit_price=Decimal("100.00"),
+                currency="SAR",
+                service_enabled=True,
+                legacy_device=catalog_device,
+            )
         )
         db.flush()
         db.add_all(

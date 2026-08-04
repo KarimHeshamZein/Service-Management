@@ -61,14 +61,47 @@ function Resolve-DatabaseParts {
 
 function Set-CurrentRelease {
     param([string]$CurrentPath, [string]$TargetPath)
-    if (Test-Path -LiteralPath $CurrentPath) {
-        $currentItem = Get-Item -LiteralPath $CurrentPath -Force
+    $currentItem = Get-Item -LiteralPath $CurrentPath -Force `
+        -ErrorAction SilentlyContinue
+    if ($currentItem) {
         if (-not ($currentItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
             throw "The current path exists but is not a junction: $CurrentPath"
         }
-        Remove-Item -LiteralPath $CurrentPath -Force
+        # Directory.Delete removes the junction itself without traversing or
+        # deleting any files in the release directory that it targets.
+        [IO.Directory]::Delete($currentItem.FullName)
+        if (Get-Item -LiteralPath $CurrentPath -Force -ErrorAction SilentlyContinue) {
+            throw "The current release junction could not be removed: $CurrentPath"
+        }
     }
     New-Item -ItemType Junction -Path $CurrentPath -Target $TargetPath | Out-Null
+}
+
+function Get-CurrentReleaseTarget {
+    param([string]$CurrentPath)
+    $currentItem = Get-Item -LiteralPath $CurrentPath -Force `
+        -ErrorAction SilentlyContinue
+    if (-not $currentItem) { return $null }
+    if (-not ($currentItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "The current path exists but is not a junction: $CurrentPath"
+    }
+    $target = $currentItem.Target
+    if ($target -is [array]) { $target = $target[0] }
+    if (-not $target) {
+        throw "The current junction has no target: $CurrentPath"
+    }
+    if (-not [IO.Path]::IsPathRooted($target)) {
+        $target = Join-Path (Split-Path -Parent $CurrentPath) $target
+    }
+    return [IO.Path]::GetFullPath($target).TrimEnd('\')
+}
+
+function Read-CapturedText {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return '' }
+    $content = Get-Content -LiteralPath $Path -Raw
+    if ($null -eq $content) { return '' }
+    return ([string]$content).Trim()
 }
 
 function Get-DatabaseSchemaVersion {
@@ -89,12 +122,8 @@ function Get-DatabaseSchemaVersion {
             -WorkingDirectory $WorkingDirectory -WindowStyle Hidden `
             -RedirectStandardOutput $stdoutPath `
             -RedirectStandardError $stderrPath -Wait -PassThru
-        $stdout = if (Test-Path -LiteralPath $stdoutPath) {
-            (Get-Content -LiteralPath $stdoutPath -Raw).Trim()
-        } else { '' }
-        $stderr = if (Test-Path -LiteralPath $stderrPath) {
-            (Get-Content -LiteralPath $stderrPath -Raw).Trim()
-        } else { '' }
+        $stdout = Read-CapturedText -Path $stdoutPath
+        $stderr = Read-CapturedText -Path $stderrPath
         if ($process.ExitCode -ne 0) {
             $detail = if ($stderr) { " $stderr" } else { '' }
             throw "Database schema verification failed.$detail"
@@ -103,6 +132,38 @@ function Get-DatabaseSchemaVersion {
             throw 'Database schema verification returned no revision.'
         }
         return $stdout
+    } finally {
+        Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-AlembicUpgrade {
+    param(
+        [string]$PythonExecutable,
+        [string]$WorkingDirectory,
+        [string]$CaptureDirectory
+    )
+    $captureId = [Guid]::NewGuid().ToString('N')
+    $stdoutPath = Join-Path $CaptureDirectory "alembic-upgrade-$captureId.stdout"
+    $stderrPath = Join-Path $CaptureDirectory "alembic-upgrade-$captureId.stderr"
+    try {
+        # Alembic writes routine INFO logging to stderr. Windows PowerShell can
+        # promote that stream to ErrorRecord under Stop, so trust only the
+        # native process exit code and relay both captured streams afterward.
+        $process = Start-Process -FilePath $PythonExecutable `
+            -ArgumentList @('-m', 'alembic', 'upgrade', 'head') `
+            -WorkingDirectory $WorkingDirectory -WindowStyle Hidden `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath -Wait -PassThru
+        $stdout = Read-CapturedText -Path $stdoutPath
+        $stderr = Read-CapturedText -Path $stderrPath
+        if ($stdout) { Write-Host $stdout }
+        if ($stderr) { Write-Host $stderr }
+        if ($process.ExitCode -ne 0) {
+            $detail = if ($stderr) { " $stderr" } elseif ($stdout) { " $stdout" } else { '' }
+            throw "Database migration failed.$detail"
+        }
     } finally {
         Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
@@ -175,7 +236,20 @@ if ($releaseInfo.version -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$') {
 
 $releasePath = Join-Path $releasesRoot $releaseInfo.version
 if (Test-Path -LiteralPath $releasePath) {
-    throw "Release $($releaseInfo.version) is already installed."
+    # A force-closed deployment can leave extracted code beside the still-active
+    # older release. Release directories never contain persistent application
+    # data, so an inactive target can be recreated from the verified package.
+    $currentTarget = Get-CurrentReleaseTarget -CurrentPath $currentPath
+    if ($currentTarget -and $currentTarget -ieq (
+        [IO.Path]::GetFullPath($releasePath).TrimEnd('\')
+    )) {
+        throw "Release $($releaseInfo.version) is already installed."
+    }
+    Write-Host (
+        "Removing incomplete inactive release $($releaseInfo.version) " +
+        'left by an interrupted deployment.'
+    )
+    Remove-Item -LiteralPath $releasePath -Recurse -Force
 }
 New-Item -ItemType Directory -Path $releasePath -Force | Out-Null
 New-Item -ItemType Directory -Path $uploadsPath -Force | Out-Null
@@ -245,13 +319,8 @@ try {
     try {
         $env:SMS_ENV_FILE = $environmentPath
         $env:ENVIRONMENT = 'production'
-        Push-Location $releasePath
-        try {
-            & $venvPython -m alembic upgrade head
-            if ($LASTEXITCODE -ne 0) { throw 'Database migration failed.' }
-        } finally {
-            Pop-Location
-        }
+        Invoke-AlembicUpgrade -PythonExecutable $venvPython `
+            -WorkingDirectory $releasePath -CaptureDirectory $backupPath
         $schemaVersion = Get-DatabaseSchemaVersion `
             -PythonExecutable $venvPython -WorkingDirectory $releasePath `
             -CaptureDirectory $backupPath
@@ -324,11 +393,23 @@ try {
     ) {
         Start-Service -Name $ServiceName -ErrorAction SilentlyContinue
     }
-    if (
-        (Test-Path -LiteralPath $releasePath) -and
-        -not (Test-Path -LiteralPath $currentPath)
-    ) {
-        Remove-Item -LiteralPath $releasePath -Recurse -Force
+    if (Test-Path -LiteralPath $releasePath) {
+        $canRemoveInactiveRelease = $false
+        try {
+            $currentTargetAfterFailure = Get-CurrentReleaseTarget `
+                -CurrentPath $currentPath
+            $canRemoveInactiveRelease = -not $currentTargetAfterFailure -or
+                $currentTargetAfterFailure -ine (
+                    [IO.Path]::GetFullPath($releasePath).TrimEnd('\')
+                )
+        } catch {
+            # Preserve the release if current is malformed; the original error
+            # is more useful and an operator must inspect that unsafe state.
+            $canRemoveInactiveRelease = $false
+        }
+        if ($canRemoveInactiveRelease) {
+            Remove-Item -LiteralPath $releasePath -Recurse -Force
+        }
     }
     throw
 }

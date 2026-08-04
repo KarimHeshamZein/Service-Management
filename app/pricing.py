@@ -56,7 +56,14 @@ def rounded(value: Decimal) -> Decimal:
 def quotation_totals(quotation: PricingQuotation) -> dict[str, Decimal]:
     subtotal = rounded(
         sum((line.line_total for line in quotation.lines), Decimal("0.00"))
-        + sum((charge.total for charge in quotation.charges), Decimal("0.00"))
+        + sum(
+            (
+                charge.total
+                for charge in quotation.charges
+                if charge.charge_type != "manpower"
+            ),
+            Decimal("0.00"),
+        )
     )
     discount = rounded(subtotal * quotation.discount_percent / Decimal("100"))
     taxable = rounded(subtotal - discount)

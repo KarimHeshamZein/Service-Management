@@ -39,6 +39,7 @@ from ..models import (
     MaintenanceRecordAdditionalDevice,
     MaintenanceRecordDevice,
     MaintenanceRecordItem,
+    PricingItem,
     ServiceType,
     Site,
     User,
@@ -87,12 +88,17 @@ def _active_services(db: Session) -> list[ServiceType]:
     )
 
 
-def _active_devices(db: Session) -> list[DeviceCatalog]:
+def _active_devices(db: Session) -> list[PricingItem]:
     return list(
         db.scalars(
-            select(DeviceCatalog)
-            .where(DeviceCatalog.is_active.is_(True))
-            .order_by(DeviceCatalog.name, DeviceCatalog.model)
+            select(PricingItem)
+            .options(selectinload(PricingItem.legacy_device))
+            .where(
+                PricingItem.is_active.is_(True),
+                PricingItem.service_enabled.is_(True),
+                PricingItem.device_catalog_id.is_not(None),
+            )
+            .order_by(PricingItem.name, PricingItem.model)
         )
     )
 
@@ -261,14 +267,15 @@ async def submit_record(
         elif not service.is_active:
             errors[f"service_type_id{suffix}"] = "That service is deactivated."
 
-        device_id = entity_id(device_raw)
-        device = db.get(DeviceCatalog, device_id) if device_id is not None else None
+        item_id = entity_id(device_raw)
+        item = db.get(PricingItem, item_id) if item_id is not None else None
+        device = item.legacy_device if item is not None else None
         if not device_raw:
             errors[f"device_id{suffix}"] = "Select the device being installed."
-        elif device is None:
-            errors[f"device_id{suffix}"] = "That device no longer exists."
-        elif not device.is_active:
-            errors[f"device_id{suffix}"] = "That device is deactivated."
+        elif item is None or device is None:
+            errors[f"device_id{suffix}"] = "That item no longer exists."
+        elif not item.is_active or not item.service_enabled or not device.is_active:
+            errors[f"device_id{suffix}"] = "That item is unavailable for service records."
 
         serial_key = serial_number.lower()
         if not serial_number:
@@ -319,6 +326,7 @@ async def submit_record(
                 "handover_notes": handover_notes,
                 "service": service,
                 "device": device,
+                "pricing_item": item,
                 "warranty_date": warranty_start,
                 "result_value": result,
             }
@@ -712,7 +720,11 @@ def records_list(
                 ),
             )
         )
-    if (device_value := entity_id(device_id)) is not None:
+    selected_item = (
+        db.get(PricingItem, entity_id(device_id)) if entity_id(device_id) is not None else None
+    )
+    if selected_item is not None and selected_item.device_catalog_id is not None:
+        device_value = selected_item.device_catalog_id
         conditions.append(
             or_(
                 InstallationRecord.installed_device.has(
@@ -815,7 +827,7 @@ def records_list(
             ),
             "work_sites": list(db.scalars(select(WorkSite).order_by(WorkSite.name))),
             "devices": list(
-                db.scalars(select(DeviceCatalog).order_by(DeviceCatalog.name, DeviceCatalog.model))
+                db.scalars(select(PricingItem).order_by(PricingItem.name, PricingItem.model))
             ),
             "services": list(db.scalars(select(ServiceType).order_by(ServiceType.name))),
             "leaders": (

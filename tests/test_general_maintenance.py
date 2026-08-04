@@ -37,7 +37,7 @@ def test_maintenance_module_is_separate_and_uses_the_grouped_layout(client):
     page = client.get("/general-maintenance")
     assert page.status_code == 200
     assert 'action="/general-maintenance/submit"' in page.text
-    assert "Add another device" in page.text
+    assert "Add another item" in page.text
     assert "Maintenance result" in page.text
     assert 'href="/maintenance"' in page.text
     assert 'href="/general-maintenance"' in page.text

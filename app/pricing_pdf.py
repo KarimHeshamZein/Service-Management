@@ -1,7 +1,6 @@
 """Polished PDF output for one saved price quotation."""
 from __future__ import annotations
 
-import html
 import io
 from decimal import Decimal
 from pathlib import Path
@@ -24,7 +23,7 @@ from reportlab.platypus import (
 )
 
 from .models import PricingQuotation
-from .pricing import quotation_totals
+from .pdf_text import pdf_text, style_for_pdf_text
 from .uploads import UploadError, resolve_storage_path
 
 NAVY = colors.HexColor("#17324D")
@@ -39,18 +38,7 @@ BRAND_LOGO_HEIGHT = BRAND_LOGO_WIDTH * 133 / 380
 
 
 def _text(value: Any, fallback: str = "-") -> str:
-    if value is None or value == "":
-        return fallback
-    normalized = (
-        str(value)
-        .replace("\u2010", "-")
-        .replace("\u2011", "-")
-        .replace("\u2012", "-")
-        .replace("\u2013", "-")
-        .replace("\u2014", "-")
-        .replace("\u00b7", "|")
-    )
-    return html.escape(normalized, quote=False).replace("\n", "<br/>")
+    return pdf_text(value, fallback)
 
 
 def _amount(value: Decimal, currency: str) -> str:
@@ -134,7 +122,7 @@ def _styles() -> dict[str, ParagraphStyle]:
 
 
 def _paragraph(value: Any, style: ParagraphStyle, fallback: str = "-") -> Paragraph:
-    return Paragraph(_text(value, fallback), style)
+    return Paragraph(_text(value, fallback), style_for_pdf_text(value, style))
 
 
 def _page_footer(canvas, document) -> None:
@@ -198,12 +186,12 @@ def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
         quotation.company_phone,
         quotation.company_email,
     ]
-    seller = "<br/>".join(_text(value) for value in seller_lines if value)
+    seller = "\n".join(str(value) for value in seller_lines if value)
     header = Table(
         [
             [
                 Paragraph("PRICE QUOTATION", styles["title"]),
-                Paragraph(seller or " ", styles["small"]),
+                _paragraph(seller, styles["small"], " "),
             ]
         ],
         colWidths=[105 * mm, 65 * mm],
@@ -299,18 +287,13 @@ def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
             [
                 _paragraph(position, styles["small"]),
                 _item_image(line, styles),
-                Paragraph(
-                    f"<b>{_text(line.item_name)}</b>"
-                    + (
-                        f"<br/><font color='#526575'>{_text(line.item_model)}</font>"
-                        if line.item_model
-                        else ""
-                    ),
+                _paragraph(
+                    line.item_name + (f"\n{line.item_model}" if line.item_model else ""),
                     styles["body"],
                 ),
                 _paragraph(line.quantity, styles["right"]),
-                _paragraph(_amount(line.unit_price, quotation.currency), styles["right"]),
-                _paragraph(_amount(line.main_total, quotation.currency), styles["right"]),
+                _paragraph(_amount(line.unit_price, line.currency), styles["right"]),
+                _paragraph(_amount(line.main_total, line.currency), styles["right"]),
             ]
         )
         row_index += 1
@@ -322,10 +305,10 @@ def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
                     _paragraph(f"- {related.item_name}", styles["small"]),
                     _paragraph(related.quantity, styles["right"]),
                     _paragraph(
-                        _amount(related.unit_price, quotation.currency),
+                        _amount(related.unit_price, related.currency),
                         styles["right"],
                     ),
-                    _paragraph(_amount(related.total, quotation.currency), styles["right"]),
+                    _paragraph(_amount(related.total, related.currency), styles["right"]),
                 ]
             )
             row_index += 1
@@ -346,17 +329,16 @@ def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
             [
                 _paragraph(f"C{charge.position}", styles["small"]),
                 "",
-                Paragraph(
-                    f"<b>{_text(charge.label)}</b>"
-                    f"<br/><font color='#526575'>Required charge - per {_text(charge.unit_label)}</font>",
+                _paragraph(
+                    f"{charge.label}\nRequired charge - per {charge.unit_label}",
                     styles["body"],
                 ),
                 _paragraph(charge.quantity, styles["right"]),
                 _paragraph(
-                    _amount(charge.unit_price, quotation.currency),
+                    _amount(charge.unit_price, charge.currency),
                     styles["right"],
                 ),
-                _paragraph(_amount(charge.total, quotation.currency), styles["right"]),
+                _paragraph(_amount(charge.total, charge.currency), styles["right"]),
             ]
         )
 
@@ -380,49 +362,6 @@ def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
         )
     )
     story.append(item_table)
-
-    totals = quotation_totals(quotation)
-    summary_rows = [
-        [
-            _paragraph("Subtotal", styles["body"]),
-            _paragraph(_amount(totals["subtotal"], quotation.currency), styles["right"]),
-        ],
-        [
-            _paragraph(
-                f"Discount ({quotation.discount_percent}%)",
-                styles["body"],
-            ),
-            _paragraph(
-                f"- {_amount(totals['discount'], quotation.currency)}",
-                styles["right"],
-            ),
-        ],
-        [
-            _paragraph(f"VAT ({quotation.vat_rate}%)", styles["body"]),
-            _paragraph(_amount(totals["vat"], quotation.currency), styles["right"]),
-        ],
-        [
-            Paragraph("<b>Grand total</b>", styles["body"]),
-            _paragraph(
-                _amount(totals["grand_total"], quotation.currency),
-                styles["right_bold"],
-            ),
-        ],
-    ]
-    summary = Table(summary_rows, colWidths=[45 * mm, 45 * mm], hAlign="RIGHT")
-    summary.setStyle(
-        TableStyle(
-            [
-                ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
-                ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#EAF3F6")),
-                ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ]
-        )
-    )
-    story.extend([Spacer(1, 4 * mm), KeepTogether(summary)])
 
     if quotation.notes:
         story.extend(

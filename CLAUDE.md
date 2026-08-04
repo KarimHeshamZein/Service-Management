@@ -98,11 +98,14 @@ tests/             4 files; test_acceptance_workflow.py is the end-to-end scenar
   activate/deactivate, or change Pricing settings. Customers never receive
   Pricing access. Enforce this through `require_pricing_access`.
 - **Quotations are snapshot-based.** Saved quotations retain Project, seller,
-  main-item, related-item and unit-price snapshots. Catalogue or Pricing-setting
+  main-item, related-item, unit-price and per-line currency snapshots. Catalogue or Pricing-setting
   changes never rewrite an existing quotation. Monetary calculations use
   `Decimal` with two-decimal rounding. Main and related prices may be overridden
-  per quotation without changing the catalogue. Every quotation includes
-  manpower, transportation and installation charge snapshots. A main item with
+  per quotation without changing the catalogue. Mixed SAR/USD quotations intentionally
+  have no aggregate total. Every quotation includes manpower, transportation and
+  installation charge snapshots. Transportation quantity is editable. Installation
+  price per day is workers multiplied by price per worker; the informational manpower
+  row is not counted a second time. A main item with
   active optional items must either select at least one or explicitly store one
   skip decision for the entire optional set.
 - **New service records require a Project-matched quotation reference.** Store
@@ -122,8 +125,11 @@ tests/             4 files; test_acceptance_workflow.py is the end-to-end scenar
   `customer_name`, `site_address`, `service_name`, `team_leader_name`) alongside
   the FKs, so history survives renames and deactivation. Any new record type must
   follow the same pattern.
-- **Device history is snapshot-based.** New installations create an
-  `installed_devices` row from the administrator-managed device catalog.
+- **Item and device history is snapshot-based.** Pricing Items are the only
+  user-managed equipment catalogue. Active items marked for service entry are offered
+  on New Installations. Each Pricing Item maintains a hidden one-to-one `device_catalog`
+  compatibility row so new installations can create an `installed_devices` row without
+  rewriting historical foreign keys.
   Maintenance records attach a `maintenance_record_devices` snapshot so later
   catalog changes never rewrite historical evidence.
 - One installation or preventive-maintenance visit may group up to 20 device
@@ -131,7 +137,7 @@ tests/             4 files; test_acceptance_workflow.py is the end-to-end scenar
   owns its result, notes and photos; installation items also own handover notes,
   while maintenance items own issues and recommendations. Additive child tables
   preserve compatibility with older record formats.
-- **Projects, Sites, services, devices and users are hard-deleted only when
+- **Projects, Sites, services, Pricing Items and users are hard-deleted only when
   unused.** If protected by historical references, an Administrator's delete
   action deactivates the row instead. Enforced with `ON DELETE RESTRICT`.
 - The user-facing administration term is **Project**, managed at `/projects`.
@@ -149,7 +155,8 @@ tests/             4 files; test_acceptance_workflow.py is the end-to-end scenar
 - **HTML language is user-selectable.** Authenticated preferences live on the
   user row; anonymous pages use the signed session. Catalogs are plain Python
   dictionaries under `app/i18n/`, English is the fallback, user-entered data and
-  stored enum values are never translated, and PDF exports remain English.
+  stored enum values are never translated, and PDF labels remain English. User-entered
+  Arabic is shaped and rendered with the bundled Noto Sans Arabic font.
 - **Normal startup never creates schema objects.** Alembic owns application
   schema changes. Only the destructive development seed workflow may call
   `Base.metadata.create_all()`.
@@ -175,10 +182,10 @@ updates. Uvicorn binds to `0.0.0.0`; IP-specific Windows Firewall rules control
 exposure without a port-proxy layer. Generated operations contain no database
 password or application secret.
 Pricing includes imaged reusable main and optional related items, searchable
-Project quotations, editable price snapshots, required
+Project quotations, editable price and SAR/USD currency snapshots, required
 manpower/transportation/installation charges, explicit optional-item decisions,
-configurable currency/VAT/validity/company/charge defaults, exact totals and PDF
-export.
+configurable validity/company/charge defaults and PDF export. Mixed-currency
+quotations show line totals only, never a misleading aggregate total.
 
 Explicitly out of scope by design — do not add without being asked: scheduling,
 task assignment, calendars, start/stop actions, approval workflows,

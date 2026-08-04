@@ -36,9 +36,15 @@ def expected_rules(profile: Mapping[str, Any]) -> tuple[FirewallRule, ...]:
     """Construct the exact inbound rules required by a validated profile."""
     port = int(profile["internal_port"])
     rules: list[FirewallRule] = []
-    local_ip = str(profile.get("local_ip") or "").strip()
-    if local_ip:
-        rules.append(FirewallRule(LOCAL_RULE_NAME, local_ip, port, ("LocalSubnet",)))
+    # A DHCP installation still needs a LAN rule. "Any" keeps local-subnet
+    # access working when Windows renews the adapter address; a configured
+    # fixed address remains narrowly scoped to that address.
+    local_ip = (
+        str(profile.get("local_ip") or "").strip()
+        if profile.get("configure_static_local_ip")
+        else "Any"
+    )
+    rules.append(FirewallRule(LOCAL_RULE_NAME, local_ip, port, ("LocalSubnet",)))
     if profile.get("public_enabled"):
         remote = tuple(
             value.strip()

@@ -115,29 +115,28 @@ def test_admin_can_add_and_deactivate_a_service_type(client, db):
     assert db.get(ServiceType, service.id).is_active is False
 
 
-def test_admin_can_manage_searchable_device_catalog(client, db):
+def test_legacy_device_catalog_redirects_to_unified_pricing_items(client, db):
     login(client, *ADMIN)
-    token = csrf_of(client, "/devices")
+    token = csrf_of(client, "/pricing/items")
     response = client.post(
-        "/devices",
+        "/pricing/items",
         data={
             "name": "Network Router",
-            "manufacturer": "Teltonika",
             "model": "RUT956",
-            "description": "Industrial cellular router",
+            "unit_price": "0",
+            "currency": "SAR",
+            "service_enabled": "1",
             "csrf_token": token,
         },
     )
     assert response.status_code == 303
     device = db.query(DeviceCatalog).filter(DeviceCatalog.model == "RUT956").one()
-    assert "Network Router" in client.get("/devices?q=Teltonika").text
+    assert "Network Router" in client.get("/pricing/items?q=Network+Router").text
+    assert client.get("/devices").headers["location"] == "/pricing/items"
 
-    client.post(f"/devices/{device.id}/toggle", data={"csrf_token": token})
-    db.expire_all()
-    assert db.get(DeviceCatalog, device.id).is_active is False
     client.cookies.clear()
     login(client, *LEADER_A)
-    assert "RUT956" not in client.get("/installations").text
+    assert "RUT956" in client.get("/installations").text
 
 
 def test_duplicate_service_name_is_rejected(client, db):
@@ -286,10 +285,9 @@ def test_admin_deletes_unused_catalog_rows_and_users(client, db):
     project = Site(name="Disposable Project", customer_name="Disposable Project", address="Test")
     site = WorkSite(name="Disposable Gate")
     service = ServiceType(name="Disposable Service")
-    device = DeviceCatalog(name="Disposable Device", model="DISPOSE-1")
-    db.add_all([project, site, service, device])
+    db.add_all([project, site, service])
     db.commit()
-    ids = project.id, site.id, service.id, device.id
+    ids = project.id, site.id, service.id
 
     assert client.post(
         f"/projects/{project.id}/delete", data={"csrf_token": token}
@@ -300,14 +298,10 @@ def test_admin_deletes_unused_catalog_rows_and_users(client, db):
     assert client.post(
         f"/service-types/{service.id}/delete", data={"csrf_token": token}
     ).status_code == 303
-    assert client.post(
-        f"/devices/{device.id}/delete", data={"csrf_token": token}
-    ).status_code == 303
     db.expire_all()
     assert db.get(Site, ids[0]) is None
     assert db.get(WorkSite, ids[1]) is None
     assert db.get(ServiceType, ids[2]) is None
-    assert db.get(DeviceCatalog, ids[3]) is None
 
     client.post(
         "/users",
@@ -334,16 +328,14 @@ def test_referenced_catalog_rows_are_deactivated_instead_of_deleted(client, db):
 
     assert client.post("/projects/1/delete", data={"csrf_token": token}).status_code == 303
     assert client.post("/sites/1/delete", data={"csrf_token": token}).status_code == 303
-    assert client.post("/devices/1/delete", data={"csrf_token": token}).status_code == 303
     db.expire_all()
     assert db.get(Site, 1).is_active is False
     assert db.get(WorkSite, 1).is_active is False
-    assert db.get(DeviceCatalog, 1).is_active is False
 
 
 def test_technical_users_have_edit_but_not_delete_catalog_controls(client, db):
     login(client, *LEADER_A)
-    for path in ("/projects", "/sites", "/service-types", "/devices"):
+    for path in ("/projects", "/sites", "/service-types"):
         page = client.get(path)
         assert page.status_code == 200
         assert ">Edit<" in page.text
@@ -354,7 +346,6 @@ def test_technical_users_have_edit_but_not_delete_catalog_controls(client, db):
         "/projects/1/delete",
         "/sites/1/delete",
         "/service-types/1/delete",
-        "/devices/1/delete",
     ):
         assert client.post(path, data={"csrf_token": token}).status_code == 403
     assert client.get("/users").status_code == 403

@@ -1,7 +1,6 @@
 """PDF rendering for filtered service-record reports."""
 from __future__ import annotations
 
-import html
 import io
 from collections import Counter
 from datetime import datetime, timezone
@@ -26,6 +25,7 @@ from reportlab.platypus import (
 )
 
 from .config import settings
+from .pdf_text import pdf_text, style_for_pdf_text
 from .uploads import UploadError, resolve_storage_path
 
 PAGE_SIZE = landscape(A4)
@@ -46,18 +46,7 @@ WHITE = colors.white
 
 
 def _text(value: Any, fallback: str = "-") -> str:
-    if value is None or value == "":
-        return fallback
-    normalized = (
-        str(value)
-        .replace("\u2010", "-")
-        .replace("\u2011", "-")
-        .replace("\u2012", "-")
-        .replace("\u2013", "-")
-        .replace("\u2014", "-")
-        .replace("\u00b7", "|")
-    )
-    return html.escape(normalized, quote=False).replace("\n", "<br/>")
+    return pdf_text(value, fallback)
 
 
 def _display_datetime(value: datetime) -> str:
@@ -154,7 +143,7 @@ def _styles() -> dict[str, ParagraphStyle]:
 
 
 def _paragraph(value: Any, style: ParagraphStyle, fallback: str = "-") -> Paragraph:
-    return Paragraph(_text(value, fallback), style)
+    return Paragraph(_text(value, fallback), style_for_pdf_text(value, style))
 
 
 def _table(

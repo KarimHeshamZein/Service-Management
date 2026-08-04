@@ -34,6 +34,7 @@ from ..models import (
     MaintenanceRecordAdditionalDevice,
     MaintenanceRecordDevice,
     MaintenanceRecordItem,
+    PricingItem,
     MaintenanceRecordSite,
     MaintenanceResult,
     NEEDS_ISSUE_DETAIL,
@@ -669,7 +670,11 @@ def records_list(
                 ),
             )
         )
-    if (device_value := entity_id(device_id)) is not None:
+    selected_item = (
+        db.get(PricingItem, entity_id(device_id)) if entity_id(device_id) is not None else None
+    )
+    if selected_item is not None and selected_item.device_catalog_id is not None:
+        device_value = selected_item.device_catalog_id
         conditions.append(
             or_(
                 MaintenanceRecord.device_evidence.has(
@@ -769,7 +774,7 @@ def records_list(
             ),
             "work_sites": list(db.scalars(select(WorkSite).order_by(WorkSite.name))),
             "devices": list(
-                db.scalars(select(DeviceCatalog).order_by(DeviceCatalog.name, DeviceCatalog.model))
+                db.scalars(select(PricingItem).order_by(PricingItem.name, PricingItem.model))
             ),
             "services": list(db.scalars(select(ServiceType).order_by(ServiceType.name))),
             "leaders": (

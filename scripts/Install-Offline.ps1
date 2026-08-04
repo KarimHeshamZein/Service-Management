@@ -329,6 +329,45 @@ $statePath = Join-Path $installerRoot 'state.json'
 $resolvedInstallRoot = [IO.Path]::GetFullPath($InstallRoot)
 $previousState = Assert-InstallationTarget -Root $resolvedInstallRoot -Mode $Mode `
     -StatePath $statePath
+
+function Read-CapturedText {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return '' }
+    $content = Get-Content -LiteralPath $Path -Raw
+    if ($null -eq $content) { return '' }
+    return ([string]$content).Trim()
+}
+
+function Invoke-AlembicUpgrade {
+    param(
+        [string]$PythonExecutable,
+        [string]$WorkingDirectory,
+        [string]$CaptureDirectory
+    )
+    New-Item -ItemType Directory -Path $CaptureDirectory -Force | Out-Null
+    $captureId = [Guid]::NewGuid().ToString('N')
+    $stdoutPath = Join-Path $CaptureDirectory "alembic-repair-$captureId.stdout"
+    $stderrPath = Join-Path $CaptureDirectory "alembic-repair-$captureId.stderr"
+    try {
+        $process = Start-Process -FilePath $PythonExecutable `
+            -ArgumentList @('-m', 'alembic', 'upgrade', 'head') `
+            -WorkingDirectory $WorkingDirectory -WindowStyle Hidden `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath -Wait -PassThru
+        $stdout = Read-CapturedText -Path $stdoutPath
+        $stderr = Read-CapturedText -Path $stderrPath
+        if ($stdout) { Write-Host $stdout }
+        if ($stderr) { Write-Host $stderr }
+        if ($process.ExitCode -ne 0) {
+            $detail = if ($stderr) { " $stderr" } elseif ($stdout) { " $stdout" } else { '' }
+            throw "Repair could not verify database migrations.$detail"
+        }
+    } finally {
+        Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 $resumeStep = if ($previousState) { [string]$previousState.last_completed_step } else { '' }
 if ($Mode -eq 'New') {
     if (-not $InitializeNewDatabase) {
@@ -515,10 +554,10 @@ if ($Mode -eq 'New' -and $resumeStep -in @('deployed', 'admin_created') -and
     try {
         $env:SMS_ENV_FILE = Join-Path $resolvedInstallRoot 'shared\.env'
         $env:ENVIRONMENT = 'production'
-        Push-Location $currentPath
-        try { & $venvPython -m alembic upgrade head }
-        finally { Pop-Location }
-        if ($LASTEXITCODE -ne 0) { throw 'Repair could not verify database migrations.' }
+        Invoke-AlembicUpgrade -PythonExecutable $venvPython `
+            -WorkingDirectory $currentPath -CaptureDirectory (
+                Join-Path $resolvedInstallRoot 'shared\runtime-temp'
+            )
     } finally {
         $env:SMS_ENV_FILE = $oldSmsEnvFile
         $env:ENVIRONMENT = $oldEnvironment
@@ -532,6 +571,10 @@ if ($Mode -eq 'New' -and $resumeStep -in @('deployed', 'admin_created') -and
             "over installed release $installedReleaseVersion."
         )
     }
+    Write-Host (
+        'Verifying dependencies and deploying the application. This can take ' +
+        'several minutes. Do not close Setup.'
+    )
     & $deployRelease -ReleasePackage $releasePackages[0].FullName `
         -InstallRoot $resolvedInstallRoot -ServiceName $ServiceName `
         -PythonExecutable $pythonExecutable -PgDumpExecutable $postgresTools.PgDump `

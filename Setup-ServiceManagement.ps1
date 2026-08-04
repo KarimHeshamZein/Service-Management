@@ -212,6 +212,88 @@ $cancel.Location = [Drawing.Point]::new(612, 486)
 $cancel.Size = [Drawing.Size]::new(82, 32)
 $form.Controls.Add($cancel)
 
+$script:installerRunner = $null
+$script:installerAsync = $null
+$script:installerSharedState = $null
+$script:installerLogPath = ''
+$script:installerProgressQueue = $null
+$script:installerSecrets = @()
+
+function Copy-NewInstallerProgress {
+    if (-not $script:installerProgressQueue) { return }
+    $line = $null
+    while ($script:installerProgressQueue.TryDequeue([ref]$line)) {
+        $output.AppendText(([string]$line) + [Environment]::NewLine)
+        switch -Wildcard ([string]$line) {
+            '*checksums verified*' {
+                $status.Text = 'Checking prerequisites and installation files.'
+            }
+            '*PostgreSQL connection verified*' {
+                $status.Text = 'Preparing the application and database.'
+            }
+            '*Verifying dependencies and deploying*' {
+                $status.Text = 'Verifying dependencies. This can take several minutes.'
+            }
+            '*deployed successfully*' {
+                $status.Text = 'Starting and checking the Windows service.'
+            }
+        }
+        $line = $null
+    }
+    $output.SelectionStart = $output.TextLength
+    $output.ScrollToCaret()
+}
+
+function Clear-InstallerSecrets {
+    $postgresPassword.Clear()
+    $dbPassword.Clear()
+    $dbPasswordAgain.Clear()
+    $adminPassword.Clear()
+    $adminPasswordAgain.Clear()
+    $script:installerSecrets = @()
+}
+
+$installTimer = [Windows.Forms.Timer]::new()
+$installTimer.Interval = 250
+$installTimer.add_Tick({
+    Copy-NewInstallerProgress
+    if (-not $script:installerAsync -or
+        -not $script:installerAsync.IsCompleted) { return }
+
+    $installTimer.Stop()
+    $failure = ''
+    try {
+        $script:installerRunner.EndInvoke($script:installerAsync) | Out-Null
+    } catch {
+        $failure = [string]$script:installerSharedState.Error
+        if (-not $failure) { $failure = [string]$_.Exception.Message }
+    }
+    Copy-NewInstallerProgress
+
+    if ($failure) {
+        foreach ($secret in $script:installerSecrets) {
+            $failure = $failure.Replace($secret, '[REDACTED]')
+        }
+        Save-FailureState -InstallRoot $installRoot.Text.Trim() -Message $failure
+        $status.Text = 'Installation did not complete. Correct the displayed issue and run setup again.'
+        if (-not $output.Text.EndsWith($failure + [Environment]::NewLine)) {
+            $output.AppendText($failure + [Environment]::NewLine)
+        }
+    } else {
+        $status.Text = 'Installation completed. Open the application or Service Console from the Desktop.'
+    }
+
+    $progress.Visible = $false
+    $cancel.Text = 'Close'
+    $cancel.Enabled = $true
+    Clear-InstallerSecrets
+    $script:installerRunner.Dispose()
+    $script:installerRunner = $null
+    $script:installerAsync = $null
+    $script:installerSharedState = $null
+    $script:installerProgressQueue = $null
+})
+
 $mode.add_SelectedIndexChanged({
     $isRepair = $mode.SelectedIndex -eq 1
     foreach ($control in @(
@@ -228,6 +310,17 @@ $back.add_Click({
 })
 
 $cancel.add_Click({ $form.Close() })
+
+$form.add_FormClosing({
+    param($sender, $eventArgs)
+    if ($script:installerAsync -and -not $script:installerAsync.IsCompleted) {
+        $eventArgs.Cancel = $true
+        [Windows.Forms.MessageBox]::Show(
+            'Setup is still working. Wait for completion before closing this window.',
+            'Installation in progress', 'OK', 'Information'
+        ) | Out-Null
+    }
+})
 
 $next.add_Click({
     if ($tabs.SelectedIndex -eq 0) {
@@ -289,12 +382,16 @@ $next.add_Click({
     $back.Enabled = $false
     $cancel.Enabled = $false
     $progress.Visible = $true
-    $status.Text = 'Installing. A PostgreSQL vendor window may open if it is missing.'
-    [Windows.Forms.Application]::DoEvents()
+    $status.Text = 'Installing. Setup is working; do not close this window.'
     $logRoot = Join-Path $env:ProgramData 'ServiceManagementSystem\Installer'
     New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
     $logPath = Join-Path $logRoot 'setup.log'
-    $secrets = @($postgresPassword.Text, $dbPassword.Text, $adminPassword.Text) |
+    $script:installerLogPath = $logPath
+    $script:installerProgressQueue = `
+        [Collections.Concurrent.ConcurrentQueue[string]]::new()
+    $script:installerSecrets = @(
+        $postgresPassword.Text, $dbPassword.Text, $adminPassword.Text
+    ) |
         Where-Object { $_ }
     try {
         $arguments = @{
@@ -315,22 +412,63 @@ $next.add_Click({
             $arguments.AdministratorPassword = Convert-ToSecureStringValue $adminPassword.Text
             $arguments.InitializeNewDatabase = $true
         }
-        & $installer @arguments 6>&1 | ForEach-Object {
-            $line = [string]$_
-            foreach ($secret in $secrets) { $line = $line.Replace($secret, '[REDACTED]') }
-            Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8
-            $output.AppendText($line + [Environment]::NewLine)
-            $output.SelectionStart = $output.TextLength
-            $output.ScrollToCaret()
-            [Windows.Forms.Application]::DoEvents()
+        $script:installerSharedState = [hashtable]::Synchronized(@{ Error = '' })
+        $worker = @'
+param(
+    $installerPath, $installerArguments, $logPath, $secrets,
+    $sharedState, $progressQueue
+)
+$ErrorActionPreference = 'Stop'
+function Write-InstallerLogLine {
+    param([string]$Path, [string]$Value)
+    try {
+        Add-Content -LiteralPath $Path -Value $Value -Encoding UTF8
+    } catch {
+        # A log viewer or antivirus scanner must never abort a deployment.
+        $progressQueue.Enqueue('Warning: Setup could not append one progress line to setup.log.')
+    }
+}
+try {
+    & $installerPath @installerArguments *>&1 | ForEach-Object {
+        $line = [string]$_
+        foreach ($secret in $secrets) {
+            $line = $line.Replace($secret, '[REDACTED]')
         }
-        $progress.Visible = $false
-        $status.Text = 'Installation completed. Open the application or Service Console from the Desktop.'
-        $cancel.Text = 'Close'
-        $cancel.Enabled = $true
+        $progressQueue.Enqueue($line)
+        Write-InstallerLogLine -Path $logPath -Value $line
+    }
+} catch {
+    $message = [string]$_.Exception.Message
+    $position = [string]$_.InvocationInfo.PositionMessage
+    $stack = [string]$_.ScriptStackTrace
+    if ($position) { $message += [Environment]::NewLine + $position.Trim() }
+    if ($stack) {
+        $message += [Environment]::NewLine + 'PowerShell stack: ' + $stack.Trim()
+    }
+    foreach ($secret in $secrets) {
+        $message = $message.Replace($secret, '[REDACTED]')
+    }
+    $sharedState.Error = $message
+    $progressQueue.Enqueue($message)
+    Write-InstallerLogLine -Path $logPath -Value $message
+    throw
+}
+'@
+        $script:installerRunner = [PowerShell]::Create()
+        [void]$script:installerRunner.AddScript($worker).
+            AddArgument($installer).
+            AddArgument($arguments).
+            AddArgument($logPath).
+            AddArgument($script:installerSecrets).
+            AddArgument($script:installerSharedState).
+            AddArgument($script:installerProgressQueue)
+        $script:installerAsync = $script:installerRunner.BeginInvoke()
+        $installTimer.Start()
     } catch {
         $message = [string]$_.Exception.Message
-        foreach ($secret in $secrets) { $message = $message.Replace($secret, '[REDACTED]') }
+        foreach ($secret in $script:installerSecrets) {
+            $message = $message.Replace($secret, '[REDACTED]')
+        }
         Add-Content -LiteralPath $logPath -Value $message -Encoding UTF8
         Save-FailureState -InstallRoot $installRoot.Text.Trim() -Message $message
         $progress.Visible = $false
@@ -338,13 +476,14 @@ $next.add_Click({
         $output.AppendText($message + [Environment]::NewLine)
         $cancel.Text = 'Close'
         $cancel.Enabled = $true
-    } finally {
-        $postgresPassword.Clear()
-        $dbPassword.Clear()
-        $dbPasswordAgain.Clear()
-        $adminPassword.Clear()
-        $adminPasswordAgain.Clear()
-        $secrets = @()
+        Clear-InstallerSecrets
+        if ($script:installerRunner) {
+            $script:installerRunner.Dispose()
+            $script:installerRunner = $null
+        }
+        $script:installerAsync = $null
+        $script:installerSharedState = $null
+        $script:installerProgressQueue = $null
     }
 })
 

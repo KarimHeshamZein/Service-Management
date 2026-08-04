@@ -17,6 +17,7 @@ from ..database import get_db
 from ..deps import require_admin, require_pricing_access
 from ..helpers import entity_id, flash, paginate, render
 from ..models import (
+    DeviceCatalog,
     PricingItem,
     PricingQuotation,
     PricingQuotationCharge,
@@ -28,13 +29,7 @@ from ..models import (
     User,
     utcnow,
 )
-from ..pricing import (
-    money,
-    next_quotation_number,
-    percentage,
-    quantity,
-    quotation_totals,
-)
+from ..pricing import money, next_quotation_number, percentage, quantity
 from ..pricing_pdf import build_quotation_pdf
 from ..security import (
     consume_form_token,
@@ -63,7 +58,32 @@ DEFAULT_SETTINGS = {
     "default_transportation_price": Decimal("0.00"),
     "default_installation_price": Decimal("0.00"),
 }
+CURRENCIES = ("SAR", "USD")
 LINE_ITEM_RE = re.compile(r"^line_(\d+)_item_id$")
+
+
+def _currency(value: object, default: str = "") -> str | None:
+    normalized = str(value or default).strip().upper()
+    return normalized if normalized in CURRENCIES else None
+
+
+def _sync_legacy_device(db: Session, item: PricingItem) -> None:
+    """Maintain the hidden compatibility row used by installed-device history."""
+    device = item.legacy_device
+    if device is None:
+        compatibility_model = item.model or item.name
+        device = db.scalar(
+            select(DeviceCatalog).where(
+                func.lower(DeviceCatalog.name) == item.name.lower(),
+                func.lower(DeviceCatalog.model) == compatibility_model.lower(),
+            )
+        ) or DeviceCatalog()
+        item.legacy_device = device
+    device.name = item.name
+    device.model = item.model or item.name
+    device.description = "Managed from Pricing Items"
+    device.is_active = item.is_active and item.service_enabled
+    device.updated_at = utcnow()
 
 
 def _redirect(path: str) -> RedirectResponse:
@@ -107,6 +127,7 @@ def _catalogue_payload(items: list[PricingItem]) -> list[dict]:
             "id": item.id,
             "label": item.display_label,
             "price": str(item.unit_price),
+            "currency": item.currency,
             "image_url": (
                 f"/pricing/items/{item.id}/image?size=thumb"
                 if item.image_storage_key
@@ -117,6 +138,7 @@ def _catalogue_payload(items: list[PricingItem]) -> list[dict]:
                     "id": related.id,
                     "name": related.name,
                     "price": str(related.unit_price),
+                    "currency": related.currency,
                 }
                 for related in item.related_items
                 if related.is_active
@@ -150,6 +172,7 @@ def _item_context(
         "active_items": _catalogue(db),
         "q": term,
         "currency": _pricing_settings(db)["currency"],
+        "currencies": CURRENCIES,
         "can_delete": user.is_admin,
     }
 
@@ -181,11 +204,17 @@ async def create_item(
     name = str(form.get("name") or "").strip()
     model = str(form.get("model") or "").strip()
     unit_price = money(form.get("unit_price"))
+    currency = _currency(form.get("currency"), _pricing_settings(db)["currency"])
+    service_enabled = (
+        str(form.get("service_enabled") or "") == "1"
+        if "service_enabled" in form
+        else True
+    )
     image = form.get("image")
     if not name:
         flash(request, "Enter the main item name.", "error")
         return _redirect("/pricing/items")
-    if unit_price is None:
+    if unit_price is None or currency is None:
         flash(request, "Enter a valid non-negative item price.", "error")
         return _redirect("/pricing/items")
     clash = db.scalar(
@@ -204,7 +233,14 @@ async def create_item(
         except UploadError as exc:
             flash(request, str(exc), "error")
             return _redirect("/pricing/items")
-    item = PricingItem(name=name, model=model, unit_price=unit_price)
+    item = PricingItem(
+        name=name,
+        model=model,
+        unit_price=unit_price,
+        currency=currency,
+        service_enabled=service_enabled,
+    )
+    _sync_legacy_device(db, item)
     if stored:
         item.image_storage_key = stored.storage_key
         item.image_thumbnail_key = stored.thumbnail_key
@@ -235,7 +271,13 @@ async def edit_item(
     if item is None:
         flash(request, "That pricing item no longer exists.", "error")
         return _redirect("/pricing/items")
-    if not name or unit_price is None:
+    currency = _currency(form.get("currency"), item.currency)
+    service_enabled = (
+        str(form.get("service_enabled") or "") == "1"
+        if "service_enabled" in form
+        else item.service_enabled
+    )
+    if not name or unit_price is None or currency is None:
         flash(request, "Enter a valid item name and non-negative price.", "error")
         return _redirect("/pricing/items")
     clash = db.scalar(
@@ -248,6 +290,20 @@ async def edit_item(
     if clash:
         flash(request, f"“{clash.display_label}” already exists.", "error")
         return _redirect("/pricing/items")
+    device_clash = db.scalar(
+        select(DeviceCatalog).where(
+            DeviceCatalog.id != item.device_catalog_id,
+            func.lower(DeviceCatalog.name) == name.lower(),
+            func.lower(DeviceCatalog.model) == (model or name).lower(),
+        )
+    )
+    if device_clash:
+        flash(
+            request,
+            "That name and model are retained by historical service data. Choose another combination.",
+            "error",
+        )
+        return _redirect("/pricing/items")
     stored = None
     if isinstance(image, UploadFile) and image.filename:
         try:
@@ -259,6 +315,8 @@ async def edit_item(
     item.name = name
     item.model = model
     item.unit_price = unit_price
+    item.currency = currency
+    item.service_enabled = service_enabled
     if stored:
         item.image_storage_key = stored.storage_key
         item.image_thumbnail_key = stored.thumbnail_key
@@ -266,6 +324,7 @@ async def edit_item(
         item.image_content_type = stored.content_type
         item.image_file_size = stored.file_size
     item.updated_at = utcnow()
+    _sync_legacy_device(db, item)
     db.commit()
     if stored:
         delete_stored(*old_keys)
@@ -291,6 +350,7 @@ async def toggle_item(
         return _redirect("/pricing/items")
     item.is_active = not item.is_active
     item.updated_at = utcnow()
+    _sync_legacy_device(db, item)
     db.commit()
     flash(request, f"Pricing item {'activated' if item.is_active else 'deactivated'}.")
     return _redirect("/pricing/items")
@@ -388,10 +448,11 @@ async def create_related_item(
     main_item = db.get(PricingItem, main_item_id) if main_item_id is not None else None
     name = str(form.get("name") or "").strip()
     unit_price = money(form.get("unit_price"))
+    currency = _currency(form.get("currency"), main_item.currency if main_item else "")
     if main_item is None or not main_item.is_active:
         flash(request, "Choose an active main item.", "error")
         return _redirect("/pricing/items")
-    if not name or unit_price is None:
+    if not name or unit_price is None or currency is None:
         flash(request, "Enter a related item name and valid price.", "error")
         return _redirect("/pricing/items")
     clash = db.scalar(
@@ -408,6 +469,7 @@ async def create_related_item(
             main_item_id=main_item.id,
             name=name,
             unit_price=unit_price,
+            currency=currency,
         )
     )
     db.commit()
@@ -431,7 +493,8 @@ async def edit_related_item(
     if related is None:
         flash(request, "That related item no longer exists.", "error")
         return _redirect("/pricing/items")
-    if not name or unit_price is None:
+    currency = _currency(form.get("currency"), related.currency)
+    if not name or unit_price is None or currency is None:
         flash(request, "Enter a related item name and valid price.", "error")
         return _redirect("/pricing/items")
     clash = db.scalar(
@@ -446,6 +509,7 @@ async def edit_related_item(
         return _redirect("/pricing/items")
     related.name = name
     related.unit_price = unit_price
+    related.currency = currency
     related.updated_at = utcnow()
     db.commit()
     flash(request, "Related item updated. Existing quotations keep their snapshots.")
@@ -560,10 +624,6 @@ def quotations_page(
         {
             "active_nav": "pricing_quotations",
             "quotations": visible,
-            "totals": {
-                quotation.id: quotation_totals(quotation)
-                for quotation in visible
-            },
             "page_info": page_info,
             "q": term,
             "can_delete": user.is_admin,
@@ -581,7 +641,7 @@ def _default_quote_form(db: Session) -> dict:
             today + timedelta(days=values["default_validity_days"])
         ).isoformat(),
         "discount_percent": "0.00",
-        "vat_rate": str(values["default_vat_rate"]),
+        "vat_rate": "0.00",
         "notes": "",
         "terms": values["default_terms"],
         "lines": [{}],
@@ -589,14 +649,17 @@ def _default_quote_form(db: Session) -> dict:
             "manpower": {
                 "quantity": "1",
                 "unit_price": str(values["default_manpower_price"]),
+                "currency": values["currency"],
             },
             "transportation": {
                 "quantity": "1",
                 "unit_price": str(values["default_transportation_price"]),
+                "currency": values["currency"],
             },
             "installation": {
                 "quantity": "1",
-                "unit_price": str(values["default_installation_price"]),
+                "unit_price": str(values["default_manpower_price"]),
+                "currency": values["currency"],
             },
         },
     }
@@ -625,6 +688,7 @@ def _quotation_form_context(
         "errors": errors or {},
         "form_token": form_token or issue_form_token(request),
         "currency": _pricing_settings(db)["currency"],
+        "currencies": CURRENCIES,
     }
 
 
@@ -645,6 +709,7 @@ def _submitted_lines(form) -> list[dict]:
                 "item_id": str(form.get(f"line_{index}_item_id") or ""),
                 "quantity": str(form.get(f"line_{index}_quantity") or ""),
                 "unit_price": str(form.get(f"line_{index}_unit_price") or ""),
+                "currency": str(form.get(f"line_{index}_currency") or ""),
                 "skip_optional_items": (
                     str(form.get(f"line_{index}_skip_optional_items") or "")
                     == "1"
@@ -657,6 +722,9 @@ def _submitted_lines(form) -> list[dict]:
                         ),
                         "unit_price": str(
                             form.get(f"line_{index}_related_price_{related_id}") or ""
+                        ),
+                        "currency": str(
+                            form.get(f"line_{index}_related_currency_{related_id}") or ""
                         ),
                     }
                     for related_id in related_ids
@@ -687,6 +755,7 @@ def _build_quote_lines(
         item = db.get(PricingItem, item_id) if item_id is not None else None
         line_quantity = quantity(line_data["quantity"])
         line_price = money(line_data["unit_price"])
+        line_currency = _currency(line_data.get("currency"), item.currency if item else "")
         if item is None or not item.is_active:
             errors[f"line_{index}_item_id"] = "Choose an active main item."
             continue
@@ -699,6 +768,9 @@ def _build_quote_lines(
             continue
         if line_price is None:
             errors[f"line_{index}_unit_price"] = "Enter a valid non-negative price."
+            continue
+        if line_currency is None:
+            errors[f"line_{index}_currency"] = "Choose SAR or USD."
             continue
 
         active_related_ids = {
@@ -730,6 +802,7 @@ def _build_quote_lines(
             item_model=item.model,
             quantity=line_quantity,
             unit_price=line_price,
+            currency=line_currency,
             position=position,
             skip_optional_items=skip_optional_items,
         )
@@ -744,6 +817,9 @@ def _build_quote_lines(
             )
             related_quantity = quantity(selected["quantity"])
             related_price = money(selected["unit_price"])
+            related_currency = _currency(
+                selected.get("currency"), related.currency if related else ""
+            )
             if (
                 related is None
                 or not related.is_active
@@ -765,12 +841,18 @@ def _build_quote_lines(
                     "Enter a valid price for every selected related item."
                 )
                 continue
+            if related_currency is None:
+                errors[f"line_{index}_related"] = (
+                    "Choose SAR or USD for every selected related item."
+                )
+                continue
             line.related_items.append(
                 PricingQuotationRelatedLine(
                     source_related_item_id=related.id,
                     item_name=related.name,
                     quantity=related_quantity,
                     unit_price=related_price,
+                    currency=related_currency,
                 )
             )
         built.append(line)
@@ -831,18 +913,21 @@ def _quote_form_values(form, submitted: list[dict]) -> dict:
             "manpower": {
                 "quantity": str(form.get("charge_manpower_quantity") or ""),
                 "unit_price": str(form.get("charge_manpower_unit_price") or ""),
+                "currency": str(form.get("charge_manpower_currency") or ""),
             },
             "transportation": {
-                "quantity": "1",
+                "quantity": str(form.get("charge_transportation_quantity") or ""),
                 "unit_price": str(
                     form.get("charge_transportation_unit_price") or ""
                 ),
+                "currency": str(form.get("charge_transportation_currency") or ""),
             },
             "installation": {
                 "quantity": str(form.get("charge_installation_quantity") or ""),
                 "unit_price": str(
                     form.get("charge_installation_unit_price") or ""
                 ),
+                "currency": str(form.get("charge_manpower_currency") or ""),
             },
         },
     }
@@ -855,13 +940,31 @@ def _build_quote_charges(form, errors: dict[str, str]) -> list[PricingQuotationC
         ("installation", "Installation", "day", 3),
     )
     charges: list[PricingQuotationCharge] = []
+    manpower_quantity = quantity(form.get("charge_manpower_quantity"))
+    manpower_unit_price = money(form.get("charge_manpower_unit_price"))
+    daily_manpower = (
+        manpower_quantity * manpower_unit_price
+        if manpower_quantity is not None and manpower_unit_price is not None
+        else None
+    )
     for charge_type, label, unit_label, position in definitions:
-        charge_quantity = (
-            Decimal("1.00")
-            if charge_type == "transportation"
-            else quantity(form.get(f"charge_{charge_type}_quantity"))
+        raw_quantity = form.get(f"charge_{charge_type}_quantity")
+        if charge_type == "transportation" and not str(raw_quantity or "").strip():
+            raw_quantity = "1"
+        charge_quantity = quantity(raw_quantity)
+        unit_price = (
+            daily_manpower
+            if charge_type == "installation"
+            else money(form.get(f"charge_{charge_type}_unit_price"))
         )
-        unit_price = money(form.get(f"charge_{charge_type}_unit_price"))
+        charge_currency = _currency(
+            form.get(
+                "charge_manpower_currency"
+                if charge_type == "installation"
+                else f"charge_{charge_type}_currency"
+            ),
+            "SAR",
+        )
         if charge_quantity is None:
             errors[f"charge_{charge_type}_quantity"] = (
                 "Enter a quantity greater than zero."
@@ -870,13 +973,20 @@ def _build_quote_charges(form, errors: dict[str, str]) -> list[PricingQuotationC
             errors[f"charge_{charge_type}_unit_price"] = (
                 "Enter a valid non-negative cost."
             )
-        if charge_quantity is not None and unit_price is not None:
+        if charge_currency is None:
+            errors[f"charge_{charge_type}_currency"] = "Choose SAR or USD."
+        if (
+            charge_quantity is not None
+            and unit_price is not None
+            and charge_currency is not None
+        ):
             charges.append(
                 PricingQuotationCharge(
                     charge_type=charge_type,
                     label=label,
                     quantity=charge_quantity,
                     unit_price=unit_price,
+                    currency=charge_currency,
                     unit_label=unit_label,
                     position=position,
                 )
@@ -897,8 +1007,6 @@ def _validate_quote_header(form, db: Session) -> tuple[dict, dict]:
         valid_until = date.fromisoformat(str(form.get("valid_until") or ""))
     except ValueError:
         valid_until = None
-    discount = percentage(form.get("discount_percent"))
-    vat_rate = percentage(form.get("vat_rate"))
     if project is None or not project.is_active:
         errors["project_id"] = "Choose an active Project."
     if quotation_date is None:
@@ -907,16 +1015,12 @@ def _validate_quote_header(form, db: Session) -> tuple[dict, dict]:
         errors["valid_until"] = "Enter a valid expiry date."
     elif quotation_date and valid_until < quotation_date:
         errors["valid_until"] = "The expiry date cannot be before the quotation date."
-    if discount is None:
-        errors["discount_percent"] = "Enter a discount from 0 to 100."
-    if vat_rate is None:
-        errors["vat_rate"] = "Enter a VAT rate from 0 to 100."
     return {
         "project": project,
         "quotation_date": quotation_date,
         "valid_until": valid_until,
-        "discount_percent": discount,
-        "vat_rate": vat_rate,
+        "discount_percent": Decimal("0.00"),
+        "vat_rate": Decimal("0.00"),
         "notes": str(form.get("notes") or "").strip(),
         "terms": str(form.get("terms") or "").strip(),
     }, errors
@@ -1070,7 +1174,6 @@ def quotation_detail(
         {
             "active_nav": "pricing_quotations",
             "quotation": quotation,
-            "totals": quotation_totals(quotation),
             "can_delete": user.is_admin,
         },
     )
@@ -1126,14 +1229,15 @@ def quotation_line_image(
 
 def _existing_quote_form(quotation: PricingQuotation) -> dict:
     charge_values = {
-        "manpower": {"quantity": "1", "unit_price": "0.00"},
-        "transportation": {"quantity": "1", "unit_price": "0.00"},
-        "installation": {"quantity": "1", "unit_price": "0.00"},
+        "manpower": {"quantity": "1", "unit_price": "0.00", "currency": "SAR"},
+        "transportation": {"quantity": "1", "unit_price": "0.00", "currency": "SAR"},
+        "installation": {"quantity": "1", "unit_price": "0.00", "currency": "SAR"},
     }
     for charge in quotation.charges:
         charge_values[charge.charge_type] = {
             "quantity": str(charge.quantity),
             "unit_price": str(charge.unit_price),
+            "currency": charge.currency,
         }
     return {
         "project_id": str(quotation.project_id),
@@ -1149,12 +1253,14 @@ def _existing_quote_form(quotation: PricingQuotation) -> dict:
                 "item_id": str(line.source_item_id or ""),
                 "quantity": str(line.quantity),
                 "unit_price": str(line.unit_price),
+                "currency": line.currency,
                 "skip_optional_items": line.skip_optional_items,
                 "related": [
                     {
                         "id": str(related.source_related_item_id or ""),
                         "quantity": str(related.quantity),
                         "unit_price": str(related.unit_price),
+                        "currency": related.currency,
                     }
                     for related in line.related_items
                     if related.source_related_item_id

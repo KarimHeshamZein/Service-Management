@@ -77,7 +77,7 @@
       {% endif %}
 
       {% if user and user.can_manage_catalogs %}
-      <div class="nav-section" data-nav-section="management" data-active="{{ 'true' if active_nav in ['projects', 'sites', 'services', 'devices', 'users', 'settings'] else 'false' }}">
+      <div class="nav-section" data-nav-section="management" data-active="{{ 'true' if active_nav in ['projects', 'sites', 'services', 'users', 'settings'] else 'false' }}">
         <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-management">
           <span>{{ t('nav.group.management') }}</span><span class="nav-chevron" aria-hidden="true"></span>
         </button>
@@ -85,7 +85,6 @@
           <a href="/projects" class="sub {{ 'active' if active_nav == 'projects' }}">{{ t('nav.management.projects') }}</a>
           <a href="/sites" class="sub {{ 'active' if active_nav == 'sites' }}">{{ t('nav.management.sites') }}</a>
           <a href="/service-types" class="sub {{ 'active' if active_nav == 'services' }}">{{ t('nav.management.service_types') }}</a>
-          <a href="/devices" class="sub {{ 'active' if active_nav == 'devices' }}">{{ t('nav.management.devices') }}</a>
           {% if user.is_admin %}
           <a href="/users" class="sub {{ 'active' if active_nav == 'users' }}">{{ t('nav.management.users') }}</a>
           <a href="/settings" class="sub {{ 'active' if active_nav == 'settings' }}">{{ t('nav.management.settings') }}</a>

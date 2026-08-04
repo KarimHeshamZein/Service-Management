@@ -18,6 +18,7 @@ from console.paths import InstallPaths
 from console.security import redact
 from console.service_core import ServiceController, ServiceOperationError
 from console.system_core import SystemController, SystemOperationError, verify_release_checksum
+from console.tabs.network import initial_adapter
 
 
 class Result:
@@ -25,6 +26,15 @@ class Result:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = ""
+
+
+def test_network_tab_selects_a_safe_active_adapter_default():
+    adapters = ("Ethernet", "Wi-Fi")
+
+    assert initial_adapter("Wi-Fi", adapters) == "Wi-Fi"
+    assert initial_adapter("Disabled adapter", adapters) == "Ethernet"
+    assert initial_adapter("", adapters) == "Ethernet"
+    assert initial_adapter("", ()) == ""
 
 
 def _paths(tmp_path: Path) -> InstallPaths:

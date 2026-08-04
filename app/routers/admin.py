@@ -525,6 +525,7 @@ def delete_service(
 
 @router.get("/devices")
 def devices_page(request: Request, q: str = "", db: Session = Depends(get_db)):
+    return _redirect("/pricing/items")
     stmt = select(DeviceCatalog).order_by(
         DeviceCatalog.is_active.desc(), DeviceCatalog.name, DeviceCatalog.model
     )
@@ -572,6 +573,8 @@ def create_device(
 ):
     if (bad := _guard(request, csrf_token, "/devices")):
         return bad
+    flash(request, "Create and manage service equipment from Pricing Items.")
+    return _redirect("/pricing/items")
     name, model = name.strip(), model.strip()
     if not name or not model:
         flash(request, "Device name and model are required.", "error")
@@ -611,6 +614,8 @@ def edit_device(
 ):
     if (bad := _guard(request, csrf_token, "/devices")):
         return bad
+    flash(request, "Create and manage service equipment from Pricing Items.")
+    return _redirect("/pricing/items")
     device = db.get(DeviceCatalog, device_id)
     name, model = name.strip(), model.strip()
     if device is None or not name or not model:
@@ -648,6 +653,8 @@ def toggle_device(
 ):
     if (bad := _guard(request, csrf_token, "/devices")):
         return bad
+    flash(request, "Activate or deactivate service equipment from Pricing Items.")
+    return _redirect("/pricing/items")
     device = db.get(DeviceCatalog, device_id)
     if device is None:
         flash(request, "That device no longer exists.", "error")
@@ -674,6 +681,8 @@ def delete_device(
 ):
     if (bad := _guard(request, csrf_token, "/devices")):
         return bad
+    flash(request, "Delete service equipment from Pricing Items.")
+    return _redirect("/pricing/items")
     device = db.get(DeviceCatalog, device_id)
     if device is None:
         flash(request, "That Device no longer exists.", "error")

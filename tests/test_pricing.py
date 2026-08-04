@@ -337,10 +337,10 @@ def test_quotation_saves_catalogue_and_project_snapshots_with_exact_totals(clien
     totals = quotation_totals(quotation)
     assert totals == {
         "subtotal": Decimal("220.00"),
-        "discount": Decimal("22.00"),
-        "taxable": Decimal("198.00"),
-        "vat": Decimal("29.70"),
-        "grand_total": Decimal("227.70"),
+        "discount": Decimal("0.00"),
+        "taxable": Decimal("220.00"),
+        "vat": Decimal("0.00"),
+        "grand_total": Decimal("220.00"),
     }
 
     camera.name = "Renamed Camera"
@@ -352,7 +352,7 @@ def test_quotation_saves_catalogue_and_project_snapshots_with_exact_totals(clien
     quotation = db.query(PricingQuotation).one()
     assert quotation.project_name == project
     assert quotation.lines[0].item_name == "Quotation Camera"
-    assert quotation_totals(quotation)["grand_total"] == Decimal("227.70")
+    assert quotation_totals(quotation)["grand_total"] == Decimal("220.00")
 
 
 def test_create_quotation_commit_failure_removes_new_image_snapshots(
@@ -564,10 +564,10 @@ def test_overridden_prices_and_required_charges_are_snapshotted_in_totals(client
     totals = quotation_totals(quotation)
     assert totals == {
         "subtotal": Decimal("1070.00"),
-        "discount": Decimal("107.00"),
-        "taxable": Decimal("963.00"),
-        "vat": Decimal("144.45"),
-        "grand_total": Decimal("1107.45"),
+        "discount": Decimal("0.00"),
+        "taxable": Decimal("1070.00"),
+        "vat": Decimal("0.00"),
+        "grand_total": Decimal("1070.00"),
     }
 
     camera.unit_price = Decimal("999.00")
@@ -575,7 +575,7 @@ def test_overridden_prices_and_required_charges_are_snapshotted_in_totals(client
     db.commit()
     db.expire_all()
     quotation = db.query(PricingQuotation).one()
-    assert quotation_totals(quotation)["grand_total"] == Decimal("1107.45")
+    assert quotation_totals(quotation)["grand_total"] == Decimal("1070.00")
     pdf = client.get(f"/pricing/quotations/{quotation.id}/pdf")
     text = "\n".join(
         page.extract_text() or ""
@@ -584,7 +584,8 @@ def test_overridden_prices_and_required_charges_are_snapshotted_in_totals(client
     assert "Manpower" in text
     assert "Transportation" in text
     assert "Installation" in text
-    assert "1,107.45 SAR" in text
+    assert "600.00 SAR" in text
+    assert "Grand total" not in text
 
 
 def test_quotation_image_snapshot_survives_catalogue_removal_and_cleans_up(
@@ -710,7 +711,8 @@ def test_quotation_search_edit_pdf_and_admin_delete(client, db):
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
     assert quotation.quotation_number in text
     assert "Quotation Recorder" in text
-    assert "575.00 SAR" in text
+    assert "500.00 SAR" in text
+    assert "Grand total" not in text
     assert "Page 1" in text
 
     quotation_id = quotation.id
@@ -721,3 +723,96 @@ def test_quotation_search_edit_pdf_and_admin_delete(client, db):
     assert deleted.status_code == 303
     db.expire_all()
     assert db.get(PricingQuotation, quotation_id) is None
+
+
+def test_mixed_currency_lines_and_derived_required_charges(client, db):
+    camera, _recorder = _create_catalogue(db)
+    camera.currency = "USD"
+    camera.related_items[0].currency = "SAR"
+    db.commit()
+    login(client, *ADMIN)
+    related = camera.related_items[0]
+
+    response = _submit_quote(
+        client,
+        camera,
+        line_0_currency="USD",
+        charge_manpower_quantity="3",
+        charge_manpower_unit_price="100",
+        charge_manpower_currency="USD",
+        charge_transportation_quantity="2",
+        charge_transportation_unit_price="50",
+        charge_transportation_currency="SAR",
+        charge_installation_quantity="2",
+        **{f"line_0_related_currency_{related.id}": "SAR"},
+    )
+    assert response.status_code == 303
+    quotation = db.query(PricingQuotation).one()
+    assert quotation.lines[0].currency == "USD"
+    assert quotation.lines[0].related_items[0].currency == "SAR"
+    charges = {charge.charge_type: charge for charge in quotation.charges}
+    assert charges["manpower"].quantity == Decimal("3.00")
+    assert charges["manpower"].currency == "USD"
+    assert charges["transportation"].quantity == Decimal("2.00")
+    assert charges["transportation"].currency == "SAR"
+    assert charges["installation"].unit_price == Decimal("300.00")
+    assert charges["installation"].currency == "USD"
+
+    detail = client.get(response.headers["location"]).text
+    assert "Grand total" not in detail
+    assert "200.00 USD" in detail
+    assert "100.00 SAR" in detail
+
+
+def test_pricing_item_is_the_service_catalogue_source(client, db):
+    login(client, *ADMIN)
+    token = csrf_of(client, "/pricing/items")
+    created = client.post(
+        "/pricing/items",
+        data={
+            "csrf_token": token,
+            "name": "Unified Camera",
+            "model": "UC-1",
+            "unit_price": "75",
+            "currency": "SAR",
+            "service_enabled": "1",
+        },
+    )
+    assert created.status_code == 303
+    item = db.query(PricingItem).filter_by(name="Unified Camera").one()
+    assert item.legacy_device is not None
+    assert item.legacy_device.is_active is True
+    assert "Unified Camera" in client.get("/installations/submit").text
+    assert 'href="/devices"' not in client.get("/dashboard").text
+    assert client.get("/devices").headers["location"] == "/pricing/items"
+
+    edited = client.post(
+        f"/pricing/items/{item.id}/edit",
+        data={
+            "csrf_token": token,
+            "name": item.name,
+            "model": item.model,
+            "unit_price": str(item.unit_price),
+            "currency": item.currency,
+            "service_enabled": "0",
+        },
+    )
+    assert edited.status_code == 303
+    db.refresh(item)
+    assert item.service_enabled is False
+    assert item.legacy_device.is_active is False
+    assert "Unified Camera" not in client.get("/installations/submit").text
+
+
+def test_quotation_pdf_embeds_an_arabic_font_for_catalogue_text(client, db):
+    camera, _recorder = _create_catalogue(db)
+    camera.name = "كاميرا البوابة"
+    camera.related_items[0].name = "بطاقة اتصال"
+    db.commit()
+    login(client, *ADMIN)
+    created = _submit_quote(client, camera)
+    assert created.status_code == 303
+    quotation = db.query(PricingQuotation).one()
+    response = client.get(f"/pricing/quotations/{quotation.id}/pdf")
+    assert response.status_code == 200
+    assert b"NotoSansArabic" in response.content

@@ -9,8 +9,8 @@
     <div class="field"><label>{{ t('ui.service.performed') }} <span class="req">*</span></label>
       <select name="service_type_id"><option value="">{{ t('ui.select.a.service') }}</option>{% for s in services %}<option value="{{ s.id }}" {{ "selected" if item.service_type_id == s.id|string }}>{{ s.name }}</option>{% endfor %}</select>
       <p class="error-text" data-error-kind="service_type_id" data-error-for="service_type_id_{{ index }}" style="{{ '' if errors["service_type_id_" ~ index] else 'display:none' }}">{{ errors["service_type_id_" ~ index] or '' }}</p></div>
-    <div class="field"><label>{{ t('ui.device.title') }} <span class="req">*</span></label>
-      <select name="device_id"><option value="">{{ t('ui.select.a.device') }}</option>{% for d in devices %}<option value="{{ d.id }}" {{ "selected" if item.device_id == d.id|string }}>{{ d.display_label }}</option>{% endfor %}</select>
+    <div class="field"><label>{{ t('ui.item.title') }} <span class="req">*</span></label>
+      <select name="device_id"><option value="">{{ t('ui.choose.an.item') }}</option>{% for d in devices %}<option value="{{ d.id }}" {{ "selected" if item.device_id == d.id|string }}>{{ d.display_label }}</option>{% endfor %}</select>
       <p class="error-text" data-error-kind="device_id" data-error-for="device_id_{{ index }}" style="{{ '' if errors["device_id_" ~ index] else 'display:none' }}">{{ errors["device_id_" ~ index] or '' }}</p></div>
     <div class="field"><label>{{ t('ui.serial.number') }} <span class="req">*</span></label><input name="serial_number" value="{{ item.serial_number or '' }}" maxlength="160" dir="auto">
       <p class="error-text" data-error-kind="serial_number" data-error-for="serial_number_{{ index }}" style="{{ '' if errors["serial_number_" ~ index] else 'display:none' }}">{{ errors["serial_number_" ~ index] or '' }}</p></div>
@@ -51,7 +51,7 @@
 {% block topbar_title %}{{ t('ui.new.installation') }}{% endblock %}
 {% block content %}
 <div class="page-head"><div><span class="eyebrow">{{ t('nav.installations') }}</span><h1>{{ t('ui.new.installation') }}</h1>
-  <p class="lede">{{ t('ui.select.the.shared.location.then.add.every.device.installed.during.this.visit') }}</p></div></div>
+  <p class="lede">{{ t('ui.select.the.shared.location.then.add.every.item.installed.during.this.visit') }}</p></div></div>
 <form method="post" action="/installations/submit" enctype="multipart/form-data" novalidate data-async-form>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="form_token" value="{{ form_token }}">
   <div class="alert error" role="alert" data-form-error style="{{ '' if errors.form else 'display:none' }}">{{ errors.form or '' }}</div>

@@ -119,7 +119,7 @@
         checkbox.value = related.id;
         checkbox.checked = Boolean(previous);
         var labelText = document.createElement("span");
-        labelText.textContent = related.name + " — " + related.price;
+        labelText.textContent = related.name + " — " + related.price + " " + related.currency;
         choice.appendChild(checkbox);
         choice.appendChild(labelText);
 
@@ -161,15 +161,40 @@
         priceWrap.appendChild(priceLabel);
         priceWrap.appendChild(priceInput);
 
+        var currencyWrap = document.createElement("div");
+        currencyWrap.className = "field pricing-related-currency";
+        currencyWrap.hidden = !checkbox.checked;
+        var currencyLabel = document.createElement("label");
+        var currencyId = quantityId + "-currency";
+        currencyLabel.htmlFor = currencyId;
+        currencyLabel.textContent = "Currency";
+        var currencyInput = document.createElement("select");
+        currencyInput.id = currencyId;
+        currencyInput.name = "line_" + index + "_related_currency_" + related.id;
+        ["SAR", "USD"].forEach(function (code) {
+          var option = document.createElement("option");
+          option.value = code;
+          option.textContent = code;
+          currencyInput.appendChild(option);
+        });
+        currencyInput.value =
+          previous && previous.currency ? previous.currency : related.currency;
+        currencyInput.required = checkbox.checked;
+        currencyWrap.appendChild(currencyLabel);
+        currencyWrap.appendChild(currencyInput);
+
         function setSelected(active) {
           checkbox.checked = active;
           quantityWrap.hidden = !active;
           priceWrap.hidden = !active;
+          currencyWrap.hidden = !active;
           quantityInput.required = active;
           priceInput.required = active;
+          currencyInput.required = active;
           if (!active) {
             quantityInput.value = "1";
             priceInput.value = related.price;
+            currencyInput.value = related.currency;
           }
         }
 
@@ -184,6 +209,7 @@
         row.appendChild(choice);
         row.appendChild(quantityWrap);
         row.appendChild(priceWrap);
+        row.appendChild(currencyWrap);
         container.appendChild(row);
         optionalRows.push({ checkbox: checkbox, setSelected: setSelected });
       });
@@ -220,15 +246,20 @@
       var select = section.querySelector("[data-pricing-item-select]");
       var item = catalogueItem(select.value);
       var priceInput = section.querySelector("[data-pricing-main-price]");
+      var currencyInput = section.querySelector("[data-pricing-main-currency]");
       var image = section.querySelector("[data-pricing-item-image]");
       if (!item) {
-        if (resetPrice) priceInput.value = "";
+        if (resetPrice) {
+          priceInput.value = "";
+          currencyInput.value = "SAR";
+        }
         image.hidden = true;
         image.removeAttribute("src");
         image.alt = "";
         return;
       }
       if (resetPrice || !priceInput.value) priceInput.value = item.price;
+      if (resetPrice || !currencyInput.value) currencyInput.value = item.currency;
       if (item.image_url) {
         image.src = item.image_url;
         image.alt = item.label;
@@ -304,6 +335,7 @@
           'input[name="line_' + newIndex + '_quantity"]'
         ).value = "1";
         section.querySelector("[data-pricing-main-price]").value = "";
+        section.querySelector("[data-pricing-main-currency]").value = "SAR";
         section.querySelector("[data-pricing-item-image]").hidden = true;
         section.querySelector("[data-pricing-related-items]").replaceChildren();
         pricingLines.appendChild(section);
@@ -312,6 +344,25 @@
         section.querySelector("[data-pricing-item-select]").focus();
       });
     }
+
+    var manpowerQuantity = pricingForm.querySelector("[data-manpower-quantity]");
+    var manpowerPrice = pricingForm.querySelector("[data-manpower-price]");
+    var manpowerCurrency = pricingForm.querySelector("[data-manpower-currency]");
+    var installationPrice = pricingForm.querySelector("[data-installation-price]");
+    var installationCurrency = pricingForm.querySelector("[data-installation-currency]");
+    function updateInstallationPrice() {
+      var workers = Number(manpowerQuantity.value);
+      var perWorker = Number(manpowerPrice.value);
+      installationPrice.value = Number.isFinite(workers) && Number.isFinite(perWorker)
+        ? (workers * perWorker).toFixed(2)
+        : "";
+      installationCurrency.value = manpowerCurrency.value;
+    }
+    [manpowerQuantity, manpowerPrice, manpowerCurrency].forEach(function (field) {
+      field.addEventListener("input", updateInstallationPrice);
+      field.addEventListener("change", updateInstallationPrice);
+    });
+    updateInstallationPrice();
   }
 
   /* ------------------------------------------------------ dialog toggles */

@@ -379,6 +379,9 @@ class DeviceCatalog(Base):
     maintenance_links: Mapped[list["MaintenanceRecordDevice"]] = relationship(
         back_populates="catalog_device"
     )
+    pricing_item: Mapped["PricingItem | None"] = relationship(
+        back_populates="legacy_device", uselist=False
+    )
 
     __table_args__ = (
         UniqueConstraint("name", "model", name="uq_device_name_model"),
@@ -1334,6 +1337,13 @@ class PricingItem(Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
     model: Mapped[str] = mapped_column(String(120), nullable=False, default="", index=True)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="SAR")
+    service_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, index=True
+    )
+    device_catalog_id: Mapped[int | None] = mapped_column(
+        ForeignKey("device_catalog.id", ondelete="RESTRICT"), unique=True, index=True
+    )
     image_storage_key: Mapped[str | None] = mapped_column(String(255), unique=True)
     image_thumbnail_key: Mapped[str | None] = mapped_column(String(255))
     image_original_filename: Mapped[str | None] = mapped_column(String(255))
@@ -1350,11 +1360,15 @@ class PricingItem(Base):
         cascade="all, delete-orphan",
         order_by="PricingRelatedItem.name",
     )
+    legacy_device: Mapped[DeviceCatalog | None] = relationship(
+        back_populates="pricing_item"
+    )
 
     __table_args__ = (
         UniqueConstraint("name", "model", name="uq_pricing_item_name_model"),
         CheckConstraint("length(trim(name)) > 0", name="ck_pricing_item_name_present"),
         CheckConstraint("unit_price >= 0", name="ck_pricing_item_price_nonnegative"),
+        CheckConstraint("length(trim(currency)) = 3", name="ck_pricing_item_currency"),
     )
 
     @property
@@ -1373,6 +1387,7 @@ class PricingRelatedItem(Base):
     )
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="SAR")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -1390,6 +1405,9 @@ class PricingRelatedItem(Base):
         ),
         CheckConstraint(
             "unit_price >= 0", name="ck_pricing_related_item_price_nonnegative"
+        ),
+        CheckConstraint(
+            "length(trim(currency)) = 3", name="ck_pricing_related_item_currency"
         ),
     )
 
@@ -1484,7 +1502,7 @@ class PricingQuotation(Base):
     contact_number: Mapped[str] = mapped_column(String(40), nullable=False, default="")
     quotation_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     valid_until: Mapped[date] = mapped_column(Date, nullable=False)
-    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="SAR")
     discount_percent: Mapped[Decimal] = mapped_column(
         Numeric(5, 2), nullable=False, default=Decimal("0.00")
     )
@@ -1549,6 +1567,7 @@ class PricingQuotationLine(Base):
     item_model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="SAR")
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     skip_optional_items: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
@@ -1571,6 +1590,7 @@ class PricingQuotationLine(Base):
         CheckConstraint(
             "unit_price >= 0", name="ck_pricing_line_price_nonnegative"
         ),
+        CheckConstraint("length(trim(currency)) = 3", name="ck_pricing_line_currency"),
         UniqueConstraint(
             "quotation_id", "position", name="uq_pricing_quotation_line_position"
         ),
@@ -1604,6 +1624,7 @@ class PricingQuotationRelatedLine(Base):
     item_name: Mapped[str] = mapped_column(String(160), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="SAR")
 
     line: Mapped[PricingQuotationLine] = relationship(back_populates="related_items")
 
@@ -1613,6 +1634,9 @@ class PricingQuotationRelatedLine(Base):
         ),
         CheckConstraint(
             "unit_price >= 0", name="ck_pricing_related_line_price_nonnegative"
+        ),
+        CheckConstraint(
+            "length(trim(currency)) = 3", name="ck_pricing_related_line_currency"
         ),
     )
 
@@ -1636,6 +1660,7 @@ class PricingQuotationCharge(Base):
     label: Mapped[str] = mapped_column(String(80), nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="SAR")
     unit_label: Mapped[str] = mapped_column(String(40), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
 
@@ -1652,6 +1677,7 @@ class PricingQuotationCharge(Base):
         CheckConstraint(
             "unit_price >= 0", name="ck_pricing_charge_price_nonnegative"
         ),
+        CheckConstraint("length(trim(currency)) = 3", name="ck_pricing_charge_currency"),
         UniqueConstraint(
             "quotation_id", "charge_type", name="uq_pricing_quotation_charge_type"
         ),

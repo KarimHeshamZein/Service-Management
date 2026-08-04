@@ -52,6 +52,15 @@ def test_login_requires_both_fields(client):
     assert "Enter your password." in response.text
 
 
+def test_login_enables_browser_password_manager(client):
+    response = client.get("/login")
+
+    assert response.status_code == 200
+    assert 'name="username" type="text" autocomplete="username"' in response.text
+    assert 'name="password" type="password" autocomplete="current-password"' in response.text
+    assert "Your browser can securely save and fill this password." in response.text
+
+
 def test_password_hash_is_never_rendered(client, db):
     from app.models import User
 
@@ -75,7 +84,7 @@ def test_pages_require_authentication(client, path):
     assert response.headers["location"].startswith("/login")
 
 
-@pytest.mark.parametrize("path", ["/projects", "/sites", "/service-types", "/devices"])
+@pytest.mark.parametrize("path", ["/projects", "/sites", "/service-types"])
 def test_technical_user_can_open_catalog_pages(client, path):
     login(client, *LEADER_A)
     assert client.get(path).status_code == 200
@@ -214,14 +223,14 @@ def test_technical_navigation_shows_catalogs_but_hides_users(client):
     page = client.get("/dashboard").text
     assert 'href="/projects"' in page
     assert 'href="/sites"' in page
-    assert 'href="/devices"' in page
+    assert 'href="/devices"' not in page
     assert 'href="/users"' not in page
 
     logout(client)
     login(client, *ADMIN)
     assert 'href="/projects"' in client.get("/dashboard").text
     assert 'href="/sites"' in client.get("/dashboard").text
-    assert 'href="/devices"' in client.get("/dashboard").text
+    assert 'href="/devices"' not in client.get("/dashboard").text
     assert 'href="/users"' in client.get("/dashboard").text
 
 

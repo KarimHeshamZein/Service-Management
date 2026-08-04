@@ -11,6 +11,7 @@ import io
 import shutil
 import sys
 from datetime import timedelta
+from decimal import Decimal
 
 from PIL import Image, ImageDraw
 from sqlalchemy.engine import make_url
@@ -24,6 +25,7 @@ from app.models import (
     MaintenancePhoto,
     MaintenanceRecord,
     MaintenanceResult,
+    PricingItem,
     ServiceType,
     Site,
     User,
@@ -193,6 +195,21 @@ def seed() -> None:
         ]
         work_sites = [WorkSite(name=f"Gate {number}") for number in range(1, 4)]
         db.add_all(sites + services + devices + work_sites)
+        db.flush()
+        db.add_all(
+            [
+                PricingItem(
+                    name=device.name,
+                    model=device.model,
+                    unit_price=Decimal("0.00"),
+                    currency="SAR",
+                    service_enabled=device.is_active,
+                    legacy_device=device,
+                    is_active=device.is_active,
+                )
+                for device in devices
+            ]
+        )
         db.flush()
 
         now = utcnow()

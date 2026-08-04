@@ -34,7 +34,8 @@ C:\ServiceManagement\
 
 WinSW runs `serve.py` as `NT AUTHORITY\LocalService`, supplies the absolute
 `SMS_ENV_FILE`, and starts automatically with delayed-start recovery. Uvicorn
-binds `0.0.0.0:APP_PORT`; exact local-address and remote-network firewall rules
+binds `0.0.0.0:APP_PORT`; fixed-IP profiles use an exact local address, while DHCP
+profiles always allow the selected port on any local address from `LocalSubnet`. Firewall rules
 provide the network boundary. No `portproxy` or `iphlpsvc` dependency exists.
 
 ```text

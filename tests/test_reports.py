@@ -88,6 +88,19 @@ def test_pdf_labels_before_and_after_evidence(client):
     assert "After:" in text
 
 
+def test_report_pdf_embeds_an_arabic_font_for_user_entered_text(client):
+    login(client, *LEADER_A)
+    submit_installation(
+        client,
+        serial_number="ARABIC-PDF-EVIDENCE",
+        notes="تم تركيب الكاميرا بنجاح",
+        handover_notes="تم التسليم إلى العميل",
+    )
+    response = client.get("/reports/pdf?q=ARABIC-PDF-EVIDENCE")
+    assert response.status_code == 200
+    assert b"NotoSansArabic" in response.content
+
+
 def test_quotation_id_is_only_in_pdf_when_authorized_and_selected(client, db):
     login(client, *LEADER_A)
     submit_installation(client, serial_number="QUOTATION-PDF-CHECK")

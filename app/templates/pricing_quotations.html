@@ -21,7 +21,7 @@
   <div class="card-body tight">
     {% if quotations %}
     <div class="table-wrap"><table>
-      <thead><tr><th>{{ t('ui.quotation') }}</th><th>{{ t('ui.project') }}</th><th>{{ t('ui.date') }}</th><th>{{ t('ui.valid.until.label') }}</th><th>{{ t('ui.created.by') }}</th><th>{{ t('ui.total') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
+      <thead><tr><th>{{ t('ui.quotation') }}</th><th>{{ t('ui.project') }}</th><th>{{ t('ui.date') }}</th><th>{{ t('ui.valid.until.label') }}</th><th>{{ t('ui.created.by') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
       <tbody>{% for quotation in quotations %}
         <tr>
           <td><a class="record-no" href="/pricing/quotations/{{ quotation.id }}">{{ quotation.quotation_number }}</a></td>
@@ -29,7 +29,6 @@
           <td class="num">{{ quotation.quotation_date|date }}</td>
           <td class="num">{{ quotation.valid_until|date }}</td>
           <td>{{ quotation.created_by_name }}</td>
-          <td class="num"><strong>{{ totals[quotation.id].grand_total|money }} {{ quotation.currency }}</strong></td>
           <td style="white-space:nowrap;"><a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}">{{ t('ui.view') }}</a><a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}/edit">{{ t('ui.edit') }}</a></td>
         </tr>
       {% endfor %}</tbody>

@@ -212,7 +212,7 @@ html[dir="rtl"] .nav-group-toggle[aria-expanded="false"] .nav-chevron {
 }
 .pricing-charge-row {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) minmax(120px, .55fr) minmax(190px, .8fr);
+  grid-template-columns: minmax(180px, 1fr) minmax(110px, .45fr) minmax(170px, .7fr) minmax(90px, .35fr);
   gap: 16px;
   align-items: end;
   padding: 14px 0;

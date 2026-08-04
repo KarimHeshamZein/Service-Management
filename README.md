@@ -2,7 +2,7 @@
 
 A service evidence portal for a field service team. Technical users file installation and maintenance proof; Administrators manage the system; Customers read records for their assigned Projects.
 
-**Maintenance, Preventive Maintenance, New Installations, Reports and Pricing are implemented.** Reports reuse the All Records filters and export the full matching evidence set as PDF. Administrators also have a per-user Technician Activity audit with led and assisted work, device totals, evidence counts, edit history and PDF export. Pricing provides an imaged main/related-item catalogue, editable quotation-level price snapshots, mandatory manpower/transportation/installation charges, explicit optional-item decisions, exact VAT and discount calculations, search, and PDF export.
+**Maintenance, Preventive Maintenance, New Installations, Reports and Pricing are implemented.** Reports reuse the All Records filters and export the full matching evidence set as PDF. Administrators also have a per-user Technician Activity audit with led and assisted work, device totals, evidence counts, edit history and PDF export. Pricing provides the single imaged equipment/item catalogue, editable price and SAR/USD snapshots, mandatory manpower/transportation/installation charges, explicit optional-item decisions, search, and PDF export. Mixed-currency quotations intentionally show no aggregate total.
 
 ## What this system is not
 
@@ -73,7 +73,7 @@ sites ──────────┤                           └──< mai
 service_types ──┤
                 └──< installation_records >─┬──< installation_participants
                                             └──< installation_photos
-device_catalog ──< installed_devices ──< maintenance_record_devices
+pricing_items ── 1:1 compatibility ── device_catalog ──< installed_devices ──< maintenance_record_devices
 work_sites ──< installation_record_sites >── installation_records
 record_counters               (backs PM-YYYY-NNNNN)
 installation_record_counters  (backs NI-YYYY-NNNNN)
@@ -327,10 +327,9 @@ The workflow was exercised against the running server at desktop and mobile widt
 - **No complete administration audit log.** Record edits, technician activity
   and deployment Settings are audited, but Project, Site, service, device and
   user-management changes do not yet have one combined audit.
-- **Arabic rollout is in progress.** The dependency-free English/Arabic catalog,
-  language persistence, RTL foundation, login and shared navigation are implemented.
-  Remaining HTML pages and server-generated messages stay English until the next
-  localization phases. PDF exports intentionally remain English.
+- **Arabic UI support is implemented.** Language persistence, RTL layout, HTML pages
+  and server messages use the English/Arabic catalogs. PDF labels stay English, while
+  user-entered Arabic is shaped and rendered with an embedded Noto Sans Arabic font.
 
 ## Extension points
 
@@ -341,8 +340,9 @@ installation history without merging their database tables.
 
 **Installation selection workflow** — Administrators manage Projects at
 `/projects`, one-field Site names such as Gate 1 at `/sites`, and searchable
-device models at `/devices`. New installation entry selects Project, Site,
-Service performed and Device in that order, then registers the serialized unit.
+equipment under Pricing Items. Items marked available for service records appear in
+New Installation entry. The form selects Project, Site, Service performed and Item in
+that order, then registers the serialized unit through a hidden legacy compatibility row.
 Project, site, device, model and serial are searchable in Installation Records.
 
 **Reports** — `/reports` is a read-only preview over the same normalized record set used by `/records`. Search and Record Type filters are shared, Customer access remains restricted to assigned Projects, and `/reports/pdf` exports every matching Installation, Preventive Maintenance and Maintenance record with its work details and available evidence photos. `/reports/technician-audit` is Administrator-only and reviews one Technical user's led and assisted visits, device-level outcomes, Projects, Sites, services, evidence-photo totals and record revision history. Its PDF export can include the underlying evidence photos.

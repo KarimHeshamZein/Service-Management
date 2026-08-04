@@ -9,7 +9,7 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -158,5 +158,60 @@ def test_user_language_migration_upgrades_and_downgrades(monkeypatch):
         }
         assert "language" not in downgraded
         command.upgrade(config, "head")
+    finally:
+        engine.dispose()
+
+
+def test_item_unification_migrates_devices_and_currency_snapshots(monkeypatch):
+    engine = _scratch_engine()
+    config = Config("alembic.ini")
+    monkeypatch.setattr(settings, "database_url", _scratch_database_url())
+    try:
+        _empty_public_schema(engine)
+        command.upgrade(config, "a6d1e7c93b52")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO device_catalog
+                        (name, manufacturer, model, description, is_active,
+                         created_at, updated_at)
+                    VALUES
+                        ('Migration Camera', 'Afaqy', 'MC-1', NULL, true,
+                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO pricing_items
+                        (name, model, unit_price, is_active, created_at, updated_at)
+                    VALUES
+                        ('Migration Camera', 'MC-1', 20, true,
+                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                        ('Quotation Only Item', 'QO-1', 30, true,
+                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """
+                )
+            )
+
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            rows = connection.execute(
+                text(
+                    """
+                    SELECT name, currency, service_enabled, device_catalog_id
+                    FROM pricing_items ORDER BY name
+                    """
+                )
+            ).mappings().all()
+            assert len(rows) == 2
+            assert {row["currency"] for row in rows} == {"SAR"}
+            assert all(row["service_enabled"] for row in rows)
+            assert all(row["device_catalog_id"] is not None for row in rows)
+            assert connection.execute(
+                text("SELECT count(*) FROM device_catalog")
+            ).scalar_one() == 2
     finally:
         engine.dispose()

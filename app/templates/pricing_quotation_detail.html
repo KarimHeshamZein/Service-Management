@@ -23,27 +23,19 @@
   <thead><tr><th>{{ t('ui.image') }}</th><th>{{ t('ui.item.title') }}</th><th>{{ t('ui.quantity') }}</th><th>{{ t('ui.unit.price.label') }}</th><th>{{ t('ui.total') }}</th></tr></thead>
   <tbody>
   {% for line in quotation.lines %}
-    <tr><td>{% if line.image_storage_key %}<img src="/pricing/quotations/{{ quotation.id }}/lines/{{ line.id }}/image?size=thumb" alt="{{ line.item_name }}" style="width:72px;height:54px;object-fit:cover;border-radius:6px;">{% else %}<span class="hint">{{ t('ui.no.image') }}</span>{% endif %}</td><td><strong>{{ line.item_name }}</strong>{% if line.item_model %}<br><span class="hint">{{ line.item_model }}</span>{% endif %}</td><td class="num">{{ line.quantity }}</td><td class="num">{{ line.unit_price|money }} {{ quotation.currency }}</td><td class="num">{{ line.main_total|money }} {{ quotation.currency }}</td></tr>
+    <tr><td>{% if line.image_storage_key %}<img src="/pricing/quotations/{{ quotation.id }}/lines/{{ line.id }}/image?size=thumb" alt="{{ line.item_name }}" style="width:72px;height:54px;object-fit:cover;border-radius:6px;">{% else %}<span class="hint">{{ t('ui.no.image') }}</span>{% endif %}</td><td><strong>{{ line.item_name }}</strong>{% if line.item_model %}<br><span class="hint">{{ line.item_model }}</span>{% endif %}</td><td class="num">{{ line.quantity }}</td><td class="num">{{ line.unit_price|money }} {{ line.currency }}</td><td class="num">{{ line.main_total|money }} {{ line.currency }}</td></tr>
     {% for related in line.related_items %}
-    <tr><td></td><td style="padding-left:30px;">↳ {{ related.item_name }}</td><td class="num">{{ related.quantity }}</td><td class="num">{{ related.unit_price|money }} {{ quotation.currency }}</td><td class="num">{{ related.total|money }} {{ quotation.currency }}</td></tr>
+    <tr><td></td><td style="padding-left:30px;">↳ {{ related.item_name }}</td><td class="num">{{ related.quantity }}</td><td class="num">{{ related.unit_price|money }} {{ related.currency }}</td><td class="num">{{ related.total|money }} {{ related.currency }}</td></tr>
     {% endfor %}
     {% if line.skip_optional_items %}<tr><td></td><td style="padding-left:30px;"><span class="badge muted">{{ t('ui.optional.items.skipped') }}</span></td><td colspan="3">{{ t('ui.no.optional.item.was.included.for.this.main.item') }}</td></tr>{% endif %}
   {% endfor %}
   {% for charge in quotation.charges %}
-    <tr><td></td><td><strong>{{ charge.label }}</strong><br><span class="hint">{{ t('ui.required.quotation.charge.per') }} {{ charge.unit_label }}</span></td><td class="num">{{ charge.quantity }}</td><td class="num">{{ charge.unit_price|money }} {{ quotation.currency }}</td><td class="num">{{ charge.total|money }} {{ quotation.currency }}</td></tr>
+    <tr><td></td><td><strong>{{ charge.label }}</strong><br><span class="hint">{{ t('ui.required.quotation.charge.per') }} {{ charge.unit_label }}</span></td><td class="num">{{ charge.quantity }}</td><td class="num">{{ charge.unit_price|money }} {{ charge.currency }}</td><td class="num">{{ charge.total|money }} {{ charge.currency }}</td></tr>
   {% endfor %}
   </tbody>
 </table></div></div></div>
 
-<div class="grid cols-2">
-  <div class="card"><div class="card-head"><h2>{{ t('ui.notes.and.terms') }}</h2></div><div class="card-body"><p class="section-title">{{ t('ui.notes') }}</p><p class="preline">{{ quotation.notes or '—' }}</p><p class="section-title">{{ t('ui.terms.and.conditions') }}</p><p class="preline">{{ quotation.terms or '—' }}</p></div></div>
-  <div class="card"><div class="card-head"><h2>{{ t('ui.totals') }}</h2></div><div class="card-body"><dl class="detail-grid">
-    <div><dt>{{ t('ui.subtotal') }}</dt><dd>{{ totals.subtotal|money }} {{ quotation.currency }}</dd></div>
-    <div><dt>{{ t('ui.discount') }}{{ quotation.discount_percent }}%)</dt><dd>− {{ totals.discount|money }} {{ quotation.currency }}</dd></div>
-    <div><dt>{{ t('ui.vat') }}{{ quotation.vat_rate }}%)</dt><dd>{{ totals.vat|money }} {{ quotation.currency }}</dd></div>
-    <div><dt>{{ t('ui.grand.total') }}</dt><dd><strong>{{ totals.grand_total|money }} {{ quotation.currency }}</strong></dd></div>
-  </dl></div></div>
-</div>
+<div class="card"><div class="card-head"><h2>{{ t('ui.notes.and.terms') }}</h2></div><div class="card-body"><p class="section-title">{{ t('ui.notes') }}</p><p class="preline">{{ quotation.notes or '—' }}</p><p class="section-title">{{ t('ui.terms.and.conditions') }}</p><p class="preline">{{ quotation.terms or '—' }}</p></div></div>
 
 {% if can_delete %}<form method="post" action="/pricing/quotations/{{ quotation.id }}/delete" onsubmit="return confirm('{{ t("ui.permanently.delete.this.quotation") }}');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-danger" type="submit">{{ t('ui.delete.quotation') }}</button></form>{% endif %}
 {% endblock %}

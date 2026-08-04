@@ -26,8 +26,10 @@
           <input id="pi-name" name="name" required maxlength="160" placeholder="Camera" dir="auto"></div>
         <div class="field"><label for="pi-model">{{ t('ui.model') }}</label>
           <input id="pi-model" name="model" maxlength="120" placeholder="P3265-LV" dir="auto"></div>
-        <div class="field"><label for="pi-price">{{ t('ui.unit.price') }}{{ currency }}) <span class="req">*</span></label>
+        <div class="field"><label for="pi-price">{{ t('ui.unit.price.label') }} <span class="req">*</span></label>
           <input id="pi-price" name="unit_price" type="number" min="0" max="999999999999.99" step="0.01" required></div>
+        <div class="field"><label for="pi-currency">{{ t('ui.currency') }} <span class="req">*</span></label><select id="pi-currency" name="currency" required>{% for code in currencies %}<option value="{{ code }}">{{ code }}</option>{% endfor %}</select></div>
+        <input type="hidden" name="service_enabled" value="0"><label class="choice"><input type="checkbox" name="service_enabled" value="1" checked><span>{{ t('ui.available.for.service.records') }}</span></label>
         <div class="field"><label for="pi-image">{{ t('ui.item.image') }}</label>
           <input id="pi-image" name="image" type="file" accept="image/jpeg,image/png,image/webp">
           <p class="hint">{{ t('ui.jpeg.png.or.webp.maximum') }} {{ settings.max_upload_mb|int }} MB.</p>
@@ -54,8 +56,9 @@
         </div>
         <div class="field"><label for="pri-name">{{ t('ui.related.item') }} <span class="req">*</span></label>
           <input id="pri-name" name="name" required maxlength="160" placeholder="{{ t('ui.sim.card.transportation.engraving') }}" dir="auto"></div>
-        <div class="field"><label for="pri-price">{{ t('ui.unit.price') }}{{ currency }}) <span class="req">*</span></label>
+        <div class="field"><label for="pri-price">{{ t('ui.unit.price.label') }} <span class="req">*</span></label>
           <input id="pri-price" name="unit_price" type="number" min="0" max="999999999999.99" step="0.01" required></div>
+        <div class="field"><label for="pri-currency">{{ t('ui.currency') }} <span class="req">*</span></label><select id="pri-currency" name="currency" required>{% for code in currencies %}<option value="{{ code }}">{{ code }}</option>{% endfor %}</select></div>
       </div>
       <button class="btn btn-primary" type="submit">{{ t('ui.add.related.item') }}</button>
     </form>
@@ -78,14 +81,15 @@
     {% if items %}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>{{ t('ui.image') }}</th><th>{{ t('ui.main.item') }}</th><th>{{ t('ui.model') }}</th><th>{{ t('ui.unit.price.label') }}</th><th>{{ t('ui.related.items') }}</th><th>{{ t('ui.status') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
+        <thead><tr><th>{{ t('ui.image') }}</th><th>{{ t('ui.main.item') }}</th><th>{{ t('ui.model') }}</th><th>{{ t('ui.unit.price.label') }}</th><th>{{ t('ui.service.records') }}</th><th>{{ t('ui.related.items') }}</th><th>{{ t('ui.status') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
         <tbody>
         {% for item in items %}
           <tr>
             <td>{% if item.image_storage_key %}<img src="/pricing/items/{{ item.id }}/image?size=thumb" alt="{{ item.name }}" style="width:64px;height:48px;object-fit:cover;border-radius:6px;">{% else %}<span class="hint">{{ t('ui.no.image') }}</span>{% endif %}</td>
             <td><strong>{{ item.name }}</strong></td>
             <td>{{ item.model or '—' }}</td>
-            <td class="num">{{ item.unit_price|money }} {{ currency }}</td>
+            <td class="num">{{ item.unit_price|money }} {{ item.currency }}</td>
+            <td>{{ t('ui.available') if item.service_enabled else t('ui.not.available') }}</td>
             <td class="num">{{ item.related_items|length }}</td>
             <td>{{ ui.status_badge(item.is_active) }}</td>
             <td style="white-space:nowrap;">
@@ -97,14 +101,16 @@
             </td>
           </tr>
           <tr id="pricing-item-{{ item.id }}" hidden>
-            <td colspan="7" style="background:#f7f9fa;">
+            <td colspan="8" style="background:#f7f9fa;">
               <div class="grid cols-2">
                 <form method="post" action="/pricing/items/{{ item.id }}/edit" enctype="multipart/form-data">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <p class="section-title">{{ t('ui.main.item.details') }}</p>
                   <div class="field"><label for="pin{{ item.id }}">{{ t('ui.item.name') }}</label><input id="pin{{ item.id }}" name="name" value="{{ item.name }}" required maxlength="160" dir="auto"></div>
                   <div class="field"><label for="pim{{ item.id }}">{{ t('ui.model') }}</label><input id="pim{{ item.id }}" name="model" value="{{ item.model }}" maxlength="120" dir="auto"></div>
-                  <div class="field"><label for="pip{{ item.id }}">{{ t('ui.unit.price') }}{{ currency }})</label><input id="pip{{ item.id }}" name="unit_price" type="number" min="0" step="0.01" value="{{ item.unit_price }}" required></div>
+                  <div class="field"><label for="pip{{ item.id }}">{{ t('ui.unit.price.label') }}</label><input id="pip{{ item.id }}" name="unit_price" type="number" min="0" step="0.01" value="{{ item.unit_price }}" required></div>
+                  <div class="field"><label for="pic{{ item.id }}">{{ t('ui.currency') }}</label><select id="pic{{ item.id }}" name="currency" required>{% for code in currencies %}<option value="{{ code }}" {{ 'selected' if code == item.currency }}>{{ code }}</option>{% endfor %}</select></div>
+                  <input type="hidden" name="service_enabled" value="0"><label class="choice"><input type="checkbox" name="service_enabled" value="1" {{ 'checked' if item.service_enabled }}><span>{{ t('ui.available.for.service.records') }}</span></label>
                   <div class="field"><label for="pii{{ item.id }}">{{ t('ui.replace.image') if item.image_storage_key else t('ui.add.image') }}</label><input id="pii{{ item.id }}" name="image" type="file" accept="image/jpeg,image/png,image/webp"></div>
                   <div style="display:flex;gap:8px;flex-wrap:wrap;">
                     <button class="btn btn-primary btn-sm" type="submit">{{ t('ui.save.main.item') }}</button>
@@ -119,7 +125,8 @@
                       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                       <div class="grid cols-2">
                         <div class="field"><label for="rin{{ related.id }}">{{ t('ui.name') }}</label><input id="rin{{ related.id }}" name="name" value="{{ related.name }}" required maxlength="160" dir="auto"></div>
-                        <div class="field"><label for="rip{{ related.id }}">{{ t('ui.price') }}{{ currency }})</label><input id="rip{{ related.id }}" name="unit_price" type="number" min="0" step="0.01" value="{{ related.unit_price }}" required></div>
+                        <div class="field"><label for="rip{{ related.id }}">{{ t('ui.price') }}</label><input id="rip{{ related.id }}" name="unit_price" type="number" min="0" step="0.01" value="{{ related.unit_price }}" required></div>
+                        <div class="field"><label for="ric{{ related.id }}">{{ t('ui.currency') }}</label><select id="ric{{ related.id }}" name="currency" required>{% for code in currencies %}<option value="{{ code }}" {{ 'selected' if code == related.currency }}>{{ code }}</option>{% endfor %}</select></div>
                       </div>
                       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
                         <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.save') }}</button>

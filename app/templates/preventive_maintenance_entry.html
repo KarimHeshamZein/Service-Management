@@ -7,8 +7,8 @@
     <div class="field"><label>{{ t('ui.service.performed') }} <span class="req">*</span></label>
       <select name="service_type_id"><option value="">{{ t('ui.select.a.service') }}</option>{% for s in services %}<option value="{{ s.id }}" {{ "selected" if item.service_type_id == s.id|string }}>{{ s.name }}</option>{% endfor %}</select>
       <p class="error-text" data-error-kind="service_type_id" data-error-for="service_type_id_{{ index }}" style="{{ '' if errors["service_type_id_" ~ index] else 'display:none' }}">{{ errors["service_type_id_" ~ index] or '' }}</p></div>
-    <div class="field"><label>{{ t('ui.installed.device') }} <span class="req">*</span></label>
-      <select name="installed_device_id" data-installed-device-select><option value="">{{ t('ui.select.an.installed.device') }}</option>{% for d in installed_devices %}<option value="{{ d.id }}" data-project="{{ d.site_id }}" data-site="{{ d.effective_work_site_id or '' }}" {{ "selected" if item.installed_device_id == d.id|string }}>{{ d.device_name }} — {{ d.device_model }} · {{ d.serial_number }}</option>{% endfor %}</select>
+    <div class="field"><label>{{ t('ui.installed.item') }} <span class="req">*</span></label>
+      <select name="installed_device_id" data-installed-device-select><option value="">{{ t('ui.select.an.installed.item') }}</option>{% for d in installed_devices %}<option value="{{ d.id }}" data-project="{{ d.site_id }}" data-site="{{ d.effective_work_site_id or '' }}" {{ "selected" if item.installed_device_id == d.id|string }}>{{ d.device_name }} — {{ d.device_model }} · {{ d.serial_number }}</option>{% endfor %}</select>
       <p class="error-text" data-error-kind="installed_device_id" data-error-for="installed_device_id_{{ index }}" style="{{ '' if errors["installed_device_id_" ~ index] else 'display:none' }}">{{ errors["installed_device_id_" ~ index] or '' }}</p></div>
   </div>
   <div class="field"><span class="field-label">{{ t('ui.maintenance.result') }} <span class="req">*</span></span><div class="choice-list">{% for r in results %}<label class="choice"><input type="radio" name="result_{{ index }}" data-name-kind="result" value="{{ r.value }}" {{ "checked" if item.result == r.value }}><span><span class="choice-title">{{ t('record.result.' ~ r.value) }}</span></span></label>{% endfor %}</div>
@@ -38,7 +38,7 @@
 {% block topbar_title %}{{ t('ui.preventive.maintenance.title') }}{% endblock %}
 {% block content %}
 <div class="page-head"><div><span class="eyebrow">{{ t('nav.preventive_maintenance') }}</span><h1>{{ t('ui.new.preventive.maintenance') }}</h1>
-  <p class="lede">{{ t('ui.select.the.shared.location.then.add.every.device.maintained.during.this.visit') }}</p></div></div>
+  <p class="lede">{{ t('ui.select.the.shared.location.then.add.every.item.maintained.during.this.visit') }}</p></div></div>
 <form method="post" action="/maintenance/submit" enctype="multipart/form-data" novalidate data-async-form>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="form_token" value="{{ form_token }}">
   <div class="alert error" role="alert" data-form-error style="{{ '' if errors.form else 'display:none' }}">{{ errors.form or '' }}</div>
@@ -52,7 +52,7 @@
   </div></div></div>
 
   <div data-device-items>{% for item in form.devices %}{{ device_row(item, loop.index0) }}{% endfor %}</div>
-  <button type="button" class="btn btn-secondary" data-add-device>{{ t('ui.add.add.another.device') }}</button>
+  <button type="button" class="btn btn-secondary" data-add-device>{{ t('ui.add.another.item') }}</button>
   <template data-device-template>{{ device_row({}, 0) }}</template>
 
   <div class="card"><div class="card-head"><h2>{{ t('ui.people.on.site') }}</h2></div><div class="card-body">

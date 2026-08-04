@@ -65,6 +65,7 @@
                      aria-invalid="{{ 'true' if errors.password else 'false' }}"
                      {% if errors.password %}aria-describedby="password-error"{% endif %}>
               {% if errors.password %}<p class="error-text" id="password-error">{{ errors.password }}</p>{% endif %}
+              <p class="hint">{{ t('login.password_manager_hint') }}</p>
             </div>
 
             <button type="submit" class="btn btn-primary btn-block">{{ t('login.action.submit') }}</button>
