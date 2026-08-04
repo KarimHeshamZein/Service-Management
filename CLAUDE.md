@@ -4,6 +4,54 @@ Service Management System — a maintenance evidence portal. Read `README.md` fo
 full architecture, entities and known limitations. This file is the short version
 plus the rules that aren't inferable from the code.
 
+## Current handoff — 2026-08-04
+
+- The latest source release is committed on `main` at `bfdb305` and pushed to
+  `origin/main` (`KarimHeshamZein/Service-Management`). A documentation-only
+  handoff commit may follow it.
+- The latest tested offline installer is `1.1.0-rc22`. Its ignored local files
+  are `dist/service-management-offline-1.1.0-rc22.zip` and the adjacent
+  `.zip.sha256` file. The ZIP is about 532 MB and cannot be stored in ordinary
+  GitHub source history. Its SHA-256 is
+  `7df76e79a67eb8a36f329f7230f3eaeb027bac4901d62d07026e60edbe2bb21e`.
+- RC22 fixes Repair mode's final release switch. PowerShell previously used
+  `Remove-Item` on the `current` directory junction, which requested interactive
+  confirmation inside the hidden setup worker. `Set-CurrentRelease` now verifies
+  that `current` is a junction and removes only that junction with
+  `[IO.Directory]::Delete`; it never traverses or removes the targeted release.
+- The repair path has an isolated Windows/PostgreSQL end-to-end regression test.
+  It creates a temporary database and install root, performs a real `pg_dump`,
+  runs real Alembic migration, backs up uploads and `.env`, replaces the real
+  junction, preserves the previous release, and simulates only Windows service
+  control and the HTTP health response because the development session is not
+  elevated. The focused result after the RC22 fix was
+  `20 passed, 1 warning in 25.62s` for `tests/test_release_workflow.py`.
+- The complete test suite was not rerun after the last deployment-only fix at the
+  user's request to keep iteration fast. Run it before the next product release.
+- Recent shipped work also includes Arabic PDF font/shaping support, mixed
+  quotation currencies, calculated installation labour, transportation quantity,
+  Pricing Items as the single service-entry equipment catalog, browser password
+  manager support, and Service Console/firewall corrections for LAN access.
+- The development/test installation used during installer troubleshooting was
+  under `D:\ServiceManagement`, commonly on application port `8995`. Treat that
+  as external machine state, not repository configuration. Never modify or remove
+  it unless the user explicitly asks.
+- `index.html` in the repository root is currently an unrelated, untracked
+  "Camera Installation Planner" file. Preserve it and do not stage, edit, or
+  delete it unless the user explains that it belongs to this project.
+
+### Resume checklist
+
+1. Read this file and `README.md`, then run `git status --short --branch` and
+   `git log -3 --oneline --decorate`.
+2. Confirm the requested work and report the proposed change before editing.
+3. Preserve ignored deployment bundles, local `.env`, databases, uploads, and
+   the external Windows installation.
+4. Use Alembic for every schema change; never run migrations against the
+   development or deployed database without explicit permission.
+5. For installer work, add or update a repeatable repair/install regression and
+   test the exact packaged payload before asking the user to try another RC.
+
 ## Working agreement
 
 1. **Read → report → fix.** Investigate and report findings first. Do not edit
