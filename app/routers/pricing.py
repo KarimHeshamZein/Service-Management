@@ -4,9 +4,10 @@ from __future__ import annotations
 import re
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
@@ -21,8 +22,10 @@ from ..models import (
     PricingItem,
     PricingQuotation,
     PricingQuotationCharge,
+    PricingQuotationInvoiceImage,
     PricingQuotationLine,
     PricingQuotationRelatedLine,
+    PricingQuotationSiteSurveyImage,
     PricingRelatedItem,
     PricingSettings,
     Site,
@@ -31,13 +34,24 @@ from ..models import (
 )
 from ..pricing import money, next_quotation_number, percentage, quantity
 from ..pricing_pdf import build_quotation_pdf
+from ..quotation_planner import (
+    InstallationPlanSubmission,
+    validate_installation_plan_submission,
+)
 from ..security import (
     consume_form_token,
     csrf_valid,
     form_token_available,
     issue_form_token,
 )
-from ..uploads import UploadError, delete_stored, resolve_storage_path, store_image
+from ..uploads import (
+    StoredImage,
+    UploadError,
+    delete_stored,
+    resolve_storage_path,
+    store_image,
+    validate_image,
+)
 
 router = APIRouter(
     prefix="/pricing",
@@ -59,7 +73,168 @@ DEFAULT_SETTINGS = {
     "default_installation_price": Decimal("0.00"),
 }
 CURRENCIES = ("SAR", "USD")
+MAX_QUOTATION_INVOICE_IMAGES = 20
+MAX_INVOICE_UPLOAD_BATCH = 10
+MAX_QUOTATION_SITE_SURVEY_IMAGES = 20
+MAX_SITE_SURVEY_UPLOAD_BATCH = 10
 LINE_ITEM_RE = re.compile(r"^line_(\d+)_item_id$")
+PLANNER_HTML = Path(__file__).resolve().parents[1] / "static" / "camera-planner.html"
+
+
+def _wants_json(request: Request) -> bool:
+    return request.headers.get("x-requested-with") == "camera-planner"
+
+
+def _json_errors(
+    errors: dict[str, str], *, form_token: str | None = None
+) -> JSONResponse:
+    payload: dict[str, object] = {"errors": errors}
+    if form_token:
+        payload["form_token"] = form_token
+    return JSONResponse(payload, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+
+
+async def _uploaded_image(form, name: str) -> tuple[str | None, bytes | None]:
+    value = form.get(name)
+    if not isinstance(value, UploadFile) or not value.filename:
+        return None, None
+    return value.filename, await value.read()
+
+
+async def _new_site_survey_submissions(
+    form, errors: dict[str, str]
+) -> list[tuple[str, bytes]]:
+    uploads = [
+        value
+        for value in form.getlist("site_survey_images")
+        if isinstance(value, UploadFile) and value.filename
+    ]
+    if len(uploads) > MAX_SITE_SURVEY_UPLOAD_BATCH:
+        errors["site_survey_images"] = (
+            "Upload up to 10 site survey layout images at a time."
+        )
+        return []
+    submissions: list[tuple[str, bytes]] = []
+    try:
+        for upload in uploads:
+            data = await upload.read()
+            validate_image(upload.filename, data)
+            submissions.append((upload.filename, data))
+    except UploadError as exc:
+        errors["site_survey_images"] = str(exc)
+        return []
+    return submissions
+
+
+def _store_site_survey_submissions(
+    submissions: list[tuple[str, bytes]],
+) -> list[StoredImage]:
+    stored_images: list[StoredImage] = []
+    try:
+        for filename, data in submissions:
+            stored_images.append(store_image(filename, data))
+    except UploadError:
+        delete_stored(
+            *[
+                key
+                for stored in stored_images
+                for key in (stored.storage_key, stored.thumbnail_key)
+            ]
+        )
+        raise
+    return stored_images
+
+
+async def _plan_submission(form, errors: dict[str, str]):
+    background_name, background_data = await _uploaded_image(
+        form, "installation_plan_background"
+    )
+    output_name, output_data = await _uploaded_image(form, "installation_plan_output")
+    try:
+        return validate_installation_plan_submission(
+            form.get("installation_plan_state"),
+            background_filename=background_name,
+            background_data=background_data,
+            output_filename=output_name,
+            output_data=output_data,
+        )
+    except UploadError as exc:
+        errors["installation_plan"] = str(exc)
+        return None
+
+
+def _store_plan_images(
+    submission: InstallationPlanSubmission | None,
+) -> tuple[StoredImage | None, StoredImage | None]:
+    if submission is None:
+        return None, None
+    background = (
+        store_image(submission.background_filename or "floor-plan.png", submission.background_data)
+        if submission.background_data
+        else None
+    )
+    try:
+        output = store_image(submission.output_filename, submission.output_data)
+    except UploadError:
+        if background:
+            delete_stored(background.storage_key, background.thumbnail_key)
+        raise
+    return background, output
+
+
+def _stored_plan_keys(quotation: PricingQuotation) -> list[str | None]:
+    return [
+        quotation.plan_background_storage_key,
+        quotation.plan_background_thumbnail_key,
+        quotation.plan_output_storage_key,
+        quotation.plan_output_thumbnail_key,
+    ]
+
+
+def _invoice_image_keys(quotation: PricingQuotation) -> list[str | None]:
+    return [
+        key
+        for invoice in quotation.invoice_images
+        for key in (invoice.storage_key, invoice.thumbnail_key)
+    ]
+
+
+def _site_survey_image_keys(quotation: PricingQuotation) -> list[str | None]:
+    return [
+        key
+        for image in quotation.site_survey_images
+        for key in (image.storage_key, image.thumbnail_key)
+    ]
+
+
+def _apply_plan(
+    quotation: PricingQuotation,
+    submission: InstallationPlanSubmission | None,
+    background: StoredImage | None,
+    output: StoredImage | None,
+) -> None:
+    quotation.installation_plan_state = submission.state if submission else None
+    quotation.plan_background_storage_key = background.storage_key if background else None
+    quotation.plan_background_thumbnail_key = background.thumbnail_key if background else None
+    quotation.plan_background_content_type = background.content_type if background else None
+    quotation.plan_background_file_size = background.file_size if background else None
+    quotation.plan_output_storage_key = output.storage_key if output else None
+    quotation.plan_output_thumbnail_key = output.thumbnail_key if output else None
+    quotation.plan_output_content_type = output.content_type if output else None
+    quotation.plan_output_file_size = output.file_size if output else None
+
+
+def _plan_context(quotation: PricingQuotation | None) -> dict:
+    if quotation is None or not quotation.installation_plan_state:
+        return {"state": None, "background_url": None}
+    return {
+        "state": quotation.installation_plan_state,
+        "background_url": (
+            f"/pricing/quotations/{quotation.id}/installation-plan/background"
+            if quotation.plan_background_storage_key
+            else None
+        ),
+    }
 
 
 def _currency(value: object, default: str = "") -> str | None:
@@ -568,6 +743,8 @@ def _quotation_query():
             PricingQuotationLine.related_items
         ),
         selectinload(PricingQuotation.charges),
+        selectinload(PricingQuotation.invoice_images),
+        selectinload(PricingQuotation.site_survey_images),
     )
 
 
@@ -689,6 +866,7 @@ def _quotation_form_context(
         "form_token": form_token or issue_form_token(request),
         "currency": _pricing_settings(db)["currency"],
         "currencies": CURRENCIES,
+        "planner": _plan_context(quotation),
     }
 
 
@@ -1052,6 +1230,20 @@ def _apply_quote_header(
     quotation.updated_at = utcnow()
 
 
+@router.get("/planner/embed")
+def installation_planner_embed(
+    user: User = Depends(require_pricing_access),
+):
+    return FileResponse(
+        PLANNER_HTML,
+        media_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Options": "SAMEORIGIN",
+        },
+    )
+
+
 @router.get("/quotations/new")
 def new_quotation_page(
     request: Request,
@@ -1081,7 +1273,12 @@ async def create_quotation(
         errors["form"] = "This quotation was already submitted. Check the quotations list."
     lines = _build_quote_lines(db, submitted, errors)
     charges = _build_quote_charges(form, errors)
+    plan_submission = await _plan_submission(form, errors)
+    site_survey_submissions = await _new_site_survey_submissions(form, errors)
     if errors:
+        next_token = issue_form_token(request)
+        if _wants_json(request):
+            return _json_errors(errors, form_token=next_token)
         return render(
             request,
             "pricing_quotation_form.html",
@@ -1090,7 +1287,7 @@ async def create_quotation(
                 db,
                 form=form_values,
                 errors=errors,
-                form_token=issue_form_token(request),
+                form_token=next_token,
             ),
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
@@ -1098,6 +1295,9 @@ async def create_quotation(
         snapshot_keys = _snapshot_line_images(db, lines)
     except UploadError as exc:
         errors["form"] = str(exc)
+        next_token = issue_form_token(request)
+        if _wants_json(request):
+            return _json_errors(errors, form_token=next_token)
         return render(
             request,
             "pricing_quotation_form.html",
@@ -1106,12 +1306,68 @@ async def create_quotation(
                 db,
                 form=form_values,
                 errors=errors,
-                form_token=issue_form_token(request),
+                form_token=next_token,
             ),
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
-    if not consume_form_token(request, str(form.get("form_token") or "")):
+    try:
+        plan_background, plan_output = _store_plan_images(plan_submission)
+    except UploadError as exc:
         delete_stored(*snapshot_keys)
+        errors["installation_plan"] = str(exc)
+        next_token = issue_form_token(request)
+        if _wants_json(request):
+            return _json_errors(errors, form_token=next_token)
+        return render(
+            request,
+            "pricing_quotation_form.html",
+            _quotation_form_context(
+                request,
+                db,
+                form=form_values,
+                errors=errors,
+                form_token=next_token,
+            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    plan_keys = [
+        plan_background.storage_key if plan_background else None,
+        plan_background.thumbnail_key if plan_background else None,
+        plan_output.storage_key if plan_output else None,
+        plan_output.thumbnail_key if plan_output else None,
+    ]
+    try:
+        site_survey_images = _store_site_survey_submissions(site_survey_submissions)
+    except UploadError as exc:
+        delete_stored(*snapshot_keys, *plan_keys)
+        errors["site_survey_images"] = str(exc)
+        next_token = issue_form_token(request)
+        if _wants_json(request):
+            return _json_errors(errors, form_token=next_token)
+        return render(
+            request,
+            "pricing_quotation_form.html",
+            _quotation_form_context(
+                request,
+                db,
+                form=form_values,
+                errors=errors,
+                form_token=next_token,
+            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    site_survey_keys = [
+        key
+        for stored in site_survey_images
+        for key in (stored.storage_key, stored.thumbnail_key)
+    ]
+    if not consume_form_token(request, str(form.get("form_token") or "")):
+        delete_stored(*snapshot_keys, *plan_keys, *site_survey_keys)
+        if _wants_json(request):
+            return _json_errors(
+                {"form": "This quotation was already submitted."},
+                form_token=issue_form_token(request),
+            )
         flash(request, "This quotation was already submitted.", "error")
         return _redirect("/pricing/quotations")
 
@@ -1135,15 +1391,31 @@ async def create_quotation(
     _apply_quote_header(quotation, values, pricing_settings)
     quotation.lines = lines
     quotation.charges = charges
+    _apply_plan(quotation, plan_submission, plan_background, plan_output)
+    quotation.site_survey_images = [
+        PricingQuotationSiteSurveyImage(
+            storage_key=stored.storage_key,
+            thumbnail_key=stored.thumbnail_key,
+            original_filename=stored.original_filename,
+            content_type=stored.content_type,
+            file_size=stored.file_size,
+            uploaded_by_id=user.id,
+            uploaded_by_name=user.full_name,
+        )
+        for stored in site_survey_images
+    ]
     db.add(quotation)
     try:
         db.commit()
     except SQLAlchemyError:
         db.rollback()
-        delete_stored(*snapshot_keys)
+        delete_stored(*snapshot_keys, *plan_keys, *site_survey_keys)
         errors["form"] = (
             "The quotation could not be saved. Review the form and try again."
         )
+        next_token = issue_form_token(request)
+        if _wants_json(request):
+            return _json_errors(errors, form_token=next_token)
         return render(
             request,
             "pricing_quotation_form.html",
@@ -1152,11 +1424,13 @@ async def create_quotation(
                 db,
                 form=form_values,
                 errors=errors,
-                form_token=issue_form_token(request),
+                form_token=next_token,
             ),
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
     flash(request, f"Quotation {quotation.quotation_number} created.")
+    if _wants_json(request):
+        return JSONResponse({"redirect": f"/pricing/quotations/{quotation.id}"})
     return _redirect(f"/pricing/quotations/{quotation.id}")
 
 
@@ -1225,6 +1499,328 @@ def quotation_line_image(
         media_type=("image/jpeg" if key == line.image_thumbnail_key else line.image_content_type),
         headers={"Cache-Control": "private, max-age=600"},
     )
+
+
+@router.get("/quotations/{quotation_id}/installation-plan/{asset}")
+def quotation_installation_plan_image(
+    quotation_id: int,
+    asset: str,
+    size: str = "original",
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    quotation = _quotation_or_404(db, quotation_id)
+    if asset == "background":
+        original = quotation.plan_background_storage_key
+        thumbnail = quotation.plan_background_thumbnail_key
+        content_type = quotation.plan_background_content_type
+    elif asset == "output":
+        original = quotation.plan_output_storage_key
+        thumbnail = quotation.plan_output_thumbnail_key
+        content_type = quotation.plan_output_content_type
+    else:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Installation plan not found.")
+    if not original:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Installation plan not found.")
+    key = thumbnail if size == "thumb" and thumbnail else original
+    try:
+        path = resolve_storage_path(key)
+    except UploadError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Installation plan not found.")
+    return FileResponse(
+        path,
+        media_type="image/jpeg" if key == thumbnail else content_type,
+        headers={"Cache-Control": "private, max-age=600"},
+    )
+
+
+@router.post("/quotations/{quotation_id}/invoice-images")
+async def upload_quotation_invoice_images(
+    quotation_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    quotation = _quotation_or_404(db, quotation_id)
+    form = await request.form()
+    return_path = (
+        f"/pricing/quotations/{quotation.id}/edit#purchase-invoice-proof"
+        if str(form.get("return_to") or "") == "edit"
+        else f"/pricing/quotations/{quotation.id}"
+    )
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect(return_path)
+    uploads = [
+        value
+        for value in form.getlist("invoice_images")
+        if isinstance(value, UploadFile) and value.filename
+    ]
+    if not uploads:
+        flash(request, "Select at least one invoice image.", "error")
+        return _redirect(return_path)
+    if len(uploads) > MAX_INVOICE_UPLOAD_BATCH:
+        flash(request, "Upload up to 10 invoice images at a time.", "error")
+        return _redirect(return_path)
+    if len(quotation.invoice_images) + len(uploads) > MAX_QUOTATION_INVOICE_IMAGES:
+        flash(request, "A quotation can contain up to 20 invoice images.", "error")
+        return _redirect(return_path)
+
+    stored_images: list[StoredImage] = []
+    try:
+        for upload in uploads:
+            stored_images.append(store_image(upload.filename, await upload.read()))
+    except UploadError as exc:
+        delete_stored(
+            *[
+                key
+                for stored in stored_images
+                for key in (stored.storage_key, stored.thumbnail_key)
+            ]
+        )
+        flash(request, str(exc), "error")
+        return _redirect(return_path)
+
+    invoice_images = [
+        PricingQuotationInvoiceImage(
+            quotation_id=quotation.id,
+            storage_key=stored.storage_key,
+            thumbnail_key=stored.thumbnail_key,
+            original_filename=stored.original_filename,
+            content_type=stored.content_type,
+            file_size=stored.file_size,
+            uploaded_by_id=user.id,
+            uploaded_by_name=user.full_name,
+        )
+        for stored in stored_images
+    ]
+    db.add_all(invoice_images)
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        delete_stored(
+            *[
+                key
+                for stored in stored_images
+                for key in (stored.storage_key, stored.thumbnail_key)
+            ]
+        )
+        flash(request, "The invoice images could not be saved. Try again.", "error")
+        return _redirect(return_path)
+    flash(request, f"{len(invoice_images)} invoice image(s) added.")
+    return _redirect(return_path)
+
+
+@router.post("/quotations/{quotation_id}/site-survey-images")
+async def upload_quotation_site_survey_images(
+    quotation_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    quotation = _quotation_or_404(db, quotation_id)
+    form = await request.form()
+    return_path = (
+        f"/pricing/quotations/{quotation.id}/edit#site-survey-layouts"
+        if str(form.get("return_to") or "") == "edit"
+        else f"/pricing/quotations/{quotation.id}#site-survey-layouts"
+    )
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect(return_path)
+    uploads = [
+        value
+        for value in form.getlist("site_survey_images")
+        if isinstance(value, UploadFile) and value.filename
+    ]
+    if not uploads:
+        flash(request, "Select at least one site survey layout image.", "error")
+        return _redirect(return_path)
+    if len(uploads) > MAX_SITE_SURVEY_UPLOAD_BATCH:
+        flash(request, "Upload up to 10 site survey layout images at a time.", "error")
+        return _redirect(return_path)
+    if (
+        len(quotation.site_survey_images) + len(uploads)
+        > MAX_QUOTATION_SITE_SURVEY_IMAGES
+    ):
+        flash(request, "A quotation can contain up to 20 site survey layout images.", "error")
+        return _redirect(return_path)
+
+    stored_images: list[StoredImage] = []
+    try:
+        for upload in uploads:
+            stored_images.append(store_image(upload.filename, await upload.read()))
+    except UploadError as exc:
+        delete_stored(
+            *[
+                key
+                for stored in stored_images
+                for key in (stored.storage_key, stored.thumbnail_key)
+            ]
+        )
+        flash(request, str(exc), "error")
+        return _redirect(return_path)
+
+    survey_images = [
+        PricingQuotationSiteSurveyImage(
+            quotation_id=quotation.id,
+            storage_key=stored.storage_key,
+            thumbnail_key=stored.thumbnail_key,
+            original_filename=stored.original_filename,
+            content_type=stored.content_type,
+            file_size=stored.file_size,
+            uploaded_by_id=user.id,
+            uploaded_by_name=user.full_name,
+        )
+        for stored in stored_images
+    ]
+    db.add_all(survey_images)
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        delete_stored(
+            *[
+                key
+                for stored in stored_images
+                for key in (stored.storage_key, stored.thumbnail_key)
+            ]
+        )
+        flash(request, "The site survey images could not be saved. Try again.", "error")
+        return _redirect(return_path)
+    flash(request, f"{len(survey_images)} site survey layout image(s) added.")
+    return _redirect(return_path)
+
+
+@router.get("/quotations/{quotation_id}/site-survey-images/{image_id}")
+def quotation_site_survey_image(
+    quotation_id: int,
+    image_id: int,
+    size: str = "original",
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    quotation = _quotation_or_404(db, quotation_id)
+    survey_image = next(
+        (
+            candidate
+            for candidate in quotation.site_survey_images
+            if candidate.id == image_id
+        ),
+        None,
+    )
+    if survey_image is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Site survey image not found.")
+    key = (
+        survey_image.thumbnail_key
+        if size == "thumb" and survey_image.thumbnail_key
+        else survey_image.storage_key
+    )
+    try:
+        path = resolve_storage_path(key)
+    except UploadError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Site survey image not found.")
+    return FileResponse(
+        path,
+        media_type=(
+            "image/jpeg" if key == survey_image.thumbnail_key else survey_image.content_type
+        ),
+        headers={"Cache-Control": "private, max-age=600"},
+    )
+
+
+@router.post("/quotations/{quotation_id}/site-survey-images/{image_id}/delete")
+async def delete_quotation_site_survey_image(
+    quotation_id: int,
+    image_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    quotation = _quotation_or_404(db, quotation_id)
+    form = await request.form()
+    return_path = (
+        f"/pricing/quotations/{quotation.id}/edit#site-survey-layouts"
+        if str(form.get("return_to") or "") == "edit"
+        else f"/pricing/quotations/{quotation.id}#site-survey-layouts"
+    )
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect(return_path)
+    survey_image = next(
+        (
+            candidate
+            for candidate in quotation.site_survey_images
+            if candidate.id == image_id
+        ),
+        None,
+    )
+    if survey_image is None:
+        flash(request, "That site survey image no longer exists.", "error")
+        return _redirect(return_path)
+    keys = (survey_image.storage_key, survey_image.thumbnail_key)
+    db.delete(survey_image)
+    db.commit()
+    delete_stored(*keys)
+    flash(request, "Site survey image removed.")
+    return _redirect(return_path)
+
+
+@router.get("/quotations/{quotation_id}/invoice-images/{invoice_id}")
+def quotation_invoice_image(
+    quotation_id: int,
+    invoice_id: int,
+    size: str = "original",
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    quotation = _quotation_or_404(db, quotation_id)
+    invoice = next(
+        (candidate for candidate in quotation.invoice_images if candidate.id == invoice_id),
+        None,
+    )
+    if invoice is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invoice image not found.")
+    key = invoice.thumbnail_key if size == "thumb" and invoice.thumbnail_key else invoice.storage_key
+    try:
+        path = resolve_storage_path(key)
+    except UploadError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Invoice image not found.")
+    return FileResponse(
+        path,
+        media_type="image/jpeg" if key == invoice.thumbnail_key else invoice.content_type,
+        headers={"Cache-Control": "private, max-age=600"},
+    )
+
+
+@router.post("/quotations/{quotation_id}/invoice-images/{invoice_id}/delete")
+async def delete_quotation_invoice_image(
+    quotation_id: int,
+    invoice_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    quotation = _quotation_or_404(db, quotation_id)
+    form = await request.form()
+    return_path = (
+        f"/pricing/quotations/{quotation.id}/edit#purchase-invoice-proof"
+        if str(form.get("return_to") or "") == "edit"
+        else f"/pricing/quotations/{quotation.id}"
+    )
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect(return_path)
+    invoice = next(
+        (candidate for candidate in quotation.invoice_images if candidate.id == invoice_id),
+        None,
+    )
+    if invoice is None:
+        flash(request, "That invoice image no longer exists.", "error")
+        return _redirect(return_path)
+    keys = (invoice.storage_key, invoice.thumbnail_key)
+    db.delete(invoice)
+    db.commit()
+    delete_stored(*keys)
+    flash(request, "Invoice image removed.")
+    return _redirect(return_path)
 
 
 def _existing_quote_form(quotation: PricingQuotation) -> dict:
@@ -1308,7 +1904,10 @@ async def edit_quotation(
         errors["form"] = "Your session expired. Reload the page and try again."
     lines = _build_quote_lines(db, submitted, errors)
     charges = _build_quote_charges(form, errors)
+    plan_submission = await _plan_submission(form, errors)
     if errors:
+        if _wants_json(request):
+            return _json_errors(errors)
         return render(
             request,
             "pricing_quotation_form.html",
@@ -1325,6 +1924,8 @@ async def edit_quotation(
         new_snapshot_keys = _snapshot_line_images(db, lines)
     except UploadError as exc:
         errors["form"] = str(exc)
+        if _wants_json(request):
+            return _json_errors(errors)
         return render(
             request,
             "pricing_quotation_form.html",
@@ -1337,7 +1938,33 @@ async def edit_quotation(
             ),
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
+    try:
+        plan_background, plan_output = _store_plan_images(plan_submission)
+    except UploadError as exc:
+        delete_stored(*new_snapshot_keys)
+        errors["installation_plan"] = str(exc)
+        if _wants_json(request):
+            return _json_errors(errors)
+        return render(
+            request,
+            "pricing_quotation_form.html",
+            _quotation_form_context(
+                request,
+                db,
+                quotation=quotation,
+                form=form_values,
+                errors=errors,
+            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
+    new_plan_keys = [
+        plan_background.storage_key if plan_background else None,
+        plan_background.thumbnail_key if plan_background else None,
+        plan_output.storage_key if plan_output else None,
+        plan_output.thumbnail_key if plan_output else None,
+    ]
     old_snapshot_keys = _line_image_keys(quotation.lines)
+    old_plan_keys = _stored_plan_keys(quotation)
     _apply_quote_header(quotation, values, _pricing_settings(db))
     quotation.lines.clear()
     db.flush()
@@ -1345,14 +1972,17 @@ async def edit_quotation(
     quotation.charges.clear()
     db.flush()
     quotation.charges = charges
+    _apply_plan(quotation, plan_submission, plan_background, plan_output)
     try:
         db.commit()
     except SQLAlchemyError:
         db.rollback()
-        delete_stored(*new_snapshot_keys)
+        delete_stored(*new_snapshot_keys, *new_plan_keys)
         errors["form"] = (
             "The quotation could not be saved. Review the form and try again."
         )
+        if _wants_json(request):
+            return _json_errors(errors)
         return render(
             request,
             "pricing_quotation_form.html",
@@ -1366,7 +1996,10 @@ async def edit_quotation(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
     delete_stored(*old_snapshot_keys)
+    delete_stored(*old_plan_keys)
     flash(request, f"Quotation {quotation.quotation_number} updated.")
+    if _wants_json(request):
+        return JSONResponse({"redirect": f"/pricing/quotations/{quotation.id}"})
     return _redirect(f"/pricing/quotations/{quotation.id}")
 
 
@@ -1385,9 +2018,12 @@ async def delete_quotation(
     quotation = _quotation_or_404(db, quotation_id)
     number = quotation.quotation_number
     snapshot_keys = _line_image_keys(quotation.lines)
+    plan_keys = _stored_plan_keys(quotation)
+    invoice_keys = _invoice_image_keys(quotation)
+    site_survey_keys = _site_survey_image_keys(quotation)
     db.delete(quotation)
     db.commit()
-    delete_stored(*snapshot_keys)
+    delete_stored(*snapshot_keys, *plan_keys, *invoice_keys, *site_survey_keys)
     flash(request, f"Quotation {number} deleted.")
     return _redirect("/pricing/quotations")
 
