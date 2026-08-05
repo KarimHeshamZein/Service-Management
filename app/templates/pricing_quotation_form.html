@@ -9,7 +9,7 @@
 </div>
 
 {% if errors.form %}<div class="alert error">{{ errors.form }}</div>{% endif %}
-<form method="post" action="{{ "/pricing/quotations/" ~ quotation.id ~ "/edit" if quotation else "/pricing/quotations" }}" data-pricing-quotation-form>
+<form method="post" enctype="multipart/form-data" action="{{ "/pricing/quotations/" ~ quotation.id ~ "/edit" if quotation else "/pricing/quotations" }}" data-pricing-quotation-form>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   {% if not quotation %}<input type="hidden" name="form_token" value="{{ form_token }}">{% endif %}
   <div class="card">
@@ -79,11 +79,74 @@
     </div>
   </div>
 
+  <div class="card quotation-planner-card" data-quotation-planner>
+    <div class="card-head">
+      <div>
+        <h2>{{ t('ui.camera.installation.plan') }}</h2>
+        <p class="hint" style="margin:4px 0 0;">{{ t('ui.camera.installation.plan.help') }}</p>
+      </div>
+    </div>
+    <div class="card-body quotation-planner-body">
+      {% if errors.installation_plan %}<p class="field-error" data-planner-server-error>{{ errors.installation_plan }}</p>{% endif %}
+      <div class="alert error" data-planner-submit-error hidden></div>
+      <iframe
+        class="quotation-planner-frame"
+        src="/pricing/planner/embed"
+        title="{{ t('ui.camera.installation.plan') }}"
+        data-planner-frame
+      ></iframe>
+      <input type="hidden" name="installation_plan_state" data-planner-state>
+      <input type="file" name="installation_plan_background" accept="image/png,image/jpeg,image/webp" data-planner-background hidden>
+      <input type="file" name="installation_plan_output" accept="image/png,image/jpeg,image/webp" data-planner-output hidden>
+    </div>
+  </div>
+
+  {% if not quotation %}
+  <div class="card">
+    <div class="card-head"><div><h2>{{ t('ui.site.survey.layouts') }}</h2><p class="hint" style="margin:4px 0 0;">{{ t('ui.site.survey.layouts.help') }}</p></div></div>
+    <div class="card-body" data-image-upload-queue data-remove-label="{{ t('ui.remove') }}" data-selected-template="{{ t('ui.site.survey.images.selected', count='__COUNT__') }}">
+      <div class="field"><label for="new-quotation-site-survey-images">{{ t('ui.upload.site.survey.images') }}</label><input id="new-quotation-site-survey-images" name="site_survey_images" type="file" accept="image/jpeg,image/png,image/webp" multiple data-image-file-input><p class="hint">{{ t('ui.site.survey.upload.queue.help') }}</p>{% if errors.site_survey_images %}<p class="field-error">{{ errors.site_survey_images }}</p>{% endif %}</div>
+      <div class="alert warning" data-image-upload-reminder role="status" hidden>{{ t('ui.site.survey.images.pending.create') }}</div>
+      <div class="invoice-upload-queue" data-image-file-queue hidden><strong data-image-file-count></strong><div class="invoice-upload-selection" data-image-file-list></div></div>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="card"><div class="card-head"><h2>{{ t('ui.notes.and.terms') }}</h2></div><div class="card-body grid cols-2">
     <div class="field"><label for="pq-notes">{{ t('ui.notes') }}</label><textarea id="pq-notes" name="notes" rows="6" dir="auto">{{ form.notes }}</textarea></div>
     <div class="field"><label for="pq-terms">{{ t('ui.terms.and.conditions') }}</label><textarea id="pq-terms" name="terms" rows="6" dir="auto">{{ form.terms }}</textarea></div>
   </div></div>
   <button class="btn btn-primary" type="submit">{{ t('ui.save.quotation') if quotation else t('ui.create.quotation') }}</button>
 </form>
+{% if quotation %}
+{% set survey_return_to = 'edit' %}
+{% set survey_input_id = 'edit-quotation-site-survey-images' %}
+{% include '_quotation_site_survey_images.html' %}
+<div class="card" id="purchase-invoice-proof" style="margin-top:18px;">
+  <div class="card-head"><div><h2>{{ t('ui.purchase.invoice.proof') }}</h2><p class="hint" style="margin:4px 0 0;">{{ t('ui.purchase.invoice.proof.help') }}</p></div></div>
+  <div class="card-body">
+    <form method="post" enctype="multipart/form-data" action="/pricing/quotations/{{ quotation.id }}/invoice-images" class="invoice-proof-upload" data-invoice-upload-queue data-remove-label="{{ t('ui.remove') }}" data-selected-template="{{ t('ui.invoice.images.selected', count='__COUNT__') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="return_to" value="edit">
+      <div class="field"><label for="edit-quotation-invoice-images">{{ t('ui.upload.invoice.images') }}</label><input id="edit-quotation-invoice-images" name="invoice_images" type="file" accept="image/jpeg,image/png,image/webp" multiple required data-invoice-file-input><p class="hint">{{ t('ui.invoice.upload.queue.help') }}</p></div>
+      <button class="btn btn-secondary" type="submit" data-invoice-upload-submit>{{ t('ui.upload.invoice.images') }}</button>
+      <div class="alert warning" data-invoice-upload-reminder role="status" hidden>{{ t('ui.invoice.images.pending.upload') }}</div>
+      <div class="invoice-upload-queue" data-invoice-file-queue hidden><strong data-invoice-file-count></strong><div class="invoice-upload-selection" data-invoice-file-list></div></div>
+    </form>
+    {% if quotation.invoice_images %}
+    <div class="invoice-proof-grid">
+      {% for invoice in quotation.invoice_images %}
+      <article class="invoice-proof-item">
+        <a href="/pricing/quotations/{{ quotation.id }}/invoice-images/{{ invoice.id }}" target="_blank" rel="noopener"><img src="/pricing/quotations/{{ quotation.id }}/invoice-images/{{ invoice.id }}?size=thumb" alt="{{ t('ui.invoice.image.alt', name=invoice.original_filename) }}"></a>
+        <div><strong>{{ invoice.original_filename }}</strong><p class="hint">{{ t('ui.uploaded.by.on', name=invoice.uploaded_by_name, date=invoice.uploaded_at|datetime) }}</p></div>
+        <form method="post" action="/pricing/quotations/{{ quotation.id }}/invoice-images/{{ invoice.id }}/delete" onsubmit="return confirm('{{ t("ui.remove.this.invoice.image") }}');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="return_to" value="edit"><button class="btn btn-quiet btn-sm" type="submit">{{ t('ui.remove.invoice.image') }}</button></form>
+      </article>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
 <script type="application/json" id="pricing-catalogue-data">{{ catalogue|tojson }}</script>
+<script type="application/json" id="quotation-planner-data">{{ planner|tojson }}</script>
 {% endblock %}

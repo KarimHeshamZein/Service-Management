@@ -15,6 +15,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import (
     Image as PdfImage,
     KeepTogether,
+    PageBreak,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -159,6 +160,38 @@ def _item_image(line, styles: dict[str, ParagraphStyle]):
     max_width = 22 * mm
     max_height = 18 * mm
     scale = min(max_width / width, max_height / height)
+    image = PdfImage(str(path), width=width * scale, height=height * scale)
+    image.hAlign = "CENTER"
+    return image
+
+
+def _installation_plan_image(quotation: PricingQuotation):
+    if not quotation.plan_output_storage_key:
+        return None
+    try:
+        path = resolve_storage_path(quotation.plan_output_storage_key)
+        with PilImage.open(path) as source:
+            width, height = source.size
+    except (UploadError, OSError, ValueError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    scale = min((170 * mm) / width, (205 * mm) / height)
+    image = PdfImage(str(path), width=width * scale, height=height * scale)
+    image.hAlign = "CENTER"
+    return image
+
+
+def _quotation_attachment_image(attachment):
+    try:
+        path = resolve_storage_path(attachment.storage_key)
+        with PilImage.open(path) as source:
+            width, height = source.size
+    except (UploadError, OSError, ValueError):
+        return None
+    if width <= 0 or height <= 0:
+        return None
+    scale = min((170 * mm) / width, (220 * mm) / height)
     image = PdfImage(str(path), width=width * scale, height=height * scale)
     image.hAlign = "CENTER"
     return image
@@ -375,6 +408,165 @@ def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
             [
                 Paragraph("Terms and conditions", styles["section"]),
                 _paragraph(quotation.terms, styles["body"]),
+            ]
+        )
+
+    plan_image = _installation_plan_image(quotation)
+    plan_state = quotation.installation_plan_state or {}
+    plan_items = plan_state.get("items", []) if isinstance(plan_state, dict) else []
+    cameras = [item for item in plan_items if item.get("kind") == "camera"]
+    equipment = [item for item in plan_items if item.get("kind") != "camera"]
+    equipment_names = {item.get("id"): item.get("name") for item in equipment}
+    if plan_image is not None:
+        story.extend(
+            [
+                PageBreak(),
+                Paragraph("Installation plan", styles["title"]),
+                Spacer(1, 6 * mm),
+                plan_image,
+                PageBreak(),
+                Paragraph("Camera schedule", styles["section"]),
+            ]
+        )
+        schedule_rows: list[list[Any]] = [
+            [
+                _paragraph("#", styles["table_header"]),
+                _paragraph("Camera", styles["table_header"]),
+                _paragraph("Type", styles["table_header"]),
+                _paragraph("FOV", styles["table_header"]),
+                _paragraph("Range", styles["table_header"]),
+                _paragraph("Plan width", styles["table_header"]),
+                _paragraph("Direction", styles["table_header"]),
+                _paragraph("Mounted on", styles["table_header"]),
+            ]
+        ]
+        for position, camera in enumerate(cameras, start=1):
+            schedule_rows.append(
+                [
+                    _paragraph(position, styles["small"]),
+                    _paragraph(camera.get("name"), styles["body"]),
+                    _paragraph(str(camera.get("type", "")).upper(), styles["body"]),
+                    _paragraph(f"{float(camera.get('fov', 0)):g} deg", styles["right"]),
+                    _paragraph(f"{float(camera.get('range', 0)):g} m", styles["right"]),
+                    _paragraph(f"{float(camera.get('widthMeters', 1.3)):g} m", styles["right"]),
+                    _paragraph(f"{float(camera.get('rotation', 0)):g} deg", styles["right"]),
+                    _paragraph(equipment_names.get(camera.get("mountedOnId"), "-"), styles["body"]),
+                ]
+            )
+        if len(schedule_rows) == 1:
+            schedule_rows.append(
+                ["", _paragraph("No cameras placed.", styles["body"]), "", "", "", "", "", ""]
+            )
+        schedule = Table(
+            schedule_rows,
+            colWidths=[8 * mm, 38 * mm, 18 * mm, 20 * mm, 20 * mm, 23 * mm, 22 * mm, 26 * mm],
+            repeatRows=1,
+        )
+        schedule.setStyle(
+            TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
+                    ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, LIGHT]),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ]
+            )
+        )
+        story.append(schedule)
+
+        if equipment:
+            story.extend(
+                [Spacer(1, 7 * mm), Paragraph("Installation equipment schedule", styles["section"])]
+            )
+            equipment_rows: list[list[Any]] = [
+                [
+                    _paragraph("#", styles["table_header"]),
+                    _paragraph("Item", styles["table_header"]),
+                    _paragraph("Type", styles["table_header"]),
+                    _paragraph("Variant", styles["table_header"]),
+                    _paragraph("Plan width", styles["table_header"]),
+                    _paragraph("Direction", styles["table_header"]),
+                ]
+            ]
+            for position, item in enumerate(equipment, start=1):
+                equipment_rows.append(
+                    [
+                        _paragraph(position, styles["small"]),
+                        _paragraph(item.get("name"), styles["body"]),
+                        _paragraph(str(item.get("kind", "")).replace("_", " ").title(), styles["body"]),
+                        _paragraph(str(item.get("variant", "")).replace("_", " ").title(), styles["body"]),
+                        _paragraph(f"{float(item.get('widthMeters', 0)):g} m", styles["right"]),
+                        _paragraph(f"{float(item.get('rotation', 0)):g} deg", styles["right"]),
+                    ]
+                )
+            equipment_table = Table(
+                equipment_rows,
+                colWidths=[10 * mm, 48 * mm, 34 * mm, 30 * mm, 25 * mm, 28 * mm],
+                repeatRows=1,
+            )
+            equipment_table.setStyle(
+                TableStyle(
+                    [
+                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                        ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
+                        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+                        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, LIGHT]),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                        ("TOPPADDING", (0, 0), (-1, -1), 5),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ]
+                )
+            )
+            story.append(equipment_table)
+
+    total_survey_images = len(quotation.site_survey_images)
+    for position, survey_image in enumerate(quotation.site_survey_images, start=1):
+        layout_image = _quotation_attachment_image(survey_image)
+        if layout_image is None:
+            continue
+        story.extend(
+            [
+                PageBreak(),
+                Paragraph(
+                    f"Site survey layout {position} of {total_survey_images}",
+                    styles["title"],
+                ),
+                _paragraph(survey_image.original_filename, styles["body"]),
+                _paragraph(
+                    f"Uploaded by {survey_image.uploaded_by_name} on "
+                    f"{survey_image.uploaded_at.isoformat(sep=' ', timespec='minutes')}",
+                    styles["small"],
+                ),
+                Spacer(1, 6 * mm),
+                layout_image,
+            ]
+        )
+
+    total_invoices = len(quotation.invoice_images)
+    for position, invoice in enumerate(quotation.invoice_images, start=1):
+        invoice_image = _quotation_attachment_image(invoice)
+        if invoice_image is None:
+            continue
+        story.extend(
+            [
+                PageBreak(),
+                Paragraph(
+                    f"Purchase invoice proof {position} of {total_invoices}",
+                    styles["title"],
+                ),
+                _paragraph(invoice.original_filename, styles["body"]),
+                _paragraph(
+                    f"Uploaded by {invoice.uploaded_by_name} on "
+                    f"{invoice.uploaded_at.isoformat(sep=' ', timespec='minutes')}",
+                    styles["small"],
+                ),
+                Spacer(1, 6 * mm),
+                invoice_image,
             ]
         )
 

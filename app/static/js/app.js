@@ -363,6 +363,132 @@
       field.addEventListener("change", updateInstallationPrice);
     });
     updateInstallationPrice();
+
+    /* -------------------------------- camera installation plan bridge */
+    var plannerFrame = pricingForm.querySelector("[data-planner-frame]");
+    var plannerDataNode = document.getElementById("quotation-planner-data");
+    var plannerState = pricingForm.querySelector("[data-planner-state]");
+    var plannerSubmitError = pricingForm.querySelector("[data-planner-submit-error]");
+    var plannerReady = false;
+    var plannerRequestId = null;
+    var plannerSubmitting = false;
+    var plannerInitial = { state: null, background_url: null };
+    if (plannerDataNode) {
+      try {
+        plannerInitial = JSON.parse(plannerDataNode.textContent);
+      } catch (error) {
+        plannerInitial = { state: null, background_url: null };
+      }
+    }
+
+    function showPlannerSubmitError(message) {
+      if (!plannerSubmitError) return;
+      plannerSubmitError.textContent = message;
+      plannerSubmitError.hidden = !message;
+      if (message) plannerSubmitError.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+
+    function setQuotationSubmitting(active) {
+      plannerSubmitting = active;
+      pricingForm.querySelectorAll('button[type="submit"]').forEach(function (button) {
+        button.disabled = active;
+      });
+    }
+
+    function dataUrlBlob(dataUrl) {
+      if (!dataUrl) return Promise.resolve(null);
+      return fetch(dataUrl).then(function (response) { return response.blob(); });
+    }
+
+    function renderQuotationErrors(errors) {
+      var messages = Object.keys(errors || {}).map(function (key) { return errors[key]; });
+      showPlannerSubmitError(messages.join(" ") || "The quotation could not be saved. Review the form and try again.");
+    }
+
+    function submitQuotationWithPlan(result) {
+      plannerState.value = result.design ? JSON.stringify(result.design) : "";
+      Promise.all([
+        dataUrlBlob(result.backgroundDataUrl),
+        dataUrlBlob(result.outputDataUrl),
+      ]).then(function (blobs) {
+        var payload = new FormData(pricingForm);
+        payload.delete("installation_plan_background");
+        payload.delete("installation_plan_output");
+        if (blobs[0]) payload.append("installation_plan_background", blobs[0], "floor-plan.png");
+        if (blobs[1]) payload.append("installation_plan_output", blobs[1], "camera-installation-plan.png");
+        return fetch(pricingForm.action, {
+          method: "POST",
+          body: payload,
+          credentials: "same-origin",
+          headers: {
+            "Accept": "application/json",
+            "X-Requested-With": "camera-planner",
+          },
+        });
+      }).then(function (response) {
+        return response.json().then(function (payload) {
+          return { response: response, payload: payload };
+        });
+      }).then(function (result) {
+        if (result.response.ok && result.payload.redirect) {
+          window.location.assign(result.payload.redirect);
+          return;
+        }
+        if (result.payload.form_token) {
+          var token = pricingForm.querySelector('input[name="form_token"]');
+          if (token) token.value = result.payload.form_token;
+        }
+        renderQuotationErrors(result.payload.errors);
+        setQuotationSubmitting(false);
+      }).catch(function (error) {
+        console.error(error);
+        showPlannerSubmitError("The quotation could not be sent. Check the application connection and try again.");
+        setQuotationSubmitting(false);
+      });
+    }
+
+    if (plannerFrame) {
+      window.addEventListener("message", function (event) {
+        if (event.origin !== window.location.origin || event.source !== plannerFrame.contentWindow || !event.data) return;
+        if (event.data.type === "quotation-planner:ready") {
+          plannerReady = true;
+          plannerFrame.contentWindow.postMessage({
+            type: "quotation-planner:init",
+            design: plannerInitial.state,
+            backgroundUrl: plannerInitial.background_url,
+          }, window.location.origin);
+          return;
+        }
+        if (event.data.requestId !== plannerRequestId) return;
+        if (event.data.type === "quotation-planner:error") {
+          showPlannerSubmitError(event.data.message || "The camera plan could not be prepared.");
+          setQuotationSubmitting(false);
+          return;
+        }
+        if (event.data.type === "quotation-planner:result") {
+          submitQuotationWithPlan(event.data);
+        }
+      });
+
+      pricingForm.addEventListener("submit", function (event) {
+        if (plannerSubmitting) {
+          event.preventDefault();
+          return;
+        }
+        event.preventDefault();
+        showPlannerSubmitError("");
+        if (!plannerReady) {
+          showPlannerSubmitError("The camera planner is still loading. Wait a moment and try again.");
+          return;
+        }
+        setQuotationSubmitting(true);
+        plannerRequestId = String(Date.now()) + Math.random().toString(36).slice(2);
+        plannerFrame.contentWindow.postMessage({
+          type: "quotation-planner:export",
+          requestId: plannerRequestId,
+        }, window.location.origin);
+      });
+    }
   }
 
   /* ------------------------------------------------------ dialog toggles */
@@ -697,6 +823,94 @@
       if (touched && !dirtyGuardOff) { e.preventDefault(); e.returnValue = ""; }
     });
   }
+
+  /* ------------------------------------------ quotation invoice uploads */
+  document.querySelectorAll("[data-image-upload-queue], [data-invoice-upload-queue]").forEach(function (form) {
+    var input = form.querySelector("[data-image-file-input], [data-invoice-file-input]");
+    var queue = form.querySelector("[data-image-file-queue], [data-invoice-file-queue]");
+    var list = form.querySelector("[data-image-file-list], [data-invoice-file-list]");
+    var count = form.querySelector("[data-image-file-count], [data-invoice-file-count]");
+    var submit = form.querySelector("[data-image-upload-submit], [data-invoice-upload-submit]");
+    var reminder = form.querySelector("[data-image-upload-reminder], [data-invoice-upload-reminder]");
+    if (!input || !queue || !list || !count || typeof window.DataTransfer !== "function") return;
+
+    var selectedFiles = [];
+    var previewUrls = [];
+    if (submit) submit.disabled = true;
+
+    function fileKey(file) {
+      return [file.name, file.size, file.lastModified, file.type].join("::");
+    }
+
+    function replaceInputFiles() {
+      var transfer = new DataTransfer();
+      selectedFiles.forEach(function (file) { transfer.items.add(file); });
+      input.files = transfer.files;
+    }
+
+    function readableSize(bytes) {
+      if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " KB";
+      return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    function renderQueue() {
+      previewUrls.forEach(function (url) { URL.revokeObjectURL(url); });
+      previewUrls = [];
+      list.innerHTML = "";
+      queue.hidden = selectedFiles.length === 0;
+      if (submit) submit.disabled = selectedFiles.length === 0;
+      if (reminder) reminder.hidden = selectedFiles.length === 0;
+      count.textContent = (form.dataset.selectedTemplate || "__COUNT__ selected").replace("__COUNT__", String(selectedFiles.length));
+
+      selectedFiles.forEach(function (file, index) {
+        var row = document.createElement("div");
+        row.className = "invoice-upload-selection-item";
+        var image = document.createElement("img");
+        var previewUrl = URL.createObjectURL(file);
+        previewUrls.push(previewUrl);
+        image.src = previewUrl;
+        image.alt = "";
+
+        var details = document.createElement("div");
+        var name = document.createElement("strong");
+        name.textContent = file.name;
+        var size = document.createElement("span");
+        size.className = "hint";
+        size.textContent = readableSize(file.size);
+        details.appendChild(name);
+        details.appendChild(size);
+
+        var remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "btn btn-quiet btn-sm";
+        remove.textContent = form.dataset.removeLabel || "Remove";
+        remove.addEventListener("click", function () {
+          selectedFiles.splice(index, 1);
+          replaceInputFiles();
+          renderQueue();
+        });
+        row.appendChild(image);
+        row.appendChild(details);
+        row.appendChild(remove);
+        list.appendChild(row);
+      });
+    }
+
+    input.addEventListener("change", function () {
+      var known = {};
+      selectedFiles.forEach(function (file) { known[fileKey(file)] = true; });
+      Array.prototype.slice.call(input.files || []).forEach(function (file) {
+        var key = fileKey(file);
+        if (!known[key]) { selectedFiles.push(file); known[key] = true; }
+      });
+      replaceInputFiles();
+      renderQueue();
+    });
+
+    window.addEventListener("beforeunload", function () {
+      previewUrls.forEach(function (url) { URL.revokeObjectURL(url); });
+    });
+  });
 
   /* ------------------------------------------------------------ lightbox */
   var lightbox = document.querySelector("[data-lightbox]");

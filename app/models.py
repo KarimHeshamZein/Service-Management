@@ -15,6 +15,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     Numeric,
     String,
     Text,
@@ -1513,6 +1514,15 @@ class PricingQuotation(Base):
     company_address: Mapped[str] = mapped_column(Text, nullable=False, default="")
     company_phone: Mapped[str] = mapped_column(String(40), nullable=False, default="")
     company_email: Mapped[str] = mapped_column(String(254), nullable=False, default="")
+    installation_plan_state: Mapped[dict | None] = mapped_column(JSON)
+    plan_background_storage_key: Mapped[str | None] = mapped_column(String(255), unique=True)
+    plan_background_thumbnail_key: Mapped[str | None] = mapped_column(String(255))
+    plan_background_content_type: Mapped[str | None] = mapped_column(String(60))
+    plan_background_file_size: Mapped[int | None] = mapped_column(Integer)
+    plan_output_storage_key: Mapped[str | None] = mapped_column(String(255), unique=True)
+    plan_output_thumbnail_key: Mapped[str | None] = mapped_column(String(255))
+    plan_output_content_type: Mapped[str | None] = mapped_column(String(60))
+    plan_output_file_size: Mapped[int | None] = mapped_column(Integer)
     created_by_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
     )
@@ -1534,6 +1544,16 @@ class PricingQuotation(Base):
         cascade="all, delete-orphan",
         order_by="PricingQuotationCharge.position",
     )
+    invoice_images: Mapped[list["PricingQuotationInvoiceImage"]] = relationship(
+        back_populates="quotation",
+        cascade="all, delete-orphan",
+        order_by="PricingQuotationInvoiceImage.id",
+    )
+    site_survey_images: Mapped[list["PricingQuotationSiteSurveyImage"]] = relationship(
+        back_populates="quotation",
+        cascade="all, delete-orphan",
+        order_by="PricingQuotationSiteSurveyImage.id",
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -1546,6 +1566,62 @@ class PricingQuotation(Base):
         CheckConstraint(
             "valid_until >= quotation_date", name="ck_pricing_quotation_validity"
         ),
+    )
+
+
+class PricingQuotationInvoiceImage(Base):
+    """Protected post-purchase invoice proof attached to a quotation."""
+
+    __tablename__ = "pricing_quotation_invoice_images"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    quotation_id: Mapped[int] = mapped_column(
+        ForeignKey("pricing_quotations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    thumbnail_key: Mapped[str | None] = mapped_column(String(255))
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    uploaded_by_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    uploaded_by_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, index=True
+    )
+
+    quotation: Mapped[PricingQuotation] = relationship(back_populates="invoice_images")
+
+
+class PricingQuotationSiteSurveyImage(Base):
+    """Protected site-survey layout image attached to a quotation."""
+
+    __tablename__ = "pricing_quotation_site_survey_images"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    quotation_id: Mapped[int] = mapped_column(
+        ForeignKey("pricing_quotations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    thumbnail_key: Mapped[str | None] = mapped_column(String(255))
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    uploaded_by_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    uploaded_by_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    uploaded_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, index=True
+    )
+
+    quotation: Mapped[PricingQuotation] = relationship(
+        back_populates="site_survey_images"
     )
 
 

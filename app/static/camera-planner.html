@@ -1,0 +1,2122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Camera Installation Planner</title>
+
+<style>
+  /* ============================ Design tokens ============================ */
+  :root{
+    --bg:        #eceff3;
+    --panel:     #ffffff;
+    --panel-2:   #f7f9fb;
+    --border:    #dde2e8;
+    --border-2:  #e8ecf1;
+    --ink:       #1b2430;
+    --muted:     #5b6675;
+    --faint:     #8a93a0;
+    --primary:   #2563eb;
+    --primary-d: #1d4ed8;
+    --primary-soft:#eaf0fe;
+    --green:     #16a34a;
+    --amber:     #f59e0b;
+    --danger:    #dc2626;
+    --danger-soft:#fdecec;
+    --shadow:    0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.10);
+    --shadow-lg: 0 10px 30px rgba(16,24,40,.12);
+    --radius:    9px;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  *{ box-sizing:border-box; }
+  html,body{ height:100%; margin:0; }
+  body{
+    font-family:var(--sans);
+    color:var(--ink);
+    background:var(--bg);
+    overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  button{ font-family:inherit; }
+
+  /* ============================ App shell ============================ */
+  #app{ display:flex; flex-direction:column; height:100vh; }
+
+  /* ---- Top toolbar ---- */
+  #toolbar{
+    display:flex; align-items:center; gap:6px;
+    padding:8px 12px;
+    background:var(--panel);
+    border-bottom:1px solid var(--border);
+    box-shadow:var(--shadow);
+    flex-wrap:wrap;
+    z-index:30;
+  }
+  .brand{
+    display:flex; align-items:center; gap:9px;
+    font-weight:700; letter-spacing:-.01em;
+    padding-right:6px; margin-right:2px;
+    user-select:none;
+  }
+  .brand .mark{
+    width:26px; height:26px; border-radius:7px;
+    background:linear-gradient(150deg,var(--primary),#3b82f6);
+    display:grid; place-items:center; color:#fff;
+    box-shadow:0 1px 2px rgba(37,99,235,.4);
+  }
+  .brand .mark svg{ width:15px; height:15px; }
+  .brand small{ display:block; font-weight:500; font-size:10.5px; color:var(--faint); letter-spacing:.02em; }
+
+  .tb-btn{
+    display:inline-flex; align-items:center; gap:6px;
+    height:34px; padding:0 11px;
+    border:1px solid var(--border);
+    background:var(--panel);
+    color:var(--ink);
+    border-radius:8px;
+    font-size:13px; font-weight:500;
+    cursor:pointer;
+    white-space:nowrap;
+    transition:background .12s, border-color .12s, color .12s, box-shadow .12s;
+  }
+  .tb-btn svg{ width:15px; height:15px; opacity:.8; }
+  .tb-btn:hover{ background:var(--panel-2); border-color:#cdd4dd; }
+  .tb-btn:active{ background:#eef1f5; }
+  .tb-btn.primary{
+    background:var(--primary); border-color:var(--primary); color:#fff;
+    box-shadow:0 1px 2px rgba(37,99,235,.35);
+  }
+  .tb-btn.primary svg{ opacity:1; }
+  .tb-btn.primary:hover{ background:var(--primary-d); border-color:var(--primary-d); }
+  .tb-btn.ghost-danger{ color:var(--danger); }
+  .tb-btn.ghost-danger:hover{ background:var(--danger-soft); border-color:#f3c2c2; }
+
+  .tb-divider{ width:1px; height:24px; background:var(--border); margin:0 4px; }
+  .tb-spacer{ flex:1 1 auto; }
+
+  .zoom-readout{
+    font-family:var(--mono); font-size:12px; font-weight:500;
+    color:var(--muted); min-width:46px; text-align:center;
+    padding:0 2px; user-select:none;
+  }
+
+  /* ---- Body: workspace + sidebar ---- */
+  #main{ display:flex; flex:1 1 auto; min-height:0; }
+
+  #workspace{ position:relative; flex:1 1 auto; min-width:0; overflow:hidden; }
+
+  /* The scroll container — native scrollbars appear when the plan is larger than the view */
+  #scroll{
+    position:absolute; inset:0;
+    overflow:auto;
+    background:
+      linear-gradient(0deg, var(--bg), var(--bg)),
+      repeating-linear-gradient(45deg, transparent 0 11px, rgba(0,0,0,.012) 11px 12px);
+  }
+  /* Konva stage host — sized to plan × zoom, sits in the scroll flow with a mat around it */
+  #stage-host{ margin:26px; width:100px; height:100px; box-shadow:var(--shadow-lg); background:#fff; }
+
+  /* Workspace overlays (not part of the canvas / export) */
+  .overlay{ position:absolute; z-index:10; pointer-events:none; }
+  #empty-hint{
+    inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column;
+    color:var(--faint); gap:14px; text-align:center; padding:24px;
+  }
+  #empty-hint .ico{
+    width:58px; height:58px; border-radius:16px; background:var(--panel);
+    border:1px solid var(--border); display:grid; place-items:center; color:var(--primary);
+    box-shadow:var(--shadow);
+  }
+  #empty-hint h2{ margin:0; font-size:16px; color:var(--muted); font-weight:600; }
+  #empty-hint p{ margin:0; font-size:13px; max-width:300px; line-height:1.5; }
+
+  #helpbar{
+    left:50%; bottom:14px; transform:translateX(-50%);
+    background:rgba(27,36,48,.92); color:#e8edf4;
+    font-size:12px; padding:7px 14px; border-radius:999px;
+    box-shadow:var(--shadow-lg); white-space:nowrap;
+    display:flex; gap:10px; align-items:center; max-width:calc(100% - 32px); overflow:hidden;
+  }
+  #helpbar b{ color:#fff; font-weight:600; }
+  #helpbar .dot{ width:3px; height:3px; border-radius:50%; background:#6b7686; }
+
+  /* Map-style scale bar — the signature instrument of the planner */
+  #scalebar{
+    left:14px; bottom:14px;
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:8px; padding:7px 9px 6px; box-shadow:var(--shadow);
+    font-family:var(--mono); font-size:11px; color:var(--muted);
+  }
+  #scalebar .bar{
+    height:7px; border:1.5px solid var(--ink); border-top:none;
+    margin-bottom:4px; transition:width .12s ease;
+  }
+  #scalebar .row{ display:flex; justify-content:space-between; gap:10px; }
+  #scalebar .ppm{ color:var(--faint); }
+
+  /* PDF page picker (only shown for PDF plans) */
+  #pdfbar{
+    position:absolute; left:14px; top:14px; z-index:12;
+    display:none; align-items:center; gap:8px;
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:8px; padding:6px 9px; box-shadow:var(--shadow); font-size:12.5px;
+  }
+  #pdfbar.show{ display:flex; }
+  #pdfbar select{
+    font-family:var(--sans); font-size:12.5px; padding:3px 6px;
+    border:1px solid var(--border); border-radius:6px; background:#fff; color:var(--ink);
+  }
+  #pdfbar .lbl{ color:var(--muted); }
+
+  /* ---- Right sidebar ---- */
+  #sidebar{
+    width:296px; flex:0 0 296px;
+    background:var(--panel);
+    border-left:1px solid var(--border);
+    display:flex; flex-direction:column;
+    overflow-y:auto;
+    z-index:20;
+  }
+  .sec{ padding:16px 18px; border-bottom:1px solid var(--border-2); }
+  .eyebrow{
+    font-size:10.5px; font-weight:700; letter-spacing:.09em; text-transform:uppercase;
+    color:var(--faint); margin:0 0 11px;
+    display:flex; align-items:center; gap:7px;
+  }
+  .eyebrow .pip{ width:7px; height:7px; border-radius:2px; background:var(--primary); }
+
+  .field{ margin-bottom:12px; }
+  .field:last-child{ margin-bottom:0; }
+  .field > label{
+    display:block; font-size:12px; font-weight:500; color:var(--muted); margin-bottom:5px;
+  }
+  .ctl{
+    width:100%; height:34px; padding:0 10px;
+    border:1px solid var(--border); border-radius:7px;
+    background:#fff; color:var(--ink); font-size:13px; font-family:var(--sans);
+    transition:border-color .12s, box-shadow .12s;
+  }
+  textarea.ctl{ height:auto; min-height:62px; padding:8px 10px; resize:vertical; line-height:1.45; }
+  .ctl:focus{ outline:none; border-color:var(--primary); box-shadow:0 0 0 3px var(--primary-soft); }
+  .num{ font-family:var(--mono); font-weight:500; letter-spacing:-.01em; }
+
+  /* number field with unit suffix */
+  .with-unit{ position:relative; }
+  .with-unit .unit{
+    position:absolute; right:10px; top:50%; transform:translateY(-50%);
+    font-family:var(--mono); font-size:12px; color:var(--faint); pointer-events:none;
+  }
+  .with-unit .ctl{ padding-right:34px; }
+
+  .row2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+
+  /* color + opacity composite */
+  .swatch-row{ display:flex; align-items:center; gap:10px; }
+  input[type="color"]{
+    -webkit-appearance:none; appearance:none; width:42px; height:34px; padding:0;
+    border:1px solid var(--border); border-radius:7px; background:#fff; cursor:pointer;
+  }
+  input[type="color"]::-webkit-color-swatch-wrapper{ padding:3px; }
+  input[type="color"]::-webkit-color-swatch{ border:none; border-radius:4px; }
+  .hexlabel{ font-family:var(--mono); font-size:12px; color:var(--muted); text-transform:uppercase; }
+
+  /* camera type selector */
+  .segmented{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  .seg-btn{
+    display:flex; flex-direction:column; align-items:center; gap:5px;
+    padding:9px 4px 7px; border:1px solid var(--border); border-radius:8px;
+    background:#fff; color:var(--muted); cursor:pointer;
+    font-family:var(--sans); font-size:11px; font-weight:600;
+    transition:background .12s, border-color .12s, color .12s;
+  }
+  .seg-btn svg{ width:23px; height:23px; }
+  .seg-btn:hover{ border-color:#cdd4dd; background:var(--panel-2); }
+  .seg-btn.active{ border-color:var(--primary); background:var(--primary-soft); color:var(--primary-d); }
+  .seg-btn:focus-visible{ outline:2px solid var(--primary); outline-offset:1px; }
+  .segmented.two{ grid-template-columns:1fr 1fr; }
+  .shade-chip{ width:22px; height:22px; border-radius:6px; display:block; }
+  .seg-art{ width:25px; height:25px; object-fit:contain; display:block; }
+
+  input[type="range"]{
+    -webkit-appearance:none; appearance:none; width:100%; height:5px; border-radius:5px;
+    background:var(--border); outline:none; margin:9px 0;
+  }
+  input[type="range"]::-webkit-slider-thumb{
+    -webkit-appearance:none; appearance:none; width:16px; height:16px; border-radius:50%;
+    background:#fff; border:2px solid var(--primary); cursor:pointer; box-shadow:var(--shadow);
+  }
+  input[type="range"]::-moz-range-thumb{
+    width:16px; height:16px; border-radius:50%; background:#fff;
+    border:2px solid var(--primary); cursor:pointer;
+  }
+
+  .btn-block{
+    width:100%; height:36px; border-radius:8px; border:1px solid transparent;
+    font-size:13px; font-weight:600; cursor:pointer; display:flex; align-items:center;
+    justify-content:center; gap:7px; transition:background .12s, border-color .12s;
+  }
+  .btn-block svg{ width:15px; height:15px; }
+  .btn-danger{ background:var(--danger-soft); color:var(--danger); border-color:#f3c9c9; }
+  .btn-danger:hover{ background:#fbdcdc; }
+
+  /* empty state inside sidebar */
+  #panel-empty{ color:var(--faint); font-size:13px; line-height:1.55; }
+  #panel-empty .mini-ico{
+    width:38px; height:38px; border-radius:10px; background:var(--panel-2);
+    border:1px solid var(--border-2); display:grid; place-items:center; color:var(--faint);
+    margin-bottom:11px;
+  }
+
+  .stat-line{
+    display:flex; justify-content:space-between; font-size:12px; color:var(--muted);
+    padding:3px 0;
+  }
+  .stat-line .v{ font-family:var(--mono); color:var(--ink); }
+
+  .hidden{ display:none !important; }
+
+  /* in-canvas text editor overlay */
+  #text-editor{
+    position:absolute; z-index:100; display:none;
+    border:2px solid var(--primary); border-radius:4px;
+    background:#fff; color:var(--ink); padding:2px 4px;
+    font-family:var(--sans); line-height:1.2; resize:none; overflow:hidden;
+    box-shadow:0 0 0 3px var(--primary-soft);
+  }
+
+  /* toast */
+  #toast{
+    position:fixed; left:50%; top:18px; transform:translate(-50%,-22px);
+    background:var(--ink); color:#fff; padding:11px 16px; border-radius:9px;
+    font-size:13px; font-weight:500; box-shadow:var(--shadow-lg);
+    opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; z-index:200;
+    max-width:min(440px, calc(100% - 32px)); display:flex; align-items:center; gap:9px;
+  }
+  #toast.show{ opacity:1; transform:translate(-50%,0); }
+  #toast.error{ background:#7f1d1d; }
+  #toast .ti{ width:17px; height:17px; flex:none; }
+
+  /* scrollbars */
+  #scroll::-webkit-scrollbar, #sidebar::-webkit-scrollbar{ width:13px; height:13px; }
+  #scroll::-webkit-scrollbar-thumb, #sidebar::-webkit-scrollbar-thumb{
+    background:#c2cad4; border:3px solid transparent; background-clip:padding-box; border-radius:10px;
+  }
+  #scroll::-webkit-scrollbar-thumb:hover{ background:#a9b3c0; background-clip:padding-box; }
+  #scroll::-webkit-scrollbar-track{ background:transparent; }
+
+  @media (max-width:720px){
+    #sidebar{ width:250px; flex-basis:250px; }
+    .brand small{ display:none; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ============================ Toolbar ============================ -->
+  <header id="toolbar">
+    <div class="brand">
+      <span class="mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l11-3 1 4-11 3z"/><path d="M4 13l1 5"/><path d="M14.5 8.5l5-1.5 1 3.5-5 1.5"/><circle cx="9" cy="11" r="1"/></svg>
+      </span>
+      <span>Camera Planner<small>CCTV layout &amp; field-of-view tool</small></span>
+    </div>
+
+    <span class="tb-divider"></span>
+
+    <button class="tb-btn primary" id="btn-upload" title="Upload a floor plan (image or PDF)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0L7 9m5-5l5 5"/><path d="M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2"/></svg>
+      Upload Plan
+    </button>
+    <input type="file" id="file-input" accept="image/png,image/jpeg,image/jpg,image/webp,application/pdf" class="hidden" />
+
+    <button class="tb-btn" id="btn-add-camera">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 7h3a2 2 0 012 2v7a2 2 0 01-2 2H5a2 2 0 01-2-2V9a2 2 0 012-2h3l1.5-2h3L14 7z"/><circle cx="11" cy="12.5" r="2.6"/></svg>
+      Add Camera
+    </button>
+    <button class="tb-btn equipment-add" data-equipment-kind="smart_barrier">+ Smart Barrier</button>
+    <button class="tb-btn equipment-add" data-equipment-kind="generator">+ Generator</button>
+    <button class="tb-btn equipment-add" data-equipment-kind="solar_pole">+ Solar Pole</button>
+    <button class="tb-btn equipment-add" data-equipment-kind="solar_panel">+ Solar Panel</button>
+    <button class="tb-btn equipment-add" data-equipment-kind="guard_room">+ Guard Room</button>
+    <button class="tb-btn equipment-add" data-equipment-kind="metal_pole">+ Metal Pole</button>
+    <button class="tb-btn equipment-add" data-equipment-kind="sign">+ Sign</button>
+    <button class="tb-btn" id="btn-add-text">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6V5h14v1M12 5v14M9 19h6"/></svg>
+      Add Text
+    </button>
+
+    <span class="tb-divider"></span>
+
+    <button class="tb-btn" id="btn-zoom-out" title="Zoom out">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M8 11h6M21 21l-4.3-4.3"/></svg>
+    </button>
+    <span class="zoom-readout" id="zoom-readout">100%</span>
+    <button class="tb-btn" id="btn-zoom-in" title="Zoom in">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M11 8v6M8 11h6M21 21l-4.3-4.3"/></svg>
+    </button>
+    <button class="tb-btn" id="btn-fit">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 011-1h4M20 9V5a1 1 0 00-1-1h-4M4 15v4a1 1 0 001 1h4M20 15v4a1 1 0 01-1 1h-4"/></svg>
+      Fit
+    </button>
+
+    <span class="tb-spacer"></span>
+
+    <button class="tb-btn" id="btn-export-png">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="M21 16l-5-5L5 20"/></svg>
+      Export PNG
+    </button>
+    <span class="tb-divider"></span>
+
+    <button class="tb-btn ghost-danger" id="btn-clear">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13"/></svg>
+      Clear
+    </button>
+  </header>
+
+  <!-- ============================ Main ============================ -->
+  <div id="main">
+
+    <!-- Workspace -->
+    <div id="workspace">
+      <div id="scroll">
+        <div id="stage-host"></div>
+      </div>
+
+      <div id="pdfbar">
+        <span class="lbl">PDF page</span>
+        <select id="pdf-page-select"></select>
+        <span class="lbl" id="pdf-info"></span>
+      </div>
+
+      <!-- overlays -->
+      <div class="overlay" id="empty-hint">
+        <div class="ico">
+          <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0L7 9m5-5l5 5"/><path d="M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2"/></svg>
+        </div>
+        <h2>Upload a site plan to begin</h2>
+        <p>Drop in a floor plan image or PDF, then place cameras and tune each field of view.</p>
+      </div>
+
+      <div class="overlay" id="scalebar">
+        <div class="bar" id="scalebar-bar" style="width:90px"></div>
+        <div class="row"><span id="scalebar-label">3 m</span><span class="ppm" id="scalebar-ppm">30 px/m</span></div>
+      </div>
+
+      <div class="overlay" id="helpbar">
+        <span><b>Drag</b> to move</span><span class="dot"></span>
+        <span><b>Rotate</b> handle to aim</span><span class="dot"></span>
+        <span><b>Cone</b> handles set FOV &amp; range</span><span class="dot"></span>
+        <span><b>Space</b>-drag to pan</span><span class="dot"></span>
+        <span><b>Wheel</b> to zoom</span>
+      </div>
+
+      <!-- inline text editor -->
+      <textarea id="text-editor" spellcheck="false"></textarea>
+    </div>
+
+    <!-- Sidebar -->
+    <aside id="sidebar">
+
+      <!-- Global scale -->
+      <div class="sec">
+        <p class="eyebrow"><span class="pip" style="background:var(--muted)"></span>Drawing scale</p>
+        <div class="field">
+          <label for="ppm-input">Pixels per meter <span style="color:var(--faint)">(visual scale)</span></label>
+          <div class="with-unit">
+            <input type="number" class="ctl num" id="ppm-input" min="5" max="200" step="1" value="30" />
+            <span class="unit">px/m</span>
+          </div>
+        </div>
+        <div class="stat-line"><span>Cameras placed</span><span class="v" id="stat-cameras">0</span></div>
+        <div class="stat-line"><span>Equipment placed</span><span class="v" id="stat-equipment">0</span></div>
+        <div class="stat-line"><span>Text labels</span><span class="v" id="stat-texts">0</span></div>
+      </div>
+
+      <!-- Empty selection -->
+      <div class="sec" id="panel-empty">
+        <div class="mini-ico">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.5 18 2.3-7.2L20 11.5 3 3z"/></svg>
+        </div>
+        Select a camera, equipment item, or text label on the plan to edit its properties here.
+      </div>
+
+      <!-- Camera properties -->
+      <div class="sec hidden" id="panel-camera">
+        <p class="eyebrow"><span class="pip"></span>Camera properties</p>
+
+        <div class="field">
+          <label for="cam-name">Camera name</label>
+          <input type="text" class="ctl" id="cam-name" maxlength="40" />
+        </div>
+
+        <div class="field">
+          <label>Camera type</label>
+          <div class="segmented" id="cam-type">
+            <button class="seg-btn active" data-type="dome" type="button" title="Dome camera">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3.4"/><circle cx="16.4" cy="12" r="1.1" fill="currentColor" stroke="none"/></svg>
+              <span>Dome</span>
+            </button>
+            <button class="seg-btn" data-type="bullet" type="button" title="Bullet camera">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="8.5" width="12" height="7" rx="3.5"/><path d="M4 12H1.8" stroke-linecap="round"/><circle cx="14" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg>
+              <span>Bullet</span>
+            </button>
+            <button class="seg-btn" data-type="ptz" type="button" title="PTZ camera">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/><path d="M12 4.2a8 8 0 0 1 5.6 2.3l-2.8 2.8a4 4 0 0 0-2.8-1.1z" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="2.4"/></svg>
+              <span>PTZ</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Icon shade <span style="color:var(--faint)">(background contrast)</span></label>
+          <div class="segmented two" id="cam-shade">
+            <button class="seg-btn active" data-shade="black" type="button" title="Black icon (for light plans)">
+              <span class="shade-chip" style="background:#111827"></span><span>Black</span>
+            </button>
+            <button class="seg-btn" data-shade="white" type="button" title="White icon (for dark plans)">
+              <span class="shade-chip" style="background:#ffffff;border:1px solid var(--border);box-shadow:inset 0 0 0 1px #f0f2f5"></span><span>White</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="row2">
+          <div class="field">
+            <label for="cam-fov">FOV angle</label>
+            <div class="with-unit">
+              <input type="number" class="ctl num" id="cam-fov" min="5" max="350" step="1" />
+              <span class="unit">deg</span>
+            </div>
+          </div>
+          <div class="field">
+            <label for="cam-range">Range</label>
+            <div class="with-unit">
+              <input type="number" class="ctl num" id="cam-range" min="0.5" max="200" step="0.5" />
+              <span class="unit">m</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="cam-rotation">Rotation (viewing direction)</label>
+          <div class="with-unit">
+            <input type="number" class="ctl num" id="cam-rotation" min="0" max="360" step="1" />
+            <span class="unit">deg</span>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="cam-width">Plan width</label>
+          <div class="with-unit">
+            <input type="number" class="ctl num" id="cam-width" min="0.1" max="10" step="0.1" />
+            <span class="unit">m</span>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="cam-mounted-on">Mounted on / grouped with</label>
+          <select class="ctl" id="cam-mounted-on"></select>
+          <p class="hint" style="margin:6px 0 0;">Moving the selected solar pole will move this camera with it.</p>
+        </div>
+
+        <div class="field">
+          <label>Cone color</label>
+          <div class="swatch-row">
+            <input type="color" id="cam-color" />
+            <span class="hexlabel" id="cam-color-hex">#2563EB</span>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="cam-opacity">Cone opacity — <span class="num" id="cam-opacity-val">25%</span></label>
+          <input type="range" id="cam-opacity" min="0" max="100" step="1" />
+        </div>
+
+        <div class="field">
+          <button class="btn-block btn-danger" id="cam-delete">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13"/></svg>
+            Delete camera
+          </button>
+        </div>
+      </div>
+
+      <!-- Equipment properties -->
+      <div class="sec hidden" id="panel-equipment">
+        <p class="eyebrow"><span class="pip" style="background:#0f766e"></span><span id="equipment-panel-title">Equipment properties</span></p>
+
+        <div class="field">
+          <label for="equipment-name">Item name</label>
+          <input type="text" class="ctl" id="equipment-name" maxlength="60" />
+        </div>
+
+        <div class="field" id="equipment-variant-field">
+          <label for="equipment-variant">Image / orientation</label>
+          <select class="ctl" id="equipment-variant"></select>
+        </div>
+
+        <div class="row2">
+          <div class="field">
+            <label for="equipment-width">Plan width</label>
+            <div class="with-unit">
+              <input type="number" class="ctl num" id="equipment-width" min="0.5" max="50" step="0.1" />
+              <span class="unit">m</span>
+            </div>
+          </div>
+          <div class="field">
+            <label for="equipment-rotation">Rotation</label>
+            <div class="with-unit">
+              <input type="number" class="ctl num" id="equipment-rotation" min="0" max="360" step="1" />
+              <span class="unit">deg</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="equipment-opacity">Image opacity — <span class="num" id="equipment-opacity-val">100%</span></label>
+          <input type="range" id="equipment-opacity" min="20" max="100" step="1" />
+        </div>
+
+        <div class="field">
+          <button class="btn-block btn-danger" id="equipment-delete">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13"/></svg>
+            Delete equipment item
+          </button>
+        </div>
+      </div>
+
+      <!-- Text properties -->
+      <div class="sec hidden" id="panel-text">
+        <p class="eyebrow"><span class="pip" style="background:var(--amber)"></span>Text label</p>
+
+        <div class="field">
+          <label for="txt-content">Text</label>
+          <textarea class="ctl" id="txt-content" maxlength="240"></textarea>
+        </div>
+
+        <div class="row2">
+          <div class="field">
+            <label for="txt-size">Font size</label>
+            <div class="with-unit">
+              <input type="number" class="ctl num" id="txt-size" min="8" max="160" step="1" />
+              <span class="unit">px</span>
+            </div>
+          </div>
+          <div class="field">
+            <label>Color</label>
+            <div class="swatch-row">
+              <input type="color" id="txt-color" />
+              <span class="hexlabel" id="txt-color-hex">#111827</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <button class="btn-block btn-danger" id="txt-delete">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2M6 7l1 13a1 1 0 001 1h8a1 1 0 001-1l1-13"/></svg>
+            Delete label
+          </button>
+        </div>
+      </div>
+
+    </aside>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- ============================ Libraries ============================ -->
+<script src="/static/vendor/konva-9.3.22.min.js"></script>
+<script src="/static/vendor/pdfjs-3.11.174.min.js"></script>
+
+<script>
+"use strict";
+/* =====================================================================
+   Camera Installation Planner — single-file app
+   - Konva for editable canvas objects (cameras, FOV cones, text)
+   - pdf.js to rasterize PDF plans
+   - Server-side ReportLab output combines this plan with the saved quotation
+   Architecture note: the Konva stage is sized to (plan × zoom) and lives
+   inside a natively-scrolling container, so scrollbars work and pointer
+   hit-testing stays correct at any zoom. Cameras never use negative scale:
+   viewing direction is a plain angle parameter, so icons/labels stay upright.
+   ===================================================================== */
+
+// Embedded camera icon artwork (recolored to transparent black/white silhouettes).
+const ICON_DATA = {"dome":{"black":"data:image/png;base64,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","white":"data:image/png;base64,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","w":122,"h":103},"bullet":{"black":"data:image/png;base64,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","white":"data:image/png;base64,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","w":224,"h":224},"ptz":{"black":"data:image/png;base64,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","white":"data:image/png;base64,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","w":207,"h":224}};
+
+document.addEventListener("DOMContentLoaded", () => {
+
+  /* ----------------------------- Constants ----------------------------- */
+  const DEFAULTS = { fov: 90, range: 10, rotation: 0, color: "#2563eb", opacity: 0.25, type: "dome", widthMeters: 1.3 };
+  const CAM_TYPES = ["dome", "bullet", "ptz"];
+  const MIN_FOV = 5, MAX_FOV = 350;
+  const MIN_RANGE = 0.5, MAX_RANGE = 200;
+  const MIN_ZOOM = 0.1, MAX_ZOOM = 4;
+  const MAX_CANVAS_DIM = 8000;          // guard against pathologically large canvases
+  const DEFAULT_W = 1280, DEFAULT_H = 820;
+  const EQUIPMENT_TYPES = {
+    smart_barrier: {
+      label: "Smart Barrier", defaultWidth: 5, defaultVariant: "left",
+      variants: { left: ["Left arm", "/static/img/planner-equipment/barrier-left-transparent.png"], right: ["Right arm", "/static/img/planner-equipment/barrier-right-transparent.png"] },
+      blend: false,
+    },
+    generator: {
+      label: "Generator", defaultWidth: 2.5, defaultVariant: "solid",
+      variants: { solid: ["Solid", "/static/img/planner-equipment/generator-solid-transparent.png"], outline: ["Outline", "/static/img/planner-equipment/generator-outline-transparent.png"] }, blend: false,
+    },
+    solar_pole: {
+      label: "Solar Pole", defaultWidth: 2, defaultVariant: "standard",
+      variants: { standard: ["Standard", "/static/img/planner-equipment/solar-pole-transparent.png"] }, blend: false,
+    },
+    solar_panel: {
+      label: "Solar Panel", defaultWidth: 2, defaultVariant: "solid",
+      variants: { solid: ["Solid", "/static/img/planner-equipment/solar-panel-solid-transparent.png"], outline: ["Outline", "/static/img/planner-equipment/solar-panel-outline-transparent.png"] }, blend: false,
+    },
+    guard_room: {
+      label: "Guard Room", defaultWidth: 3, defaultVariant: "standard",
+      variants: { standard: ["Standard", "/static/img/planner-equipment/guard-room-transparent.png"] }, blend: false,
+    },
+    metal_pole: {
+      label: "Metal Pole", defaultWidth: 1.5, defaultVariant: "white",
+      variants: { white: ["White", "/static/img/planner-equipment/metal-pole-white-transparent.png"], black: ["Black", "/static/img/planner-equipment/metal-pole-black-transparent.png"] }, blend: false,
+    },
+    sign: {
+      label: "Sign", defaultWidth: 3, defaultVariant: "standard",
+      variants: { standard: ["Standard", "/static/img/planner-equipment/sign-transparent.png"] }, blend: false,
+    },
+  };
+  const MOUNTABLE_EQUIPMENT_KINDS = new Set(["solar_pole", "metal_pole"]);
+
+  const BODY_R = 13;                    // camera marker radius (constant screen px)
+  const RING_R = 21;                    // selection ring radius
+  const HANDLE_R = 7;                   // edit handle radius (constant screen px)
+  const ROT_OFFSET = 26;                // rotation handle distance beyond cone tip (px)
+
+  const SEL_COLOR = "#2563eb";
+  const RANGE_COLOR = "#16a34a";
+  const ROT_COLOR = "#2563eb";
+  const ANG_COLOR = "#f59e0b";
+
+  // For the artwork (badge) style: the heading (deg, clockwise from east/right) that the
+  // camera's lens points in each original drawing. The art is rotated by (aim - base) so
+  // the lens leads the field of view. Tweak these to fine-tune each icon's alignment.
+  const BADGE_BASE = { dome: 90, bullet: 140, ptz: 90 };
+
+  /* ----------------------------- DOM refs ------------------------------ */
+  const $ = (id) => document.getElementById(id);
+  const SCROLL = $("scroll");
+  const HOST = $("stage-host");
+  const fileInput = $("file-input");
+
+  /* ------------------------------ State -------------------------------- */
+  const state = {
+    ppm: 30,
+    zoom: 1,
+    contentW: DEFAULT_W,
+    contentH: DEFAULT_H,
+    hasBackground: false,
+    bgNode: null,
+    cameras: [],
+    equipment: [],
+    texts: [],
+    selected: null,        // { type:'camera'|'equipment'|'text', id }
+    camCounter: 0,
+    lastCamType: "dome",
+    lastCamShade: "black",
+    spaceDown: false,
+    middleDown: false,
+    isPanning: false,
+    panStart: null,
+    pdfDoc: null,
+  };
+
+  /* ----------------------------- Helpers ------------------------------- */
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const rad = (d) => d * Math.PI / 180;
+  const deg = (r) => r * 180 / Math.PI;
+  const norm360 = (d) => ((d % 360) + 360) % 360;
+  // smallest signed difference a-b in degrees, range (-180,180]
+  const angDiff = (a, b) => { let x = ((a - b + 540) % 360) - 180; return x; };
+  const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+  function hexToRgb(hex) {
+    let h = String(hex).replace("#", "").trim();
+    if (h.length === 3) h = h.split("").map(c => c + c).join("");
+    if (h.length !== 6 || /[^0-9a-fA-F]/.test(h)) return { r: 37, g: 99, b: 235 };
+    return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+  }
+  function hexToRgba(hex, a) { const c = hexToRgb(hex); return `rgba(${c.r},${c.g},${c.b},${a})`; }
+
+  let toastTimer = null;
+  function toast(msg, isError) {
+    const el = $("toast");
+    el.innerHTML = "";
+    const span = document.createElement("span");
+    span.textContent = msg;
+    el.appendChild(span);
+    el.className = "show" + (isError ? " error" : "");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.className = ""; }, 3400);
+  }
+
+  function isTypingInField() {
+    const el = document.activeElement;
+    if (!el) return false;
+    const t = el.tagName;
+    return (t === "INPUT" || t === "TEXTAREA" || el.isContentEditable);
+  }
+
+  /* ----------------------------- Konva setup --------------------------- */
+  const stage = new Konva.Stage({ container: HOST, width: state.contentW, height: state.contentH });
+  const bgLayer = new Konva.Layer({ listening: false });   // background passes clicks through
+  const mainLayer = new Konva.Layer();
+  stage.add(bgLayer, mainLayer);
+
+  // Transformer used to resize text labels (rotation disabled to keep text readable)
+  const textTr = new Konva.Transformer({
+    rotateEnabled: false,
+    enabledAnchors: ["top-left", "top-right", "bottom-left", "bottom-right", "middle-left", "middle-right"],
+    borderStroke: SEL_COLOR, borderStrokeWidth: 1.5,
+    anchorStroke: SEL_COLOR, anchorFill: "#fff", anchorSize: 9, anchorCornerRadius: 2,
+    ignoreStroke: true, padding: 4,
+    boundBoxFunc: (oldBox, newBox) => {
+      if (newBox.width < 30) newBox.width = 30;
+      if (newBox.height < 16) newBox.height = 16;
+      return newBox;
+    }
+  });
+  mainLayer.add(textTr);
+
+  const EQUIPMENT_IMAGES = {};
+  function preloadEquipmentImages() {
+    Object.entries(EQUIPMENT_TYPES).forEach(([kind, meta]) => {
+      EQUIPMENT_IMAGES[kind] = EQUIPMENT_IMAGES[kind] || {};
+      Object.entries(meta.variants).forEach(([variant, details]) => {
+        const image = new Image();
+        image.onload = () => {
+          state.equipment.filter(item => item.kind === kind && item.variant === variant).forEach(updateEquipment);
+          mainLayer.batchDraw();
+        };
+        image.src = details[1];
+        EQUIPMENT_IMAGES[kind][variant] = image;
+      });
+    });
+  }
+
+  /* ----------------------- View / zoom / scaling ----------------------- */
+  function clampZoomForContent(z) {
+    const maxByW = MAX_CANVAS_DIM / state.contentW;
+    const maxByH = MAX_CANVAS_DIM / state.contentH;
+    return clamp(z, MIN_ZOOM, Math.min(MAX_ZOOM, maxByW, maxByH));
+  }
+
+  function applyView() {
+    const w = Math.round(state.contentW * state.zoom);
+    const h = Math.round(state.contentH * state.zoom);
+    stage.size({ width: w, height: h });
+    stage.scale({ x: state.zoom, y: state.zoom });
+    HOST.style.width = w + "px";
+    HOST.style.height = h + "px";
+    $("zoom-readout").textContent = Math.round(state.zoom * 100) + "%";
+    updateScaleBar();
+    stage.batchDraw();
+  }
+
+  function setZoom(targetZoom, clientX, clientY) {
+    const newZoom = clampZoomForContent(targetZoom);
+    if (Math.abs(newZoom - state.zoom) < 1e-6) return;
+    const scrollRect = SCROLL.getBoundingClientRect();
+    const fx = (clientX == null ? scrollRect.left + scrollRect.width / 2 : clientX);
+    const fy = (clientY == null ? scrollRect.top + scrollRect.height / 2 : clientY);
+    // Content point under the focus point, derived from the canvas's real screen
+    // rect so the mat margin and current scroll are both accounted for automatically.
+    const before = HOST.getBoundingClientRect();
+    const cx = (fx - before.left) / state.zoom;
+    const cy = (fy - before.top) / state.zoom;
+    state.zoom = newZoom;
+    applyView();                                 // resize first so the scroll range grows
+    const after = HOST.getBoundingClientRect();   // reflects new size + current scroll
+    SCROLL.scrollLeft += (after.left + cx * state.zoom) - fx;
+    SCROLL.scrollTop += (after.top + cy * state.zoom) - fy;
+    refreshAllCameraVisuals();
+  }
+
+  function fitToScreen() {
+    const availW = SCROLL.clientWidth - 64, availH = SCROLL.clientHeight - 64;
+    const z = Math.min(availW / state.contentW, availH / state.contentH);
+    state.zoom = clampZoomForContent(z > 0 ? z : 1);
+    applyView();
+    // Center the plan using its real on-screen rect (independent of the mat margin).
+    const after = HOST.getBoundingClientRect();
+    const sr = SCROLL.getBoundingClientRect();
+    SCROLL.scrollLeft += (after.left + after.width / 2) - (sr.left + SCROLL.clientWidth / 2);
+    SCROLL.scrollTop += (after.top + after.height / 2) - (sr.top + SCROLL.clientHeight / 2);
+    refreshAllCameraVisuals();
+  }
+
+  function viewportCenterContent() {
+    const r = HOST.getBoundingClientRect();
+    const sr = SCROLL.getBoundingClientRect();
+    const fx = sr.left + SCROLL.clientWidth / 2;
+    const fy = sr.top + SCROLL.clientHeight / 2;
+    return { x: (fx - r.left) / state.zoom, y: (fy - r.top) / state.zoom };
+  }
+
+  // Map-style scale bar (UI only)
+  function niceNumber(x) {
+    if (x <= 0) return 1;
+    const pow = Math.pow(10, Math.floor(Math.log10(x)));
+    const f = x / pow;
+    const n = f >= 5 ? 5 : f >= 2 ? 2 : 1;
+    return n * pow;
+  }
+  function fmtMeters(m) { return m >= 1 ? String(m) : String(Math.round(m * 100) / 100); }
+  function updateScaleBar() {
+    const pxPerM = state.ppm * state.zoom;
+    const meters = niceNumber(110 / pxPerM);
+    $("scalebar-bar").style.width = Math.max(20, meters * pxPerM) + "px";
+    $("scalebar-label").textContent = fmtMeters(meters) + " m";
+    $("scalebar-ppm").textContent = state.ppm + " px/m";
+  }
+
+  /* --------------------------- Background ------------------------------ */
+  function drawPlaceholder() {
+    bgLayer.destroyChildren();
+    const rect = new Konva.Rect({ x: 0, y: 0, width: state.contentW, height: state.contentH, fill: "#ffffff", listening: false });
+    bgLayer.add(rect);
+    // faint grid for orientation (every 80px)
+    const step = 80;
+    for (let x = step; x < state.contentW; x += step)
+      bgLayer.add(new Konva.Line({ points: [x, 0, x, state.contentH], stroke: "#eef1f5", strokeWidth: 1, listening: false }));
+    for (let y = step; y < state.contentH; y += step)
+      bgLayer.add(new Konva.Line({ points: [0, y, state.contentW, y], stroke: "#eef1f5", strokeWidth: 1, listening: false }));
+    state.bgNode = rect;
+    bgLayer.batchDraw();
+  }
+
+  function setBackground(source, w, h) {
+    state.contentW = Math.round(w);
+    state.contentH = Math.round(h);
+    state.hasBackground = true;
+    bgLayer.destroyChildren();
+    state.bgNode = new Konva.Image({ image: source, x: 0, y: 0, width: state.contentW, height: state.contentH, listening: false });
+    bgLayer.add(state.bgNode);
+    $("empty-hint").classList.add("hidden");
+    fitToScreen();
+    bgLayer.batchDraw();
+  }
+
+  function handleFile(file) {
+    if (!file) return;
+    const name = (file.name || "").toLowerCase();
+    const isPdf = file.type === "application/pdf" || name.endsWith(".pdf");
+    const isImg = /^image\/(png|jpeg|jpg|webp)$/.test(file.type) || /\.(png|jpe?g|webp)$/.test(name);
+    if (isPdf) return loadPdf(file);
+    if (isImg) return loadImage(file);
+    toast("Unsupported file type. Use PNG, JPG, WEBP, or PDF.", true);
+  }
+
+  function loadImage(file) {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      hidePdfBar();
+      setBackground(img, img.naturalWidth, img.naturalHeight);
+      URL.revokeObjectURL(url);
+      toast("Plan loaded — start placing cameras.");
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); toast("Could not load that image file.", true); };
+    img.src = url;
+  }
+
+  function hidePdfBar() { $("pdfbar").classList.remove("show"); state.pdfDoc = null; }
+
+  async function loadPdf(file) {
+    if (!window.pdfjsLib) { toast("PDF engine failed to load. Check your connection.", true); return; }
+    try {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = "/static/vendor/pdfjs-worker-3.11.174.min.js";
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      state.pdfDoc = pdf;
+      const sel = $("pdf-page-select");
+      sel.innerHTML = "";
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const opt = document.createElement("option");
+        opt.value = String(i); opt.textContent = "Page " + i;
+        sel.appendChild(opt);
+      }
+      $("pdf-info").textContent = "of " + pdf.numPages;
+      $("pdfbar").classList.add("show");
+      await renderPdfPage(1);
+      toast("PDF loaded — choose a page if needed.");
+    } catch (err) {
+      console.error(err);
+      hidePdfBar();
+      toast("Failed to read that PDF.", true);
+    }
+  }
+
+  async function renderPdfPage(n) {
+    if (!state.pdfDoc) return;
+    try {
+      const page = await state.pdfDoc.getPage(n);
+      const base = page.getViewport({ scale: 1 });
+      const scale = clamp(1600 / base.width, 1, 2.5);   // render crisp but bounded
+      const vp = page.getViewport({ scale });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(vp.width);
+      canvas.height = Math.round(vp.height);
+      const ctx = canvas.getContext("2d");
+      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      setBackground(canvas, canvas.width, canvas.height);
+    } catch (err) {
+      console.error(err);
+      toast("Could not render that PDF page.", true);
+    }
+  }
+
+  /* ------------------------------ Cameras ------------------------------ */
+  function getCamera(id) { return state.cameras.find(c => c.id === id); }
+  function getText(id) { return state.texts.find(t => t.id === id); }
+  function isSelected(type, id) { return state.selected && state.selected.type === type && state.selected.id === id; }
+
+  function handleCircle(color) {
+    return new Konva.Circle({
+      radius: HANDLE_R, fill: color, stroke: "#fff", strokeWidth: 2,
+      draggable: true, visible: false, hitStrokeWidth: 12,
+      shadowColor: "#000", shadowOpacity: 0.18, shadowBlur: 3,
+    });
+  }
+
+  // ---- Camera icons (user-supplied artwork, recolored to black/white silhouettes) ----
+  // These are pictorial views with a definite "up" (bracket, wall arm), so the icon is
+  // NOT rotated with the camera — rotating it would look upside down. Instead the icon
+  // stays upright and the FOV cone shows the aim. A black or white shade is picked so the
+  // icon reads cleanly on either a light or a dark plan background.
+  const ICONS = {};                 // ICONS[type][shade] = HTMLImageElement
+  const FIT_BOX = 38;               // icon fits within this many on-screen px
+
+  function preloadIcons() {
+    ["dome", "bullet", "ptz"].forEach(t => {
+      ICONS[t] = ICONS[t] || {};
+      ["black", "white"].forEach(s => {
+        if (!ICON_DATA[t] || !ICON_DATA[t][s]) return;
+        const im = new Image();
+        im.onload = () => mainLayer.batchDraw();   // repaint once pixels are available
+        im.src = ICON_DATA[t][s];
+        ICONS[t][s] = im;                          // stored immediately
+      });
+    });
+  }
+
+  function glyphRingRadius(g) { return Math.max(g._iconW, g._iconH) / 2 + 6; }
+
+  // Icon style is now fixed by camera type: dome & PTZ use the artwork (badge), bullet
+  // uses the schematic symbol (plan). All of them rotate to face the field of view.
+  function styleForType(type) { return type === "bullet" ? "plan" : "badge"; }
+
+  // How much to rotate the glyph: plan symbols are drawn pointing +x (base 0); artwork is
+  // rotated so its lens (which points at BADGE_BASE in the source drawing) leads the aim.
+  function glyphRotation(cam) {
+    if (cam.style === "plan") return cam.rotation;
+    return cam.rotation - (BADGE_BASE[cam.type] || 0);
+  }
+
+  // Ink colors for plan symbols / contrast, derived from the black/white shade.
+  function shadeInk(shade) {
+    return shade === "white"
+      ? { ink: "#ffffff", soft: "rgba(255,255,255,0.16)" }
+      : { ink: "#1b2430", soft: "rgba(27,36,48,0.12)" };
+  }
+
+  // BADGE style: the user's uploaded artwork as a constant-size upright image.
+  function makeBadgeGlyph(type, shade) {
+    const g = new Konva.Group({ listening: true });
+    const meta = ICON_DATA[type] || { w: 1, h: 1 };
+    const el = (ICONS[type] && ICONS[type][shade]) || null;
+    const natW = (el && el.naturalWidth) || meta.w || 1;
+    const natH = (el && el.naturalHeight) || meta.h || 1;
+    const scale = FIT_BOX / Math.max(natW, natH);
+    const w = natW * scale, h = natH * scale;
+    const img = new Konva.Image({ image: el || undefined, width: w, height: h, offsetX: w / 2, offsetY: h / 2, listening: true });
+    g.add(img);
+    g._img = img; g._iconW = w; g._iconH = h;
+    return g;
+  }
+
+  // PLAN style: a top-down schematic symbol. Drawn pointing +x and SYMMETRIC about the
+  // x-axis, so it can be rotated to any heading to face the FOV with no upside-down or
+  // mirrored state. Colored by the black/white shade for background contrast.
+  function makePlanGlyph(type, shade) {
+    const g = new Konva.Group({ listening: true });
+    const { ink, soft } = shadeInk(shade);
+    let reach;
+    if (type === "bullet") {
+      // long barrel on a wall bracket, ringed lens at the muzzle — points +x
+      g.add(
+        new Konva.Rect({ x: -24, y: -7, width: 4, height: 14, cornerRadius: 2.5, fill: ink }),
+        new Konva.Line({ points: [-20, 0, -13, 0], stroke: ink, strokeWidth: 4.5, lineCap: "round" }),
+        new Konva.Rect({ x: -13, y: -9, width: 22, height: 18, cornerRadius: 9, stroke: ink, strokeWidth: 2.8, fill: soft }),
+        new Konva.Line({ points: [2, -7.5, 2, 7.5], stroke: ink, strokeWidth: 1.7 }),
+        new Konva.Circle({ x: 6, y: 0, radius: 6, stroke: ink, strokeWidth: 2.4 }),
+        new Konva.Circle({ x: 6, y: 0, radius: 3.4, stroke: ink, strokeWidth: 1.5 }),
+        new Konva.Circle({ x: 6, y: 0, radius: 1.7, fill: ink })
+      );
+      reach = 24;
+    } else if (type === "ptz") {
+      // speed dome: BIG housing + bold wraparound sun-shield hood + back mount arm + turret
+      g.add(
+        new Konva.Rect({ x: -25, y: -6, width: 4, height: 12, cornerRadius: 2.2, fill: ink }),
+        new Konva.Line({ points: [-21, 0, -15, 0], stroke: ink, strokeWidth: 4.5, lineCap: "round" }),
+        new Konva.Circle({ radius: 19, stroke: ink, strokeWidth: 2.8, fill: soft }),
+        new Konva.Arc({ innerRadius: 13, outerRadius: 21, angle: 156, rotation: -78, fill: ink }),
+        new Konva.Circle({ radius: 8, stroke: ink, strokeWidth: 1.8, fill: soft }),
+        new Konva.Circle({ x: 4, y: 0, radius: 3, fill: ink })
+      );
+      reach = 25;
+    } else {
+      // fixed dome: small, flush and plain — compact housing with a single forward eye
+      g.add(
+        new Konva.Circle({ radius: 14, stroke: ink, strokeWidth: 2.8, fill: soft }),
+        new Konva.Circle({ radius: 9.5, stroke: ink, strokeWidth: 1.5 }),
+        new Konva.Circle({ x: 6.5, y: 0, radius: 3.6, fill: ink }),
+        new Konva.Line({ points: [13, 0, 16, 0], stroke: ink, strokeWidth: 2.4, lineCap: "round" })
+      );
+      reach = 16;
+    }
+    g._iconW = g._iconH = reach * 2;
+    return g;
+  }
+
+  function makeGlyph(type, shade, style) {
+    return style === "plan" ? makePlanGlyph(type, shade) : makeBadgeGlyph(type, shade);
+  }
+
+  // Swap a camera's glyph on type/shade/style change, keeping z-order.
+  function rebuildGlyph(cam) {
+    cam.glyph.destroy();
+    cam.glyph = makeGlyph(cam.type, cam.shade, cam.style);
+    cam.marker.add(cam.glyph);
+    cam.glyph.zIndex(1);          // keep order: ring(0), glyph(1), label(2)
+    cam.glyph.rotation(glyphRotation(cam));
+    updateCamera(cam);
+  }
+
+  function createCamera(x, y) {
+    state.camCounter++;
+    const cam = {
+      id: uid(),
+      name: "Camera " + state.camCounter,
+      type: state.lastCamType,
+      shade: state.lastCamShade,
+      style: styleForType(state.lastCamType),
+      fov: DEFAULTS.fov, range: DEFAULTS.range, rotation: DEFAULTS.rotation,
+      color: DEFAULTS.color, opacity: DEFAULTS.opacity, widthMeters: DEFAULTS.widthMeters,
+      mountedOnId: null,
+      x: x, y: y,
+    };
+
+    cam.group = new Konva.Group({ x: x, y: y, draggable: true });
+
+    // FOV cone — drawn from the camera origin; reads cam.* live via closure
+    cam.cone = new Konva.Shape({
+      sceneFunc: (ctx, shape) => {
+        const r = cam.range * state.ppm;
+        const half = rad(cam.fov / 2);
+        const dir = rad(cam.rotation);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.arc(0, 0, r, dir - half, dir + half, false);
+        ctx.closePath();
+        ctx.fillStrokeShape(shape);
+      },
+      listening: true,
+    });
+
+    // dashed guide to the rotation handle
+    cam.rotLine = new Konva.Line({ points: [0, 0, 0, 0], stroke: ROT_COLOR, dash: [4, 4], listening: false, visible: false });
+
+    // Marker group is counter-scaled (1/zoom) so the icon stays a constant on-screen size.
+    // In "plan" style the top-down symbol rotates to face the aim; in "badge" style the
+    // pictorial artwork stays upright. The selection ring and name label stay upright.
+    cam.marker = new Konva.Group({ listening: true });
+    cam.ring = new Konva.Circle({ radius: RING_R, stroke: SEL_COLOR, dash: [4, 3], strokeWidth: 1.5, listening: false, visible: false });
+    cam.glyph = makeGlyph(cam.type, cam.shade, cam.style);
+    cam.ring.radius(glyphRingRadius(cam.glyph));
+    cam.label = new Konva.Text({ text: cam.name, fontFamily: "Inter, sans-serif", fontSize: 12.5, fontStyle: "bold", fill: "#111827", y: glyphRingRadius(cam.glyph) + 7, listening: false });
+    cam.label.offsetX(cam.label.width() / 2);
+    cam.marker.add(cam.ring, cam.glyph, cam.label);
+
+    // Edit handles
+    cam.hRange = handleCircle(RANGE_COLOR);
+    cam.hRot = handleCircle(ROT_COLOR);
+    cam.hAngL = handleCircle(ANG_COLOR);
+    cam.hAngR = handleCircle(ANG_COLOR);
+
+    cam.group.add(cam.cone, cam.rotLine, cam.marker, cam.hRange, cam.hRot, cam.hAngL, cam.hAngR);
+    mainLayer.add(cam.group);
+
+    wireCamera(cam);
+    state.cameras.push(cam);
+    applyCameraVisuals(cam, state.zoom, true);
+    selectCamera(cam);
+    updateStats();
+    return cam;
+  }
+
+  // Positions + sizes everything for a given zoom; toggles handle/ring visibility.
+  function applyCameraVisuals(cam, z, showHandles) {
+    const r = cam.range * state.ppm;
+    const dir = rad(cam.rotation);
+    const ux = Math.cos(dir), uy = Math.sin(dir);
+
+    // marker (constant on-screen size). Both styles now rotate to face the FOV: plan
+    // symbols are symmetric so they never flip; the artwork rotates its lens to lead the
+    // aim (it may tip near vertical headings — that is what we're evaluating). Label upright.
+    cam.marker.scale({ x: 1, y: 1 });
+    const glyphSize = Math.max(cam.glyph._iconW, cam.glyph._iconH) || FIT_BOX;
+    const iconScale = (clamp(cam.widthMeters, 0.1, 10) * state.ppm) / glyphSize;
+    cam.glyph.scale({ x: iconScale, y: iconScale });
+    cam.glyph.rotation(glyphRotation(cam));
+    const markerRadius = glyphSize * iconScale / 2 + 6 / z;
+    cam.ring.radius(markerRadius);
+    cam.ring.strokeWidth(1.5 / z);
+    cam.ring.dash([4 / z, 3 / z]);
+    if (cam.label.text() !== cam.name) cam.label.text(cam.name);
+    cam.label.fontSize(12.5 / z);
+    cam.label.y(markerRadius + 7 / z);
+    cam.label.offsetX(cam.label.width() / 2);
+    cam.ring.visible(showHandles);
+
+    // cone
+    cam.cone.fill(hexToRgba(cam.color, cam.opacity));
+    cam.cone.stroke(cam.color);
+    cam.cone.strokeWidth(2 / z);
+
+    // handles (screen-constant radius; positioned in plan coordinates)
+    const hr = HANDLE_R / z;
+    cam.hRange.radius(hr); cam.hRange.position({ x: r * ux, y: r * uy });
+    const rotR = r + ROT_OFFSET / z;
+    cam.hRot.radius(hr); cam.hRot.position({ x: rotR * ux, y: rotR * uy });
+    const lDir = dir - rad(cam.fov / 2), rDir = dir + rad(cam.fov / 2);
+    cam.hAngL.radius(hr); cam.hAngL.position({ x: r * Math.cos(lDir), y: r * Math.sin(lDir) });
+    cam.hAngR.radius(hr); cam.hAngR.position({ x: r * Math.cos(rDir), y: r * Math.sin(rDir) });
+
+    [cam.hRange, cam.hRot, cam.hAngL, cam.hAngR].forEach(h => h.visible(showHandles));
+    cam.rotLine.visible(showHandles);
+    cam.rotLine.points([0, 0, rotR * ux, rotR * uy]);
+    cam.rotLine.strokeWidth(1 / z);
+  }
+
+  function updateCamera(cam) {
+    applyCameraVisuals(cam, state.zoom, isSelected("camera", cam.id));
+    mainLayer.batchDraw();
+  }
+
+  function refreshAllCameraVisuals() {
+    state.cameras.forEach(c => applyCameraVisuals(c, state.zoom, isSelected("camera", c.id)));
+    mainLayer.batchDraw();
+  }
+
+  function wireCamera(cam) {
+    cam.group.on("mousedown touchstart", (e) => {
+      if (state.spaceDown || state.middleDown) return;   // let pan take over
+      e.cancelBubble = true;
+    });
+    cam.group.on("click tap", (e) => {
+      if (state.spaceDown) return;
+      e.cancelBubble = true;
+      selectCamera(cam);
+    });
+    cam.group.on("dragstart", (e) => {
+      if (state.spaceDown || state.middleDown) { e.target.stopDrag(); return; }
+      selectCamera(cam);
+    });
+    cam.group.on("dragmove", () => { cam.x = cam.group.x(); cam.y = cam.group.y(); });
+    cam.group.on("mouseenter", () => { if (!state.spaceDown && !state.isPanning) HOST.style.cursor = "move"; });
+    cam.group.on("mouseleave", () => { if (!state.spaceDown && !state.isPanning) HOST.style.cursor = ""; });
+
+    // RANGE handle — distance along the viewing axis
+    cam.hRange.on("dragmove", () => {
+      const p = cam.hRange.position();
+      const dir = rad(cam.rotation);
+      const proj = p.x * Math.cos(dir) + p.y * Math.sin(dir);   // project onto axis
+      cam.range = clamp(proj / state.ppm, MIN_RANGE, MAX_RANGE);
+      updateCamera(cam); syncCameraPanel(cam);
+    });
+
+    // ROTATION handle — sets viewing direction
+    cam.hRot.on("dragmove", () => {
+      const p = cam.hRot.position();
+      cam.rotation = norm360(deg(Math.atan2(p.y, p.x)));
+      updateCamera(cam); syncCameraPanel(cam);
+    });
+
+    // ANGLE handles — widen / narrow FOV symmetrically
+    const angDrag = (h) => () => {
+      const p = h.position();
+      const a = deg(Math.atan2(p.y, p.x));
+      const half = Math.abs(angDiff(a, cam.rotation));
+      cam.fov = clamp(half * 2, MIN_FOV, MAX_FOV);
+      updateCamera(cam); syncCameraPanel(cam);
+    };
+    cam.hAngL.on("dragmove", angDrag(cam.hAngL));
+    cam.hAngR.on("dragmove", angDrag(cam.hAngR));
+
+    [cam.hRange, cam.hRot, cam.hAngL, cam.hAngR].forEach(h => {
+      h.on("mousedown touchstart", (e) => { e.cancelBubble = true; });
+      h.on("dragstart", (e) => { if (state.spaceDown || state.middleDown) e.target.stopDrag(); e.cancelBubble = true; });
+      h.on("mouseenter", () => { if (!state.spaceDown) HOST.style.cursor = "pointer"; });
+      h.on("mouseleave", () => { if (!state.spaceDown && !state.isPanning) HOST.style.cursor = ""; });
+    });
+  }
+
+  /* ----------------------------- Equipment ----------------------------- */
+  function getEquipment(id) { return state.equipment.find(item => item.id === id); }
+
+  function createEquipment(kind, x, y) {
+    const meta = EQUIPMENT_TYPES[kind];
+    if (!meta) return null;
+    const count = state.equipment.filter(item => item.kind === kind).length + 1;
+    const item = {
+      id: uid(), kind, name: `${meta.label} ${count}`,
+      variant: meta.defaultVariant, widthMeters: meta.defaultWidth,
+      rotation: 0, opacity: 1, x, y,
+    };
+    item.group = new Konva.Group({ x, y, draggable: true });
+    item.selection = new Konva.Rect({ stroke: "#0f766e", strokeWidth: 2, dash: [7, 4], visible: false, listening: false });
+    item.image = new Konva.Image({ listening: true });
+    item.label = new Konva.Text({
+      text: item.name, fontFamily: "Inter, sans-serif", fontSize: 13,
+      fontStyle: "bold", fill: "#0f172a", align: "center", listening: false,
+      stroke: "#ffffff", strokeWidth: 3, fillAfterStrokeEnabled: true,
+    });
+    item.group.add(item.selection, item.image, item.label);
+    mainLayer.add(item.group);
+    state.equipment.push(item);
+    wireEquipment(item);
+    updateEquipment(item);
+    selectEquipment(item);
+    updateStats();
+    return item;
+  }
+
+  function updateEquipment(item) {
+    const meta = EQUIPMENT_TYPES[item.kind];
+    if (!meta) return;
+    if (!meta.variants[item.variant]) item.variant = meta.defaultVariant;
+    const image = EQUIPMENT_IMAGES[item.kind] && EQUIPMENT_IMAGES[item.kind][item.variant];
+    const naturalW = (image && image.naturalWidth) || (item.kind === "solar_pole" ? 900 : 512);
+    const fullH = (image && image.naturalHeight) || 512;
+    const cropH = fullH * (1 - (meta.cropBottom || 0));
+    const width = clamp(item.widthMeters, 0.5, 50) * state.ppm;
+    const height = width * cropH / naturalW;
+    item.group.rotation(norm360(item.rotation));
+    item.image.setAttrs({
+      image: image || undefined,
+      x: -width / 2, y: -height / 2, width, height,
+      crop: { x: 0, y: 0, width: naturalW, height: cropH },
+      opacity: clamp(item.opacity, 0.2, 1),
+      globalCompositeOperation: meta.blend ? "multiply" : "source-over",
+    });
+    item.selection.setAttrs({ x: -width / 2 - 5, y: -height / 2 - 5, width: width + 10, height: height + 30 });
+    item.label.setAttrs({ text: item.name, x: -width / 2, y: height / 2 + 5, width, fontSize: clamp(13 / state.zoom, 8, 22) });
+    item.selection.visible(isSelected("equipment", item.id));
+    mainLayer.batchDraw();
+  }
+
+  function wireEquipment(item) {
+    item.group.on("mousedown touchstart", (event) => {
+      if (state.spaceDown || state.middleDown) return;
+      event.cancelBubble = true;
+    });
+    item.group.on("click tap", (event) => {
+      if (state.spaceDown) return;
+      event.cancelBubble = true;
+      selectEquipment(item);
+    });
+    item.group.on("dragstart", (event) => {
+      if (state.spaceDown || state.middleDown) { event.target.stopDrag(); return; }
+      selectEquipment(item);
+    });
+    item.group.on("dragmove", () => {
+      const nextX = item.group.x(), nextY = item.group.y();
+      const dx = nextX - item.x, dy = nextY - item.y;
+      item.x = nextX; item.y = nextY;
+      if (MOUNTABLE_EQUIPMENT_KINDS.has(item.kind) && (dx || dy)) {
+        state.cameras.filter(cam => cam.mountedOnId === item.id).forEach(cam => {
+          cam.group.position({ x: cam.group.x() + dx, y: cam.group.y() + dy });
+          cam.x = cam.group.x(); cam.y = cam.group.y();
+          cam.group.moveToTop();
+        });
+        mainLayer.batchDraw();
+      }
+    });
+    item.group.on("mouseenter", () => { if (!state.spaceDown && !state.isPanning) HOST.style.cursor = "move"; });
+    item.group.on("mouseleave", () => { if (!state.spaceDown && !state.isPanning) HOST.style.cursor = ""; });
+  }
+
+  /* ------------------------------- Text -------------------------------- */
+  function createText(x, y) {
+    const t = { id: uid() };
+    t.node = new Konva.Text({
+      x: x, y: y, text: "New label",
+      fontFamily: "Inter, sans-serif", fontSize: 22, fill: "#111827",
+      draggable: true, width: 160, padding: 2,
+    });
+    mainLayer.add(t.node);
+    wireText(t);
+    state.texts.push(t);
+    selectText(t);
+    updateStats();
+    return t;
+  }
+
+  function wireText(t) {
+    t.node.on("mousedown touchstart", (e) => { if (state.spaceDown || state.middleDown) return; e.cancelBubble = true; });
+    t.node.on("click tap", (e) => { if (state.spaceDown) return; e.cancelBubble = true; selectText(t); });
+    t.node.on("dragstart", (e) => { if (state.spaceDown || state.middleDown) { e.target.stopDrag(); return; } selectText(t); });
+    t.node.on("dblclick dbltap", () => editTextInline(t));
+    t.node.on("mouseenter", () => { if (!state.spaceDown && !state.isPanning) HOST.style.cursor = "move"; });
+    t.node.on("mouseleave", () => { if (!state.spaceDown && !state.isPanning) HOST.style.cursor = ""; });
+    // Resize: convert scale into width + font size, then reset scale so text stays crisp.
+    t.node.on("transform", () => {
+      const n = t.node;
+      n.width(Math.max(30, n.width() * n.scaleX()));
+      n.fontSize(Math.max(8, n.fontSize() * n.scaleY()));
+      n.scaleX(1); n.scaleY(1);
+      syncTextPanel(t);
+    });
+  }
+
+  function editTextInline(t) {
+    const node = t.node;
+    const editor = $("text-editor");
+    node.hide(); textTr.hide(); mainLayer.batchDraw();
+
+    const hostRect = HOST.getBoundingClientRect();   // already reflects scroll position
+    const wsRect = $("workspace").getBoundingClientRect();
+    const pos = node.getAbsolutePosition();          // stage coords (includes zoom)
+
+    editor.value = node.text();
+    editor.style.display = "block";
+    editor.style.left = (hostRect.left - wsRect.left + pos.x) + "px";
+    editor.style.top = (hostRect.top - wsRect.top + pos.y) + "px";
+    editor.style.width = Math.max(60, node.width() * state.zoom) + "px";
+    editor.style.fontSize = (node.fontSize() * state.zoom) + "px";
+    editor.style.color = node.fill();
+    editor.style.fontFamily = "Inter, sans-serif";
+    editor.style.height = "auto";
+    editor.focus();
+    editor.select();
+
+    const finish = (commit) => {
+      if (commit) { node.text(editor.value.length ? editor.value : "New label"); }
+      editor.style.display = "none";
+      editor.onblur = null; editor.onkeydown = null; editor.oninput = null;
+      node.show();
+      if (isSelected("text", t.id)) { textTr.show(); textTr.forceUpdate(); }
+      mainLayer.batchDraw();
+      syncTextPanel(t);
+    };
+    editor.oninput = () => { editor.style.height = "auto"; editor.style.height = editor.scrollHeight + "px"; };
+    editor.onkeydown = (ev) => {
+      if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); finish(true); }
+      else if (ev.key === "Escape") { finish(false); }
+    };
+    editor.onblur = () => finish(true);
+    editor.oninput();
+  }
+
+  /* ---------------------------- Selection ------------------------------ */
+  function showPanel(which) {
+    $("panel-empty").classList.toggle("hidden", which !== "none");
+    $("panel-camera").classList.toggle("hidden", which !== "camera");
+    $("panel-equipment").classList.toggle("hidden", which !== "equipment");
+    $("panel-text").classList.toggle("hidden", which !== "text");
+  }
+
+  function deselectAll() {
+    state.selected = null;
+    textTr.nodes([]);
+    state.cameras.forEach(c => applyCameraVisuals(c, state.zoom, false));
+    state.equipment.forEach(item => item.selection.hide());
+    showPanel("none");
+    mainLayer.batchDraw();
+  }
+
+  function selectCamera(cam) {
+    state.selected = { type: "camera", id: cam.id };
+    textTr.nodes([]);
+    cam.group.moveToTop();
+    state.cameras.forEach(c => applyCameraVisuals(c, state.zoom, c.id === cam.id));
+    state.equipment.forEach(item => item.selection.hide());
+    showPanel("camera");
+    syncCameraPanel(cam);
+    mainLayer.batchDraw();
+  }
+
+  function selectEquipment(item) {
+    state.selected = { type: "equipment", id: item.id };
+    textTr.nodes([]);
+    state.cameras.forEach(c => applyCameraVisuals(c, state.zoom, false));
+    state.equipment.forEach(entry => entry.selection.visible(entry.id === item.id));
+    item.group.moveToTop();
+    showPanel("equipment");
+    syncEquipmentPanel(item);
+    mainLayer.batchDraw();
+  }
+
+  function selectText(t) {
+    state.selected = { type: "text", id: t.id };
+    state.cameras.forEach(c => applyCameraVisuals(c, state.zoom, false));
+    state.equipment.forEach(item => item.selection.hide());
+    t.node.moveToTop();
+    textTr.nodes([t.node]);
+    textTr.moveToTop();
+    showPanel("text");
+    syncTextPanel(t);
+    mainLayer.batchDraw();
+  }
+
+  function deleteSelected() {
+    if (!state.selected) return;
+    if (state.selected.type === "camera") {
+      const cam = getCamera(state.selected.id);
+      if (cam) { cam.group.destroy(); state.cameras = state.cameras.filter(c => c.id !== cam.id); }
+    } else if (state.selected.type === "equipment") {
+      const item = getEquipment(state.selected.id);
+      if (item) {
+        state.cameras.filter(cam => cam.mountedOnId === item.id).forEach(cam => { cam.mountedOnId = null; });
+        item.group.destroy(); state.equipment = state.equipment.filter(entry => entry.id !== item.id);
+      }
+    } else {
+      const t = getText(state.selected.id);
+      if (t) { textTr.nodes([]); t.node.destroy(); state.texts = state.texts.filter(x => x.id !== t.id); }
+    }
+    deselectAll();
+    updateStats();
+    mainLayer.batchDraw();
+  }
+
+  function updateStats() {
+    $("stat-cameras").textContent = state.cameras.length;
+    $("stat-equipment").textContent = state.equipment.length;
+    $("stat-texts").textContent = state.texts.length;
+  }
+
+  /* ----------------------- Sidebar <-> object sync --------------------- */
+  function syncCameraPanel(cam) {
+    if (!isSelected("camera", cam.id)) return;
+    $("cam-name").value = cam.name;
+    setActiveTypeButton(cam.type);
+    setActiveShadeButton(cam.shade);
+    $("cam-fov").value = Math.round(cam.fov);
+    $("cam-range").value = Math.round(cam.range * 10) / 10;
+    $("cam-rotation").value = Math.round(cam.rotation);
+    $("cam-width").value = Math.round(cam.widthMeters * 10) / 10;
+    const mountedSelect = $("cam-mounted-on");
+    mountedSelect.innerHTML = "";
+    const ungrouped = document.createElement("option");
+    ungrouped.value = ""; ungrouped.textContent = "Not grouped";
+    mountedSelect.appendChild(ungrouped);
+    state.equipment.filter(item => MOUNTABLE_EQUIPMENT_KINDS.has(item.kind)).forEach(item => {
+      const option = document.createElement("option");
+      option.value = item.id; option.textContent = item.name;
+      mountedSelect.appendChild(option);
+    });
+    mountedSelect.value = cam.mountedOnId || "";
+    $("cam-color").value = cam.color;
+    $("cam-color-hex").textContent = cam.color.toUpperCase();
+    $("cam-opacity").value = Math.round(cam.opacity * 100);
+    $("cam-opacity-val").textContent = Math.round(cam.opacity * 100) + "%";
+  }
+  function syncTextPanel(t) {
+    if (!isSelected("text", t.id)) return;
+    $("txt-content").value = t.node.text();
+    $("txt-size").value = Math.round(t.node.fontSize());
+    $("txt-color").value = rgbToHexSafe(t.node.fill());
+    $("txt-color-hex").textContent = rgbToHexSafe(t.node.fill()).toUpperCase();
+  }
+  function syncEquipmentPanel(item) {
+    if (!isSelected("equipment", item.id)) return;
+    const meta = EQUIPMENT_TYPES[item.kind];
+    $("equipment-panel-title").textContent = `${meta.label} properties`;
+    $("equipment-name").value = item.name;
+    const variantSelect = $("equipment-variant");
+    variantSelect.innerHTML = "";
+    Object.entries(meta.variants).forEach(([value, details]) => {
+      const option = document.createElement("option");
+      option.value = value; option.textContent = details[0]; option.selected = value === item.variant;
+      variantSelect.appendChild(option);
+    });
+    $("equipment-variant-field").classList.toggle("hidden", Object.keys(meta.variants).length === 1);
+    $("equipment-width").value = Math.round(item.widthMeters * 10) / 10;
+    $("equipment-rotation").value = Math.round(norm360(item.rotation));
+    $("equipment-opacity").value = Math.round(item.opacity * 100);
+    $("equipment-opacity-val").textContent = `${Math.round(item.opacity * 100)}%`;
+  }
+  function rgbToHexSafe(c) {
+    if (typeof c === "string" && c[0] === "#") return c.length === 4
+      ? "#" + c.slice(1).split("").map(x => x + x).join("") : c;
+    return "#111827";
+  }
+  function currentCamera() { return state.selected && state.selected.type === "camera" ? getCamera(state.selected.id) : null; }
+  function currentEquipment() { return state.selected && state.selected.type === "equipment" ? getEquipment(state.selected.id) : null; }
+  function currentText() { return state.selected && state.selected.type === "text" ? getText(state.selected.id) : null; }
+
+  /* ------------------------- Pan & zoom input -------------------------- */
+  // Mouse wheel = zoom toward the cursor.
+  SCROLL.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+    setZoom(state.zoom * factor, e.clientX, e.clientY);
+  }, { passive: false });
+
+  // Track scroll position so the scale bar / overlays stay correct (native scroll handles content).
+  SCROLL.addEventListener("scroll", () => { /* native; nothing to sync for big-canvas */ });
+
+  // Space / middle-mouse panning.
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Space" && !isTypingInField()) {
+      if (!state.spaceDown) { state.spaceDown = true; SCROLL.style.cursor = "grab"; }
+      e.preventDefault();
+    }
+  });
+  window.addEventListener("keyup", (e) => {
+    if (e.code === "Space") { state.spaceDown = false; if (!state.isPanning) SCROLL.style.cursor = ""; }
+  });
+  window.addEventListener("mousedown", (e) => { if (e.button === 1) state.middleDown = true; }, true);
+  window.addEventListener("mouseup", (e) => { if (e.button === 1) state.middleDown = false; }, true);
+
+  stage.on("mousedown", (e) => {
+    if (state.spaceDown || e.evt.button === 1) {
+      state.isPanning = true;
+      SCROLL.style.cursor = "grabbing";
+      state.panStart = { x: e.evt.clientX, y: e.evt.clientY, sl: SCROLL.scrollLeft, st: SCROLL.scrollTop };
+      e.evt.preventDefault();
+    }
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (state.isPanning && state.panStart) {
+      SCROLL.scrollLeft = state.panStart.sl - (e.clientX - state.panStart.x);
+      SCROLL.scrollTop = state.panStart.st - (e.clientY - state.panStart.y);
+    }
+  });
+  window.addEventListener("mouseup", () => {
+    if (state.isPanning) { state.isPanning = false; SCROLL.style.cursor = state.spaceDown ? "grab" : ""; }
+  });
+
+  // Click empty canvas to deselect.
+  stage.on("click tap", (e) => {
+    if (state.spaceDown) return;
+    if (e.target === stage || e.target === state.bgNode) deselectAll();
+  });
+
+  // Delete key removes the selected object.
+  window.addEventListener("keydown", (e) => {
+    if ((e.key === "Delete" || e.key === "Backspace") && !isTypingInField() && state.selected) {
+      e.preventDefault();
+      deleteSelected();
+    }
+  });
+
+  /* ------------------------------ Export ------------------------------- */
+  function nothingToExport() {
+    return !state.hasBackground && state.cameras.length === 0 && state.equipment.length === 0 && state.texts.length === 0;
+  }
+
+  // Render the FULL design (whole plan, no UI handles) to a PNG data URL at scale 1.
+  function renderFullDesign(pixelRatio) {
+    const savedZoom = state.zoom, savedSL = SCROLL.scrollLeft, savedST = SCROLL.scrollTop;
+    const savedSel = state.selected;
+
+    textTr.nodes([]);                                   // hide transformer
+    state.equipment.forEach(item => item.selection.hide());
+    stage.size({ width: state.contentW, height: state.contentH });
+    stage.scale({ x: 1, y: 1 });
+    state.cameras.forEach(c => applyCameraVisuals(c, 1, false));  // handles hidden, full size
+    bgLayer.draw(); mainLayer.draw();
+
+    const url = stage.toDataURL({ pixelRatio: pixelRatio, mimeType: "image/png" });
+
+    // restore live view
+    state.zoom = savedZoom;
+    applyView();
+    SCROLL.scrollLeft = savedSL; SCROLL.scrollTop = savedST;
+    state.cameras.forEach(c => applyCameraVisuals(c, state.zoom, savedSel && savedSel.type === "camera" && savedSel.id === c.id));
+    state.equipment.forEach(item => item.selection.visible(savedSel && savedSel.type === "equipment" && savedSel.id === item.id));
+    if (savedSel && savedSel.type === "text") { const t = getText(savedSel.id); if (t) textTr.nodes([t.node]); }
+    mainLayer.batchDraw();
+    return url;
+  }
+
+  function downloadDataURL(url, filename) {
+    const a = document.createElement("a");
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+  }
+
+  function exportPNG() {
+    if (nothingToExport()) { toast("Nothing to export yet — upload a plan or add a camera.", true); return; }
+    try {
+      const url = renderFullDesign(2);
+      downloadDataURL(url, "camera-installation-plan.png");
+      toast("PNG exported.");
+    } catch (err) { console.error(err); toast("PNG export failed.", true); }
+  }
+
+  function exportPDF() {
+    if (nothingToExport()) { toast("Nothing to export yet — upload a plan or add a camera.", true); return; }
+    if (!window.jspdf || !window.jspdf.jsPDF) { toast("PDF engine failed to load. Check your connection.", true); return; }
+    try {
+      const imgData = renderFullDesign(2);
+      const { jsPDF } = window.jspdf;
+      const landscape = state.contentW >= state.contentH;
+      const pdf = new jsPDF({ orientation: landscape ? "landscape" : "portrait", unit: "pt", format: "a4" });
+
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const margin = 40;
+
+      // Title + timestamp
+      pdf.setFont("helvetica", "bold"); pdf.setFontSize(20); pdf.setTextColor(27, 36, 48);
+      pdf.text("Camera Installation Plan", margin, margin + 6);
+      pdf.setFont("helvetica", "normal"); pdf.setFontSize(10); pdf.setTextColor(120, 128, 138);
+      pdf.text("Generated " + new Date().toLocaleString(), margin, margin + 23);
+      pdf.setDrawColor(221, 226, 232); pdf.setLineWidth(0.8);
+      pdf.line(margin, margin + 32, pageW - margin, margin + 32);
+
+      // Plan image fit to page (aspect preserved)
+      const top = margin + 46;
+      const availW = pageW - margin * 2;
+      const availH = pageH - top - margin;
+      const ar = state.contentW / state.contentH;
+      let dw = availW, dh = dw / ar;
+      if (dh > availH) { dh = availH; dw = dh * ar; }
+      const ix = margin + (availW - dw) / 2;
+      pdf.addImage(imgData, "PNG", ix, top, dw, dh, undefined, "FAST");
+
+      // Camera schedule on page 2
+      pdf.addPage();
+      drawCameraTable(pdf, margin, margin);
+
+      pdf.save("camera-installation-plan.pdf");
+      toast("PDF exported.");
+    } catch (err) { console.error(err); toast("PDF export failed.", true); }
+  }
+
+  function drawCameraTable(pdf, x, y0) {
+    let y = y0;
+    pdf.setFont("helvetica", "bold"); pdf.setFontSize(15); pdf.setTextColor(27, 36, 48);
+    pdf.text("Camera Schedule", x, y);
+    y += 20;
+
+    const cols = [
+      { key: "#", w: 30 },
+      { key: "Camera Name", w: 168 },
+      { key: "FOV Angle", w: 80 },
+      { key: "Range (m)", w: 76 },
+      { key: "Rotation", w: 72 },
+      { key: "Color", w: 96 },
+    ];
+    const tableW = cols.reduce((s, c) => s + c.w, 0);
+    const rowH = 22;
+
+    // header
+    pdf.setFillColor(37, 99, 235);
+    pdf.rect(x, y, tableW, rowH, "F");
+    pdf.setTextColor(255, 255, 255); pdf.setFont("helvetica", "bold"); pdf.setFontSize(10);
+    let cx = x;
+    cols.forEach(c => { pdf.text(c.key, cx + 6, y + 14.5); cx += c.w; });
+    y += rowH;
+
+    pdf.setFont("helvetica", "normal"); pdf.setTextColor(27, 36, 48);
+
+    if (state.cameras.length === 0) {
+      pdf.setTextColor(120, 128, 138);
+      pdf.text("No cameras placed.", x + 6, y + 14.5);
+    } else {
+      state.cameras.forEach((cam, i) => {
+        if (y + rowH > pdf.internal.pageSize.getHeight() - 40) { pdf.addPage(); y = 40; }
+        if (i % 2 === 1) { pdf.setFillColor(243, 244, 246); pdf.rect(x, y, tableW, rowH, "F"); }
+        pdf.setTextColor(27, 36, 48);
+
+        const vals = [
+          String(i + 1),
+          cam.name,
+          Math.round(cam.fov) + " deg",
+          String(Math.round(cam.range * 10) / 10),
+          Math.round(cam.rotation) + " deg",
+          null, // color cell drawn manually
+        ];
+        cx = x;
+        cols.forEach((c, ci) => {
+          if (c.key === "Color") {
+            const rgb = hexToRgb(cam.color);
+            pdf.setFillColor(rgb.r, rgb.g, rgb.b);
+            pdf.rect(cx + 6, y + 5, 14, 12, "F");
+            pdf.setDrawColor(180, 186, 194); pdf.setLineWidth(0.5);
+            pdf.rect(cx + 6, y + 5, 14, 12, "S");
+            pdf.setTextColor(60, 68, 78);
+            pdf.text(cam.color.toUpperCase(), cx + 26, y + 14.5);
+          } else {
+            const line = pdf.splitTextToSize(vals[ci], c.w - 10)[0];
+            pdf.text(line, cx + 6, y + 14.5);
+          }
+          cx += c.w;
+        });
+        y += rowH;
+      });
+    }
+    // outer border
+    pdf.setDrawColor(221, 226, 232); pdf.setLineWidth(0.8);
+    pdf.rect(x, y0 + 20, tableW, Math.min(y, pdf.internal.pageSize.getHeight() - 40) - (y0 + 20), "S");
+  }
+
+  /* ---------------------------- Clear design --------------------------- */
+  function clearDesign() {
+    if (state.cameras.length === 0 && state.equipment.length === 0 && state.texts.length === 0 && !state.hasBackground) return;
+    if (!confirm("Clear the entire design? This removes the plan, all cameras, equipment, and labels.")) return;
+    state.cameras.forEach(c => c.group.destroy());
+    state.equipment.forEach(item => item.group.destroy());
+    state.texts.forEach(t => t.node.destroy());
+    state.cameras = []; state.equipment = []; state.texts = [];
+    textTr.nodes([]);
+    state.selected = null;
+    state.hasBackground = false;
+    state.camCounter = 0;
+    state.contentW = DEFAULT_W; state.contentH = DEFAULT_H;
+    hidePdfBar();
+    $("empty-hint").classList.remove("hidden");
+    showPanel("none");
+    drawPlaceholder();
+    fitToScreen();
+    updateStats();
+    toast("Design cleared.");
+  }
+
+  /* -------------------- Quotation form integration -------------------- */
+  function serializableDesign() {
+    return {
+      version: 1,
+      ppm: state.ppm,
+      contentW: state.contentW,
+      contentH: state.contentH,
+      hasBackground: state.hasBackground,
+      items: state.cameras.map((cam) => ({
+        id: cam.id,
+        kind: "camera",
+        name: cam.name,
+        type: cam.type,
+        shade: cam.shade,
+        x: cam.group.x(),
+        y: cam.group.y(),
+        fov: cam.fov,
+        range: cam.range,
+        rotation: norm360(cam.rotation),
+        color: cam.color,
+        opacity: cam.opacity,
+        widthMeters: cam.widthMeters,
+        mountedOnId: cam.mountedOnId,
+      })).concat(state.equipment.map((item) => ({
+        id: item.id,
+        kind: item.kind,
+        name: item.name,
+        variant: item.variant,
+        x: item.group.x(),
+        y: item.group.y(),
+        widthMeters: item.widthMeters,
+        rotation: norm360(item.rotation),
+        opacity: item.opacity,
+      }))),
+      labels: state.texts.map((entry) => ({
+        id: entry.id,
+        text: entry.node.text(),
+        x: entry.node.x(),
+        y: entry.node.y(),
+        width: entry.node.width(),
+        fontSize: entry.node.fontSize(),
+        rotation: entry.node.rotation(),
+        color: entry.node.fill(),
+      })),
+    };
+  }
+
+  function backgroundDataURL() {
+    if (!state.hasBackground || !state.bgNode) return null;
+    const source = state.bgNode.image();
+    if (!source) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = state.contentW;
+    canvas.height = state.contentH;
+    const context = canvas.getContext("2d");
+    context.drawImage(source, 0, 0, state.contentW, state.contentH);
+    return canvas.toDataURL("image/png");
+  }
+
+  function resetForRestore() {
+    state.cameras.forEach((cam) => cam.group.destroy());
+    state.equipment.forEach((item) => item.group.destroy());
+    state.texts.forEach((entry) => entry.node.destroy());
+    state.cameras = [];
+    state.equipment = [];
+    state.texts = [];
+    state.selected = null;
+    state.camCounter = 0;
+    textTr.nodes([]);
+    bgLayer.destroyChildren();
+    state.bgNode = null;
+    state.hasBackground = false;
+    hidePdfBar();
+    showPanel("none");
+  }
+
+  function restoreObjects(design) {
+    state.ppm = clamp(Number(design.ppm) || 30, 5, 200);
+    $("ppm-input").value = state.ppm;
+    state.contentW = clamp(Number(design.contentW) || DEFAULT_W, 1, MAX_CANVAS_DIM);
+    state.contentH = clamp(Number(design.contentH) || DEFAULT_H, 1, MAX_CANVAS_DIM);
+    (design.items || []).forEach((saved) => {
+      if (saved.kind !== "camera" && EQUIPMENT_TYPES[saved.kind]) {
+        const item = createEquipment(saved.kind, Number(saved.x) || 0, Number(saved.y) || 0);
+        const meta = EQUIPMENT_TYPES[saved.kind];
+        item.id = String(saved.id || uid());
+        item.name = String(saved.name || meta.label).slice(0, 60);
+        item.variant = meta.variants[saved.variant] ? saved.variant : meta.defaultVariant;
+        item.widthMeters = clamp(Number(saved.widthMeters) || meta.defaultWidth, 0.5, 50);
+        item.rotation = norm360(Number(saved.rotation) || 0);
+        item.opacity = clamp(Number(saved.opacity), 0.2, 1);
+        if (!Number.isFinite(item.opacity)) item.opacity = 1;
+        updateEquipment(item);
+        return;
+      }
+      const cam = createCamera(Number(saved.x) || 0, Number(saved.y) || 0);
+      cam.id = String(saved.id || uid());
+      cam.name = String(saved.name || cam.name).slice(0, 40);
+      cam.type = CAM_TYPES.includes(saved.type) ? saved.type : DEFAULTS.type;
+      cam.shade = saved.shade === "white" ? "white" : "black";
+      cam.style = styleForType(cam.type);
+      cam.fov = clamp(Number(saved.fov) || DEFAULTS.fov, MIN_FOV, MAX_FOV);
+      cam.range = clamp(Number(saved.range) || DEFAULTS.range, MIN_RANGE, MAX_RANGE);
+      cam.rotation = norm360(Number(saved.rotation) || 0);
+      cam.color = /^#[0-9a-f]{6}$/i.test(saved.color || "") ? saved.color : DEFAULTS.color;
+      cam.opacity = clamp(Number(saved.opacity), 0, 1);
+      cam.widthMeters = clamp(Number(saved.widthMeters) || DEFAULTS.widthMeters, 0.1, 10);
+      cam.mountedOnId = saved.mountedOnId ? String(saved.mountedOnId).slice(0, 80) : null;
+      rebuildGlyph(cam);
+      updateCamera(cam);
+    });
+    (design.labels || []).forEach((saved) => {
+      const entry = createText(Number(saved.x) || 0, Number(saved.y) || 0);
+      entry.id = String(saved.id || uid());
+      entry.node.text(String(saved.text || "New label").slice(0, 240));
+      entry.node.width(clamp(Number(saved.width) || 160, 30, MAX_CANVAS_DIM));
+      entry.node.fontSize(clamp(Number(saved.fontSize) || 22, 8, 160));
+      entry.node.rotation(Number(saved.rotation) || 0);
+      entry.node.fill(/^#[0-9a-f]{6}$/i.test(saved.color || "") ? saved.color : "#111827");
+    });
+    const mountableEquipmentIds = new Set(state.equipment.filter(item => MOUNTABLE_EQUIPMENT_KINDS.has(item.kind)).map(item => item.id));
+    state.cameras.forEach(cam => { if (cam.mountedOnId && !mountableEquipmentIds.has(cam.mountedOnId)) cam.mountedOnId = null; });
+    state.camCounter = state.cameras.length;
+    deselectAll();
+    updateStats();
+    updateScaleBar();
+    fitToScreen();
+    mainLayer.batchDraw();
+  }
+
+  function restoreDesign(design, backgroundUrl) {
+    if (!design) return;
+    resetForRestore();
+    if (design.hasBackground && backgroundUrl) {
+      const image = new Image();
+      image.onload = () => {
+        setBackground(image, design.contentW, design.contentH);
+        restoreObjects(design);
+      };
+      image.onerror = () => {
+        drawPlaceholder();
+        restoreObjects(design);
+        toast("The saved floor plan could not be loaded.", true);
+      };
+      image.src = backgroundUrl;
+    } else {
+      state.contentW = Number(design.contentW) || DEFAULT_W;
+      state.contentH = Number(design.contentH) || DEFAULT_H;
+      drawPlaceholder();
+      restoreObjects(design);
+    }
+  }
+
+  window.addEventListener("message", (event) => {
+    if (event.origin !== window.location.origin || !event.data) return;
+    if (event.data.type === "quotation-planner:init") {
+      restoreDesign(event.data.design, event.data.backgroundUrl);
+      return;
+    }
+    if (event.data.type !== "quotation-planner:export") return;
+    try {
+      if (nothingToExport()) {
+        window.parent.postMessage({
+          type: "quotation-planner:result",
+          requestId: event.data.requestId,
+          design: null,
+        }, event.origin);
+        return;
+      }
+      window.parent.postMessage({
+        type: "quotation-planner:result",
+        requestId: event.data.requestId,
+        design: serializableDesign(),
+        backgroundDataUrl: backgroundDataURL(),
+        outputDataUrl: renderFullDesign(1),
+      }, event.origin);
+    } catch (error) {
+      console.error(error);
+      window.parent.postMessage({
+        type: "quotation-planner:error",
+        requestId: event.data.requestId,
+        message: "The camera plan could not be prepared. Review it and try again.",
+      }, event.origin);
+    }
+  });
+
+  /* ----------------------------- Wiring UI ----------------------------- */
+  $("btn-upload").addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", (e) => {
+    const f = e.target.files && e.target.files[0];
+    handleFile(f);
+    e.target.value = "";   // allow re-uploading the same file
+  });
+
+  $("btn-add-camera").addEventListener("click", () => {
+    if (!state.hasBackground) toast("Tip: upload a plan first for accurate placement.");
+    const c = viewportCenterContent();
+    createCamera(clamp(c.x, 20, state.contentW - 20), clamp(c.y, 20, state.contentH - 20));
+  });
+  document.querySelectorAll(".equipment-add").forEach(button => {
+    button.addEventListener("click", () => {
+      if (!state.hasBackground) toast("Tip: upload a plan first for accurate placement.");
+      const c = viewportCenterContent();
+      createEquipment(button.dataset.equipmentKind, clamp(c.x, 20, state.contentW - 20), clamp(c.y, 20, state.contentH - 20));
+    });
+  });
+  $("btn-add-text").addEventListener("click", () => {
+    const c = viewportCenterContent();
+    createText(clamp(c.x, 10, state.contentW - 60), clamp(c.y, 10, state.contentH - 20));
+  });
+
+  $("btn-zoom-in").addEventListener("click", () => setZoom(state.zoom * 1.2));
+  $("btn-zoom-out").addEventListener("click", () => setZoom(state.zoom / 1.2));
+  $("btn-fit").addEventListener("click", fitToScreen);
+  $("btn-export-png").addEventListener("click", exportPNG);
+  $("btn-clear").addEventListener("click", clearDesign);
+
+  $("pdf-page-select").addEventListener("change", (e) => renderPdfPage(parseInt(e.target.value, 10)));
+
+  // Global scale
+  $("ppm-input").addEventListener("input", (e) => {
+    const v = parseFloat(e.target.value);
+    state.ppm = clamp(isNaN(v) ? 30 : v, 5, 200);
+    refreshAllCameraVisuals();
+    state.equipment.forEach(updateEquipment);
+    updateScaleBar();
+  });
+
+  // Camera panel
+  $("cam-name").addEventListener("input", (e) => { const c = currentCamera(); if (!c) return; c.name = e.target.value; updateCamera(c); });
+  $("cam-fov").addEventListener("input", (e) => { const c = currentCamera(); if (!c) return; const v = parseFloat(e.target.value); c.fov = clamp(isNaN(v) ? c.fov : v, MIN_FOV, MAX_FOV); updateCamera(c); });
+  $("cam-fov").addEventListener("blur", (e) => { const c = currentCamera(); if (c) e.target.value = Math.round(c.fov); });
+  $("cam-range").addEventListener("input", (e) => { const c = currentCamera(); if (!c) return; const v = parseFloat(e.target.value); c.range = clamp(isNaN(v) ? c.range : v, MIN_RANGE, MAX_RANGE); updateCamera(c); });
+  $("cam-range").addEventListener("blur", (e) => { const c = currentCamera(); if (c) e.target.value = Math.round(c.range * 10) / 10; });
+  $("cam-rotation").addEventListener("input", (e) => { const c = currentCamera(); if (!c) return; const v = parseFloat(e.target.value); c.rotation = norm360(isNaN(v) ? c.rotation : v); updateCamera(c); });
+  $("cam-rotation").addEventListener("blur", (e) => { const c = currentCamera(); if (c) e.target.value = Math.round(c.rotation); });
+  $("cam-width").addEventListener("input", (e) => { const c = currentCamera(); if (!c) return; const v = parseFloat(e.target.value); c.widthMeters = clamp(isNaN(v) ? c.widthMeters : v, 0.1, 10); updateCamera(c); });
+  $("cam-width").addEventListener("blur", (e) => { const c = currentCamera(); if (c) e.target.value = Math.round(c.widthMeters * 10) / 10; });
+  $("cam-mounted-on").addEventListener("change", (e) => { const c = currentCamera(); if (!c) return; c.mountedOnId = e.target.value || null; updateCamera(c); });
+  $("cam-color").addEventListener("input", (e) => { const c = currentCamera(); if (!c) return; c.color = e.target.value; $("cam-color-hex").textContent = c.color.toUpperCase(); updateCamera(c); });
+  $("cam-opacity").addEventListener("input", (e) => { const c = currentCamera(); if (!c) return; c.opacity = clamp(parseInt(e.target.value, 10) / 100, 0, 1); $("cam-opacity-val").textContent = Math.round(c.opacity * 100) + "%"; updateCamera(c); });
+  $("cam-delete").addEventListener("click", deleteSelected);
+
+  // Equipment panel
+  $("equipment-name").addEventListener("input", (e) => { const item = currentEquipment(); if (!item) return; item.name = e.target.value; updateEquipment(item); });
+  $("equipment-variant").addEventListener("change", (e) => { const item = currentEquipment(); if (!item) return; item.variant = e.target.value; updateEquipment(item); });
+  $("equipment-width").addEventListener("input", (e) => { const item = currentEquipment(); if (!item) return; const value = parseFloat(e.target.value); item.widthMeters = clamp(isNaN(value) ? item.widthMeters : value, 0.5, 50); updateEquipment(item); });
+  $("equipment-width").addEventListener("blur", (e) => { const item = currentEquipment(); if (item) e.target.value = Math.round(item.widthMeters * 10) / 10; });
+  $("equipment-rotation").addEventListener("input", (e) => { const item = currentEquipment(); if (!item) return; const value = parseFloat(e.target.value); item.rotation = norm360(isNaN(value) ? item.rotation : value); updateEquipment(item); });
+  $("equipment-rotation").addEventListener("blur", (e) => { const item = currentEquipment(); if (item) e.target.value = Math.round(item.rotation); });
+  $("equipment-opacity").addEventListener("input", (e) => { const item = currentEquipment(); if (!item) return; item.opacity = clamp(parseInt(e.target.value, 10) / 100, 0.2, 1); $("equipment-opacity-val").textContent = `${Math.round(item.opacity * 100)}%`; updateEquipment(item); });
+  $("equipment-delete").addEventListener("click", deleteSelected);
+
+  // Camera type selector (dome / bullet / ptz)
+  function setActiveTypeButton(type) {
+    document.querySelectorAll("#cam-type .seg-btn").forEach(b => b.classList.toggle("active", b.dataset.type === type));
+  }
+  document.querySelectorAll("#cam-type .seg-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const c = currentCamera(); if (!c) return;
+      c.type = btn.dataset.type;
+      c.style = styleForType(c.type);
+      state.lastCamType = c.type;
+      rebuildGlyph(c);
+      updateCamera(c);
+      setActiveTypeButton(c.type);
+    });
+  });
+
+  // Camera icon shade selector (black / white, for background contrast)
+  function setActiveShadeButton(shade) {
+    document.querySelectorAll("#cam-shade .seg-btn").forEach(b => b.classList.toggle("active", b.dataset.shade === shade));
+  }
+  document.querySelectorAll("#cam-shade .seg-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const c = currentCamera(); if (!c) return;
+      c.shade = btn.dataset.shade;
+      state.lastCamShade = c.shade;
+      rebuildGlyph(c);
+      updateCamera(c);
+      setActiveShadeButton(c.shade);
+    });
+  });
+
+  // Text panel
+  $("txt-content").addEventListener("input", (e) => { const t = currentText(); if (!t) return; t.node.text(e.target.value.length ? e.target.value : " "); textTr.forceUpdate(); mainLayer.batchDraw(); });
+  $("txt-size").addEventListener("input", (e) => { const t = currentText(); if (!t) return; const v = parseInt(e.target.value, 10); t.node.fontSize(clamp(isNaN(v) ? t.node.fontSize() : v, 8, 160)); textTr.forceUpdate(); mainLayer.batchDraw(); });
+  $("txt-color").addEventListener("input", (e) => { const t = currentText(); if (!t) return; t.node.fill(e.target.value); $("txt-color-hex").textContent = e.target.value.toUpperCase(); mainLayer.batchDraw(); });
+  $("txt-delete").addEventListener("click", deleteSelected);
+
+  // Keep view correct on resize.
+  let resizeRaf = null;
+  const onResize = () => { if (resizeRaf) cancelAnimationFrame(resizeRaf); resizeRaf = requestAnimationFrame(() => { applyView(); }); };
+  window.addEventListener("resize", onResize);
+  if (window.ResizeObserver) new ResizeObserver(onResize).observe(SCROLL);
+
+  /* ------------------------------ Boot --------------------------------- */
+  function boot() {
+    if (!window.Konva) { toast("Canvas engine failed to load. Check your connection.", true); return; }
+    preloadIcons();
+    preloadEquipmentImages();
+    // Show the real artwork in the type selector so the choice is unambiguous.
+    document.querySelectorAll("#cam-type .seg-btn").forEach(btn => {
+      const t = btn.dataset.type, svg = btn.querySelector("svg");
+      if (svg && ICON_DATA[t] && ICON_DATA[t].black) {
+        const img = document.createElement("img");
+        img.className = "seg-art"; img.src = ICON_DATA[t].black; img.alt = t;
+        svg.replaceWith(img);
+      }
+    });
+    drawPlaceholder();
+    fitToScreen();
+    updateStats();
+    updateScaleBar();
+    window.parent.postMessage({ type: "quotation-planner:ready" }, window.location.origin);
+  }
+  // Ensure layout is measured before first fit.
+  requestAnimationFrame(boot);
+});
+</script>
+</body>
+</html>

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 import re
 from datetime import date
 from decimal import Decimal
@@ -13,6 +14,8 @@ from sqlalchemy.orm import Session
 from app.models import (
     PricingItem,
     PricingQuotation,
+    PricingQuotationInvoiceImage,
+    PricingQuotationSiteSurveyImage,
     PricingRelatedItem,
     PricingSettings,
     User,
@@ -101,8 +104,487 @@ def _submit_quote(client, camera, *, qdate="2026-07-29", **overrides):
         "charge_installation_quantity": "1",
         "charge_installation_unit_price": "0",
     }
+    files = overrides.pop("_files", None)
+    headers = overrides.pop("_headers", None)
     payload.update(overrides)
-    return client.post("/pricing/quotations", data=payload)
+    return client.post(
+        "/pricing/quotations", data=payload, files=files, headers=headers
+    )
+
+
+def _camera_plan_state():
+    return {
+        "version": 1,
+        "ppm": 30,
+        "contentW": 1280,
+        "contentH": 820,
+        "hasBackground": True,
+        "items": [
+            {
+                "id": "camera-one",
+                "kind": "camera",
+                "name": "Main gate camera",
+                "type": "bullet",
+                "shade": "black",
+                "x": 220,
+                "y": 180,
+                "fov": 92,
+                "range": 18.5,
+                "rotation": 45,
+                "color": "#2563eb",
+                "opacity": 0.25,
+                "widthMeters": 1.4,
+                "mountedOnId": "solar-pole-one",
+            },
+            {
+                "id": "barrier-one",
+                "kind": "smart_barrier",
+                "name": "Main gate barrier",
+                "variant": "left",
+                "x": 380,
+                "y": 240,
+                "widthMeters": 5,
+                "rotation": 90,
+                "opacity": 1,
+            },
+            {
+                "id": "solar-pole-one",
+                "kind": "solar_pole",
+                "name": "Main gate solar pole",
+                "variant": "standard",
+                "x": 220,
+                "y": 230,
+                "widthMeters": 2,
+                "rotation": 0,
+                "opacity": 1,
+            },
+        ],
+        "labels": [
+            {
+                "id": "label-one",
+                "text": "Main gate",
+                "x": 80,
+                "y": 90,
+                "width": 160,
+                "fontSize": 22,
+                "rotation": 0,
+                "color": "#111827",
+            }
+        ],
+    }
+
+
+def test_camera_planner_is_embedded_and_fully_offline(client):
+    login(client, *ADMIN)
+    form = client.get("/pricing/quotations/new")
+    assert form.status_code == 200
+    assert 'src="/pricing/planner/embed"' in form.text
+    planner = client.get("/pricing/planner/embed")
+    assert planner.status_code == 200
+    assert planner.headers["x-frame-options"] == "SAMEORIGIN"
+    assert "/static/vendor/konva-9.3.22.min.js" in planner.text
+    assert "/static/vendor/pdfjs-3.11.174.min.js" in planner.text
+    for kind in (
+        "smart_barrier",
+        "generator",
+        "solar_pole",
+        "solar_panel",
+        "guard_room",
+        "metal_pole",
+        "sign",
+    ):
+        assert f'data-equipment-kind="{kind}"' in planner.text
+    assert "/static/img/planner-equipment/barrier-left-transparent.png" in planner.text
+    assert "/static/img/planner-equipment/metal-pole-white-transparent.png" in planner.text
+    assert "/static/img/planner-equipment/metal-pole-black-transparent.png" in planner.text
+    assert "/static/img/planner-equipment/sign-transparent.png" in planner.text
+    assert 'id="cam-width"' in planner.text
+    assert 'id="cam-mounted-on"' in planner.text
+    assert "cdn.jsdelivr.net" not in planner.text
+    assert "fonts.googleapis.com" not in planner.text
+
+
+def test_quotation_camera_plan_is_saved_protected_exported_and_deleted(client, db):
+    login(client, *ADMIN)
+    camera, _ = _create_catalogue(db)
+    image = make_image(fmt="PNG")
+    response = _submit_quote(
+        client,
+        camera,
+        installation_plan_state=json.dumps(_camera_plan_state()),
+        _files={
+            "installation_plan_background": ("floor-plan.png", image, "image/png"),
+            "installation_plan_output": ("camera-plan.png", image, "image/png"),
+        },
+    )
+    assert response.status_code == 303
+    quotation = db.query(PricingQuotation).order_by(PricingQuotation.id.desc()).first()
+    assert quotation.installation_plan_state["items"][0]["name"] == "Main gate camera"
+    assert quotation.installation_plan_state["items"][1]["name"] == "Main gate barrier"
+    assert quotation.installation_plan_state["items"][0]["widthMeters"] == 1.4
+    assert quotation.installation_plan_state["items"][0]["mountedOnId"] == "solar-pole-one"
+    assert quotation.plan_background_storage_key
+    assert quotation.plan_output_storage_key
+    stored_keys = [
+        quotation.plan_background_storage_key,
+        quotation.plan_background_thumbnail_key,
+        quotation.plan_output_storage_key,
+        quotation.plan_output_thumbnail_key,
+    ]
+    assert all((settings.upload_dir / key).is_file() for key in stored_keys if key)
+
+    detail = client.get(f"/pricing/quotations/{quotation.id}")
+    assert detail.status_code == 200
+    assert "Main gate camera" in detail.text
+    assert "Main gate barrier" in detail.text
+    assert "Main gate solar pole" in detail.text
+    assert "Installation equipment schedule" in detail.text
+    plan = client.get(f"/pricing/quotations/{quotation.id}/installation-plan/output")
+    assert plan.status_code == 200
+    assert plan.headers["content-type"] == "image/png"
+
+    pdf = client.get(f"/pricing/quotations/{quotation.id}/pdf")
+    assert pdf.status_code == 200
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(pdf.content)).pages)
+    assert "Installation plan" in text
+    assert "Camera schedule" in text
+    assert "Main gate camera" in text
+    assert "Installation equipment schedule" in text
+    assert "Main gate barrier" in text
+    assert "Main gate solar pole" in text
+
+    logout(client)
+    login(client, *CUSTOMER_A)
+    assert client.get(
+        f"/pricing/quotations/{quotation.id}/installation-plan/output"
+    ).status_code == 403
+
+    logout(client)
+    login(client, *ADMIN)
+    token = csrf_of(client, f"/pricing/quotations/{quotation.id}")
+    deleted = client.post(
+        f"/pricing/quotations/{quotation.id}/delete",
+        data={"csrf_token": token},
+    )
+    assert deleted.status_code == 303
+    assert all(not (settings.upload_dir / key).exists() for key in stored_keys if key)
+
+
+def test_invalid_camera_plan_is_rejected_without_saving_files(client, db):
+    login(client, *ADMIN)
+    camera, _ = _create_catalogue(db)
+    invalid = _camera_plan_state()
+    invalid["items"][0]["fov"] = 999
+    response = _submit_quote(
+        client,
+        camera,
+        installation_plan_state=json.dumps(invalid),
+        _files={
+            "installation_plan_background": ("floor-plan.png", make_image(fmt="PNG"), "image/png"),
+            "installation_plan_output": ("camera-plan.png", make_image(fmt="PNG"), "image/png"),
+        },
+        _headers={
+            "Accept": "application/json",
+            "X-Requested-With": "camera-planner",
+        },
+    )
+    assert response.status_code == 422
+    assert "invalid camera field of view" in response.json()["errors"]["installation_plan"]
+    assert response.json()["form_token"]
+    assert db.query(PricingQuotation).count() == 0
+
+
+def test_invalid_equipment_variant_is_rejected(client, db):
+    login(client, *ADMIN)
+    camera, _ = _create_catalogue(db)
+    invalid = _camera_plan_state()
+    invalid["items"][1]["variant"] = "unsupported"
+    response = _submit_quote(
+        client,
+        camera,
+        installation_plan_state=json.dumps(invalid),
+        _files={
+            "installation_plan_background": ("floor-plan.png", make_image(fmt="PNG"), "image/png"),
+            "installation_plan_output": ("camera-plan.png", make_image(fmt="PNG"), "image/png"),
+        },
+        _headers={"Accept": "application/json", "X-Requested-With": "camera-planner"},
+    )
+    assert response.status_code == 422
+    assert "invalid equipment variant" in response.json()["errors"]["installation_plan"]
+
+
+def test_invalid_camera_mounting_reference_is_rejected(client, db):
+    login(client, *ADMIN)
+    camera, _ = _create_catalogue(db)
+    invalid = _camera_plan_state()
+    invalid["items"][0]["mountedOnId"] = "missing-solar-pole"
+    response = _submit_quote(
+        client,
+        camera,
+        installation_plan_state=json.dumps(invalid),
+        _files={
+            "installation_plan_background": ("floor-plan.png", make_image(fmt="PNG"), "image/png"),
+            "installation_plan_output": ("camera-plan.png", make_image(fmt="PNG"), "image/png"),
+        },
+        _headers={"Accept": "application/json", "X-Requested-With": "camera-planner"},
+    )
+    assert response.status_code == 422
+    assert "invalid camera mounting reference" in response.json()["errors"]["installation_plan"]
+
+
+def test_camera_can_be_grouped_with_a_metal_pole(client, db):
+    login(client, *ADMIN)
+    camera, _ = _create_catalogue(db)
+    state = _camera_plan_state()
+    state["items"].append(
+        {
+            "id": "metal-pole-one",
+            "kind": "metal_pole",
+            "name": "Gate metal pole",
+            "variant": "black",
+            "x": 260,
+            "y": 230,
+            "widthMeters": 1.5,
+            "rotation": 0,
+            "opacity": 1,
+        }
+    )
+    state["items"].append(
+        {
+            "id": "sign-one",
+            "kind": "sign",
+            "name": "Gate sign",
+            "variant": "standard",
+            "x": 520,
+            "y": 260,
+            "widthMeters": 3,
+            "rotation": 0,
+            "opacity": 1,
+        }
+    )
+    state["items"][0]["mountedOnId"] = "metal-pole-one"
+    response = _submit_quote(
+        client,
+        camera,
+        installation_plan_state=json.dumps(state),
+        _files={
+            "installation_plan_background": ("floor-plan.png", make_image(fmt="PNG"), "image/png"),
+            "installation_plan_output": ("camera-plan.png", make_image(fmt="PNG"), "image/png"),
+        },
+    )
+    assert response.status_code == 303
+    quotation = db.query(PricingQuotation).order_by(PricingQuotation.id.desc()).first()
+    assert quotation.installation_plan_state["items"][0]["mountedOnId"] == "metal-pole-one"
+    assert any(
+        item["kind"] == "sign" for item in quotation.installation_plan_state["items"]
+    )
+
+
+def test_purchase_invoice_images_are_protected_exported_and_cleaned_up(client, db):
+    login(client, *ADMIN)
+    camera, _ = _create_catalogue(db)
+    assert _submit_quote(client, camera).status_code == 303
+    quotation = db.query(PricingQuotation).order_by(PricingQuotation.id.desc()).first()
+    edit_path = f"/pricing/quotations/{quotation.id}/edit"
+    edit_page = client.get(edit_path)
+    assert edit_page.status_code == 200
+    assert 'id="purchase-invoice-proof"' in edit_page.text
+    assert 'name="invoice_images"' in edit_page.text
+    assert "data-invoice-upload-queue" in edit_page.text
+    assert "data-invoice-file-list" in edit_page.text
+    assert "data-invoice-upload-reminder" in edit_page.text
+    assert "Remember to click Upload invoice images" in edit_page.text
+    invoice_script = client.get("/static/js/app.js")
+    assert invoice_script.status_code == 200
+    assert "selectedFiles.push(file)" in invoice_script.text
+    assert "replaceInputFiles" in invoice_script.text
+    assert "reminder.hidden = selectedFiles.length === 0" in invoice_script.text
+    upload_styles = client.get("/static/css/app.css")
+    assert upload_styles.status_code == 200
+    assert ".alert[hidden] { display: none; }" in upload_styles.text
+    token = csrf_of(client, edit_path)
+    uploaded = client.post(
+        f"/pricing/quotations/{quotation.id}/invoice-images",
+        data={"csrf_token": token, "return_to": "edit"},
+        files=[
+            ("invoice_images", ("supplier-invoice-1.png", make_image(fmt="PNG"), "image/png")),
+            ("invoice_images", ("supplier-invoice-2.jpg", make_image(), "image/jpeg")),
+        ],
+    )
+    assert uploaded.status_code == 303
+    assert uploaded.headers["location"] == f"{edit_path}#purchase-invoice-proof"
+    invoices = db.query(PricingQuotationInvoiceImage).order_by(
+        PricingQuotationInvoiceImage.id
+    ).all()
+    assert [invoice.original_filename for invoice in invoices] == [
+        "supplier-invoice-1.png",
+        "supplier-invoice-2.jpg",
+    ]
+    stored_keys = [
+        key
+        for invoice in invoices
+        for key in (invoice.storage_key, invoice.thumbnail_key)
+        if key
+    ]
+    assert all((settings.upload_dir / key).is_file() for key in stored_keys)
+
+    edited = client.get(edit_path)
+    assert "supplier-invoice-1.png" in edited.text
+    assert "supplier-invoice-2.jpg" in edited.text
+
+    detail = client.get(f"/pricing/quotations/{quotation.id}")
+    assert detail.status_code == 200
+    assert "supplier-invoice-1.png" in detail.text
+    proof = client.get(
+        f"/pricing/quotations/{quotation.id}/invoice-images/{invoices[0].id}"
+    )
+    assert proof.status_code == 200
+    assert proof.headers["content-type"] == "image/png"
+    pdf = client.get(f"/pricing/quotations/{quotation.id}/pdf")
+    pdf_text = "\n".join(
+        page.extract_text() or "" for page in PdfReader(io.BytesIO(pdf.content)).pages
+    )
+    assert "Purchase invoice proof 1 of 2" in pdf_text
+    assert "supplier-invoice-2.jpg" in pdf_text
+
+    logout(client)
+    login(client, *CUSTOMER_A)
+    assert client.get(
+        f"/pricing/quotations/{quotation.id}/invoice-images/{invoices[0].id}"
+    ).status_code == 403
+
+    logout(client)
+    login(client, *ADMIN)
+    token = csrf_of(client, f"/pricing/quotations/{quotation.id}")
+    removed_keys = (invoices[0].storage_key, invoices[0].thumbnail_key)
+    removed = client.post(
+        f"/pricing/quotations/{quotation.id}/invoice-images/{invoices[0].id}/delete",
+        data={"csrf_token": token, "return_to": "edit"},
+    )
+    assert removed.status_code == 303
+    assert removed.headers["location"] == f"{edit_path}#purchase-invoice-proof"
+    assert all(
+        not (settings.upload_dir / key).exists() for key in removed_keys if key
+    )
+
+    token = csrf_of(client, f"/pricing/quotations/{quotation.id}")
+    assert client.post(
+        f"/pricing/quotations/{quotation.id}/delete",
+        data={"csrf_token": token},
+    ).status_code == 303
+    assert all(not (settings.upload_dir / key).exists() for key in stored_keys)
+
+
+def test_invoice_image_upload_is_atomic_when_one_file_is_invalid(client, db):
+    login(client, *ADMIN)
+    camera, _ = _create_catalogue(db)
+    assert _submit_quote(client, camera).status_code == 303
+    quotation = db.query(PricingQuotation).order_by(PricingQuotation.id.desc()).first()
+    before = {path for path in settings.upload_dir.rglob("*") if path.is_file()}
+    token = csrf_of(client, f"/pricing/quotations/{quotation.id}")
+    response = client.post(
+        f"/pricing/quotations/{quotation.id}/invoice-images",
+        data={"csrf_token": token},
+        files=[
+            ("invoice_images", ("valid.png", make_image(fmt="PNG"), "image/png")),
+            ("invoice_images", ("invalid.jpg", b"not an image", "image/jpeg")),
+        ],
+    )
+    assert response.status_code == 303
+    assert db.query(PricingQuotationInvoiceImage).count() == 0
+    assert {path for path in settings.upload_dir.rglob("*") if path.is_file()} == before
+
+
+def test_site_survey_images_are_separate_protected_exported_and_cleaned_up(client, db):
+    login(client, *ADMIN)
+    camera, _ = _create_catalogue(db)
+    new_page = client.get("/pricing/quotations/new")
+    assert 'name="site_survey_images"' in new_page.text
+    assert "data-image-upload-reminder" in new_page.text
+    assert "They will upload when you click Create quotation" in new_page.text
+    assert _submit_quote(
+        client,
+        camera,
+        _files={
+            "site_survey_images": (
+                "site-layout-1.png",
+                make_image(fmt="PNG"),
+                "image/png",
+            )
+        },
+    ).status_code == 303
+    quotation = db.query(PricingQuotation).order_by(PricingQuotation.id.desc()).first()
+    edit_path = f"/pricing/quotations/{quotation.id}/edit"
+    edit_page = client.get(edit_path)
+    assert edit_page.status_code == 200
+    assert 'id="site-survey-layouts"' in edit_page.text
+    assert 'name="site_survey_images"' in edit_page.text
+    assert "data-image-upload-queue" in edit_page.text
+    assert "Remember to click Upload site survey images" in edit_page.text
+
+    token = csrf_of(client, edit_path)
+    uploaded = client.post(
+        f"/pricing/quotations/{quotation.id}/site-survey-images",
+        data={"csrf_token": token, "return_to": "edit"},
+        files={
+            "site_survey_images": ("site-layout-2.jpg", make_image(), "image/jpeg")
+        },
+    )
+    assert uploaded.status_code == 303
+    assert uploaded.headers["location"] == f"{edit_path}#site-survey-layouts"
+    survey_images = db.query(PricingQuotationSiteSurveyImage).order_by(
+        PricingQuotationSiteSurveyImage.id
+    ).all()
+    assert [image.original_filename for image in survey_images] == [
+        "site-layout-1.png",
+        "site-layout-2.jpg",
+    ]
+    assert db.query(PricingQuotationInvoiceImage).count() == 0
+    stored_keys = [
+        key
+        for survey_image in survey_images
+        for key in (survey_image.storage_key, survey_image.thumbnail_key)
+        if key
+    ]
+    assert all((settings.upload_dir / key).is_file() for key in stored_keys)
+
+    detail = client.get(f"/pricing/quotations/{quotation.id}")
+    assert "site-layout-1.png" in detail.text
+    image_response = client.get(
+        f"/pricing/quotations/{quotation.id}/site-survey-images/{survey_images[0].id}"
+    )
+    assert image_response.status_code == 200
+    assert image_response.headers["content-type"] == "image/png"
+    pdf = client.get(f"/pricing/quotations/{quotation.id}/pdf")
+    pdf_text = "\n".join(
+        page.extract_text() or "" for page in PdfReader(io.BytesIO(pdf.content)).pages
+    )
+    assert "Site survey layout 1 of 2" in pdf_text
+    assert "site-layout-2.jpg" in pdf_text
+
+    logout(client)
+    login(client, *CUSTOMER_A)
+    assert client.get(
+        f"/pricing/quotations/{quotation.id}/site-survey-images/{survey_images[0].id}"
+    ).status_code == 403
+
+    logout(client)
+    login(client, *ADMIN)
+    token = csrf_of(client, f"/pricing/quotations/{quotation.id}")
+    removed_keys = (survey_images[0].storage_key, survey_images[0].thumbnail_key)
+    removed = client.post(
+        f"/pricing/quotations/{quotation.id}/site-survey-images/{survey_images[0].id}/delete",
+        data={"csrf_token": token, "return_to": "edit"},
+    )
+    assert removed.status_code == 303
+    assert removed.headers["location"] == f"{edit_path}#site-survey-layouts"
+    assert all(not (settings.upload_dir / key).exists() for key in removed_keys if key)
+
+    token = csrf_of(client, f"/pricing/quotations/{quotation.id}")
+    assert client.post(
+        f"/pricing/quotations/{quotation.id}/delete", data={"csrf_token": token}
+    ).status_code == 303
+    assert all(not (settings.upload_dir / key).exists() for key in stored_keys)
 
 
 def test_pricing_pages_are_protected_and_admin_pages_render(client):

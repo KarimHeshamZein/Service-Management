@@ -1,0 +1,24 @@
+<div class="card" id="site-survey-layouts" style="margin-top:18px;">
+  <div class="card-head"><div><h2>{{ t('ui.site.survey.layouts') }}</h2><p class="hint" style="margin:4px 0 0;">{{ t('ui.site.survey.layouts.help') }}</p></div></div>
+  <div class="card-body">
+    <form method="post" enctype="multipart/form-data" action="/pricing/quotations/{{ quotation.id }}/site-survey-images" class="invoice-proof-upload" data-image-upload-queue data-remove-label="{{ t('ui.remove') }}" data-selected-template="{{ t('ui.site.survey.images.selected', count='__COUNT__') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      {% if survey_return_to == 'edit' %}<input type="hidden" name="return_to" value="edit">{% endif %}
+      <div class="field"><label for="{{ survey_input_id }}">{{ t('ui.upload.site.survey.images') }}</label><input id="{{ survey_input_id }}" name="site_survey_images" type="file" accept="image/jpeg,image/png,image/webp" multiple required data-image-file-input><p class="hint">{{ t('ui.site.survey.upload.queue.help') }}</p></div>
+      <button class="btn btn-secondary" type="submit" data-image-upload-submit>{{ t('ui.upload.site.survey.images') }}</button>
+      <div class="alert warning" data-image-upload-reminder role="status" hidden>{{ t('ui.site.survey.images.pending.upload') }}</div>
+      <div class="invoice-upload-queue" data-image-file-queue hidden><strong data-image-file-count></strong><div class="invoice-upload-selection" data-image-file-list></div></div>
+    </form>
+    {% if quotation.site_survey_images %}
+    <div class="invoice-proof-grid">
+      {% for survey_image in quotation.site_survey_images %}
+      <article class="invoice-proof-item">
+        <a href="/pricing/quotations/{{ quotation.id }}/site-survey-images/{{ survey_image.id }}" target="_blank" rel="noopener"><img src="/pricing/quotations/{{ quotation.id }}/site-survey-images/{{ survey_image.id }}?size=thumb" alt="{{ t('ui.site.survey.image.alt', name=survey_image.original_filename) }}"></a>
+        <div><strong>{{ survey_image.original_filename }}</strong><p class="hint">{{ t('ui.uploaded.by.on', name=survey_image.uploaded_by_name, date=survey_image.uploaded_at|datetime) }}</p></div>
+        <form method="post" action="/pricing/quotations/{{ quotation.id }}/site-survey-images/{{ survey_image.id }}/delete" onsubmit="return confirm('{{ t("ui.remove.this.site.survey.image") }}');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% if survey_return_to == 'edit' %}<input type="hidden" name="return_to" value="edit">{% endif %}<button class="btn btn-quiet btn-sm" type="submit">{{ t('ui.remove.site.survey.image') }}</button></form>
+      </article>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</div>
