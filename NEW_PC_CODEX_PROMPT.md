@@ -164,4 +164,3 @@ Even with this prompt, Codex may need you to approve or provide:
 
 Those pauses protect existing machine data. After you answer them, tell Codex to
 continue the same setup task.
-
