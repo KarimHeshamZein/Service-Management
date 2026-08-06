@@ -20,6 +20,7 @@ from ..helpers import entity_id, flash, paginate, render
 from ..models import (
     DeviceCatalog,
     PricingItem,
+    PricingItemCategory,
     PricingQuotation,
     PricingQuotationCharge,
     PricingQuotationInvoiceImage,
@@ -288,12 +289,23 @@ def _pricing_settings(db: Session) -> dict:
 def _catalogue(db: Session, *, include_inactive: bool = False) -> list[PricingItem]:
     stmt = (
         select(PricingItem)
-        .options(selectinload(PricingItem.related_items))
+        .options(
+            selectinload(PricingItem.related_items),
+            selectinload(PricingItem.category),
+        )
         .order_by(PricingItem.name, PricingItem.model)
     )
     if not include_inactive:
         stmt = stmt.where(PricingItem.is_active.is_(True))
-    return list(db.scalars(stmt))
+    items = list(db.scalars(stmt))
+    return sorted(
+        items,
+        key=lambda item: (
+            item.category_name.casefold() if item.category_name else "\uffff",
+            item.name.casefold(),
+            item.model.casefold(),
+        ),
+    )
 
 
 def _catalogue_payload(items: list[PricingItem]) -> list[dict]:
@@ -303,6 +315,7 @@ def _catalogue_payload(items: list[PricingItem]) -> list[dict]:
             "label": item.display_label,
             "price": str(item.unit_price),
             "currency": item.currency,
+            "category_name": item.category_name,
             "image_url": (
                 f"/pricing/items/{item.id}/image?size=thumb"
                 if item.image_storage_key
@@ -333,18 +346,32 @@ def _item_context(
     term = q.strip()
     stmt = (
         select(PricingItem)
-        .options(selectinload(PricingItem.related_items))
+        .options(
+            selectinload(PricingItem.related_items),
+            selectinload(PricingItem.category),
+        )
         .order_by(PricingItem.is_active.desc(), PricingItem.name, PricingItem.model)
     )
     if term:
         like = f"%{term}%"
         stmt = stmt.where(
-            or_(PricingItem.name.ilike(like), PricingItem.model.ilike(like))
+            or_(
+                PricingItem.name.ilike(like),
+                PricingItem.model.ilike(like),
+                PricingItem.category.has(PricingItemCategory.name.ilike(like)),
+            )
         )
     return {
         "active_nav": "pricing_items",
         "items": list(db.scalars(stmt)),
         "active_items": _catalogue(db),
+        "categories": list(
+            db.scalars(
+                select(PricingItemCategory)
+                .options(selectinload(PricingItemCategory.items))
+                .order_by(PricingItemCategory.name)
+            )
+        ),
         "q": term,
         "currency": _pricing_settings(db)["currency"],
         "currencies": CURRENCIES,
@@ -367,6 +394,97 @@ def items_page(
     return render(request, "pricing_items.html", _item_context(db, user, q=q))
 
 
+@router.post("/categories")
+async def create_category(
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    name = str(form.get("name") or "").strip()
+    if not name:
+        flash(request, "Enter a category name.", "error")
+        return _redirect("/pricing/items")
+    clash = db.scalar(
+        select(PricingItemCategory).where(
+            func.lower(PricingItemCategory.name) == name.lower()
+        )
+    )
+    if clash:
+        flash(request, f"Category “{clash.name}” already exists.", "error")
+        return _redirect("/pricing/items")
+    db.add(PricingItemCategory(name=name))
+    db.commit()
+    flash(request, f"Category “{name}” created.")
+    return _redirect("/pricing/items")
+
+
+@router.post("/categories/{category_id}/edit")
+async def edit_category(
+    category_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    category = db.get(PricingItemCategory, category_id)
+    name = str(form.get("name") or "").strip()
+    if category is None:
+        flash(request, "That category no longer exists.", "error")
+        return _redirect("/pricing/items")
+    if not name:
+        flash(request, "Enter a category name.", "error")
+        return _redirect("/pricing/items")
+    clash = db.scalar(
+        select(PricingItemCategory).where(
+            PricingItemCategory.id != category.id,
+            func.lower(PricingItemCategory.name) == name.lower(),
+        )
+    )
+    if clash:
+        flash(request, f"Category “{clash.name}” already exists.", "error")
+        return _redirect("/pricing/items")
+    category.name = name
+    category.updated_at = utcnow()
+    db.commit()
+    flash(request, "Item category updated.")
+    return _redirect("/pricing/items")
+
+
+@router.post(
+    "/categories/{category_id}/delete",
+    dependencies=[Depends(require_admin)],
+)
+async def delete_category(
+    category_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    category = db.get(PricingItemCategory, category_id)
+    if category is None:
+        flash(request, "That category no longer exists.", "error")
+        return _redirect("/pricing/items")
+    if db.scalar(select(func.count(PricingItem.id)).where(PricingItem.category_id == category.id)):
+        flash(
+            request,
+            "Move its items to another category or Uncategorized before deleting it.",
+            "error",
+        )
+        return _redirect("/pricing/items")
+    name = category.name
+    db.delete(category)
+    db.commit()
+    flash(request, f"Category “{name}” deleted.")
+    return _redirect("/pricing/items")
+
+
 @router.post("/items")
 async def create_item(
     request: Request,
@@ -385,12 +503,18 @@ async def create_item(
         if "service_enabled" in form
         else True
     )
+    raw_category_id = str(form.get("category_id") or "")
+    category_id = entity_id(raw_category_id)
+    category = db.get(PricingItemCategory, category_id) if category_id else None
     image = form.get("image")
     if not name:
         flash(request, "Enter the main item name.", "error")
         return _redirect("/pricing/items")
     if unit_price is None or currency is None:
         flash(request, "Enter a valid non-negative item price.", "error")
+        return _redirect("/pricing/items")
+    if raw_category_id and category is None:
+        flash(request, "Choose an existing item category.", "error")
         return _redirect("/pricing/items")
     clash = db.scalar(
         select(PricingItem).where(
@@ -414,6 +538,7 @@ async def create_item(
         unit_price=unit_price,
         currency=currency,
         service_enabled=service_enabled,
+        category=category,
     )
     _sync_legacy_device(db, item)
     if stored:
@@ -452,8 +577,14 @@ async def edit_item(
         if "service_enabled" in form
         else item.service_enabled
     )
+    raw_category_id = str(form.get("category_id") or "")
+    category_id = entity_id(raw_category_id)
+    category = db.get(PricingItemCategory, category_id) if category_id else None
     if not name or unit_price is None or currency is None:
         flash(request, "Enter a valid item name and non-negative price.", "error")
+        return _redirect("/pricing/items")
+    if raw_category_id and category is None:
+        flash(request, "Choose an existing item category.", "error")
         return _redirect("/pricing/items")
     clash = db.scalar(
         select(PricingItem).where(
@@ -492,6 +623,7 @@ async def edit_item(
     item.unit_price = unit_price
     item.currency = currency
     item.service_enabled = service_enabled
+    item.category = category
     if stored:
         item.image_storage_key = stored.storage_key
         item.image_thumbnail_key = stored.thumbnail_key
@@ -742,6 +874,9 @@ def _quotation_query():
         selectinload(PricingQuotation.lines).selectinload(
             PricingQuotationLine.related_items
         ),
+        selectinload(PricingQuotation.lines).selectinload(
+            PricingQuotationLine.alternative_to
+        ),
         selectinload(PricingQuotation.charges),
         selectinload(PricingQuotation.invoice_images),
         selectinload(PricingQuotation.site_survey_images),
@@ -888,6 +1023,9 @@ def _submitted_lines(form) -> list[dict]:
                 "quantity": str(form.get(f"line_{index}_quantity") or ""),
                 "unit_price": str(form.get(f"line_{index}_unit_price") or ""),
                 "currency": str(form.get(f"line_{index}_currency") or ""),
+                "alternative_to_index": str(
+                    form.get(f"line_{index}_alternative_to_index") or ""
+                ),
                 "skip_optional_items": (
                     str(form.get(f"line_{index}_skip_optional_items") or "")
                     == "1"
@@ -925,6 +1063,7 @@ def _build_quote_lines(
         return []
 
     built: list[PricingQuotationLine] = []
+    built_by_index: dict[int, PricingQuotationLine] = {}
     selected_main_ids: set[int] = set()
     for position, line_data in enumerate(submitted, start=1):
         index = line_data["index"]
@@ -1034,6 +1173,56 @@ def _build_quote_lines(
                 )
             )
         built.append(line)
+        built_by_index[index] = line
+
+    alternative_targets: dict[int, int] = {}
+    submitted_indexes = {line_data["index"] for line_data in submitted}
+    for line_data in submitted:
+        index = line_data["index"]
+        raw_target = str(line_data.get("alternative_to_index") or "").strip()
+        if not raw_target:
+            continue
+        try:
+            target_index = int(raw_target)
+        except ValueError:
+            errors[f"line_{index}_alternative_to_index"] = (
+                "Choose a valid primary quotation item."
+            )
+            continue
+        if target_index not in submitted_indexes:
+            errors[f"line_{index}_alternative_to_index"] = (
+                "The selected primary item is no longer in this quotation."
+            )
+            continue
+        if target_index == index:
+            errors[f"line_{index}_alternative_to_index"] = (
+                "An item cannot be an alternative to itself."
+            )
+            continue
+        alternative_targets[index] = target_index
+
+    for start_index in alternative_targets:
+        visited: set[int] = set()
+        current_index = start_index
+        while current_index in alternative_targets:
+            if current_index in visited:
+                errors[f"line_{start_index}_alternative_to_index"] = (
+                    "Alternative items cannot form a circular link."
+                )
+                break
+            visited.add(current_index)
+            current_index = alternative_targets[current_index]
+
+    for index, target_index in alternative_targets.items():
+        error_key = f"line_{index}_alternative_to_index"
+        if error_key in errors:
+            continue
+        line = built_by_index.get(index)
+        target = built_by_index.get(target_index)
+        if line is None or target is None:
+            errors[error_key] = "Choose a valid primary quotation item."
+            continue
+        line.alternative_to = target
     return built
 
 
@@ -1835,6 +2024,7 @@ def _existing_quote_form(quotation: PricingQuotation) -> dict:
             "unit_price": str(charge.unit_price),
             "currency": charge.currency,
         }
+    line_indexes = {line.id: index for index, line in enumerate(quotation.lines)}
     return {
         "project_id": str(quotation.project_id),
         "quotation_date": quotation.quotation_date.isoformat(),
@@ -1850,6 +2040,9 @@ def _existing_quote_form(quotation: PricingQuotation) -> dict:
                 "quantity": str(line.quantity),
                 "unit_price": str(line.unit_price),
                 "currency": line.currency,
+                "alternative_to_index": str(
+                    line_indexes[line.alternative_to_line_id]
+                ) if line.alternative_to_line_id in line_indexes else "",
                 "skip_optional_items": line.skip_optional_items,
                 "related": [
                     {

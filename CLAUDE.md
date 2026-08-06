@@ -4,7 +4,33 @@ Service Management System — a maintenance evidence portal. Read `README.md` fo
 full architecture, entities and known limitations. This file is the short version
 plus the rules that aren't inferable from the code.
 
-## Current handoff — 2026-08-04
+## Current handoff — 2026-08-06
+
+- The complete portable continuation guide is `PROJECT_HANDOFF.md`. A new Codex
+  session must read it after this file and `README.md`.
+- The approved application state includes the quotation installation planner,
+  quotation site-survey and invoice proof uploads, expanded planner equipment,
+  unified image-card item selection across quotations and Data Entry, whole-unit
+  quantity steps, quotation line numbering and multi-alternative relationships,
+  Pricing Item categories, and a login Show/Hide password control.
+- The current single Alembic head is `f3a8d7c52e14`. The recent chain is
+  `a6c1e9b42f70` (catalog items in maintenance) → `d2e7a4c91b63` (quotation
+  alternatives) → `f3a8d7c52e14` (Pricing Item categories).
+- The latest full regression result is `343 passed, 1 warning`. The warning is
+  the existing Starlette TestClient/httpx deprecation warning.
+- The latest verified offline installer is `1.1.0-rc28`. Its ignored files are
+  `dist/service-management-offline-1.1.0-rc28.zip` and the adjacent checksum.
+  The ZIP is `534702194` bytes and its SHA-256 is
+  `3ff83476bade9611524dbc94bafc2eae80aefbed976039c1b0732e301625fa9f`.
+- The local development server was verified at port `8999`, but a new PC must
+  configure its own `.env`, PostgreSQL database, uploads, and port.
+- The root `index.html` remains an unrelated untracked original planner file.
+  Its integrated application copy is `app/static/camera-planner.html`. Preserve
+  the root file and never stage it.
+- Preserve `.env`, databases, uploads, `dist`, ignored installer prerequisites,
+  and `D:\ServiceManagement`. None belongs in ordinary source commits.
+
+## Previous handoff — 2026-08-04
 
 - The latest source release is committed on `main` at `bfdb305` and pushed to
   `origin/main` (`KarimHeshamZein/Service-Management`). A documentation-only

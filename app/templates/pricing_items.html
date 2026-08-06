@@ -11,8 +11,31 @@
     <p class="lede">{{ t('ui.maintain.main.items.and.the.optional.priced.items.that.depend.on.them') }}</p>
   </div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
+    <button class="btn btn-secondary" data-toggle-target="manage-item-categories" aria-expanded="false">{{ t('ui.manage.categories') }}</button>
     <button class="btn btn-secondary" data-toggle-target="add-related-item" aria-expanded="false">{{ t('ui.add.related.item') }}</button>
     <button class="btn btn-primary" data-toggle-target="add-pricing-item" aria-expanded="false">{{ t('ui.add.main.item') }}</button>
+  </div>
+</div>
+
+<div class="card" id="manage-item-categories" hidden>
+  <div class="card-head"><h2>{{ t('ui.item.categories') }}</h2></div>
+  <div class="card-body">
+    <form method="post" action="/pricing/categories" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:18px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field" style="margin:0;flex:1 1 260px;"><label for="category-name">{{ t('ui.category.name') }}</label><input id="category-name" name="name" required maxlength="120" dir="auto"></div>
+      <button class="btn btn-primary" type="submit">{{ t('ui.add.category') }}</button>
+    </form>
+    {% if categories %}
+      {% for category in categories %}
+      <form method="post" action="/pricing/categories/{{ category.id }}/edit" class="pricing-category-row">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="field"><label class="sr-only" for="category-{{ category.id }}">{{ t('ui.category.name') }}</label><input id="category-{{ category.id }}" name="name" value="{{ category.name }}" required maxlength="120" dir="auto"></div>
+        <span class="hint">{{ category.items|length }} {{ t('ui.items.lowercase') }}</span>
+        <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.save') }}</button>
+        {% if can_delete %}<button class="btn btn-danger btn-sm" type="submit" formaction="/pricing/categories/{{ category.id }}/delete">{{ t('ui.delete') }}</button>{% endif %}
+      </form>
+      {% endfor %}
+    {% else %}<p class="hint">{{ t('ui.uncategorized') }}</p>{% endif %}
   </div>
 </div>
 
@@ -29,6 +52,7 @@
         <div class="field"><label for="pi-price">{{ t('ui.unit.price.label') }} <span class="req">*</span></label>
           <input id="pi-price" name="unit_price" type="number" min="0" max="999999999999.99" step="0.01" required></div>
         <div class="field"><label for="pi-currency">{{ t('ui.currency') }} <span class="req">*</span></label><select id="pi-currency" name="currency" required>{% for code in currencies %}<option value="{{ code }}">{{ code }}</option>{% endfor %}</select></div>
+        <div class="field"><label for="pi-category">{{ t('ui.item.category') }}</label><select id="pi-category" name="category_id"><option value="">{{ t('ui.uncategorized') }}</option>{% for category in categories %}<option value="{{ category.id }}">{{ category.name }}</option>{% endfor %}</select></div>
         <input type="hidden" name="service_enabled" value="0"><label class="choice"><input type="checkbox" name="service_enabled" value="1" checked><span>{{ t('ui.available.for.service.records') }}</span></label>
         <div class="field"><label for="pi-image">{{ t('ui.item.image') }}</label>
           <input id="pi-image" name="image" type="file" accept="image/jpeg,image/png,image/webp">
@@ -81,12 +105,13 @@
     {% if items %}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>{{ t('ui.image') }}</th><th>{{ t('ui.main.item') }}</th><th>{{ t('ui.model') }}</th><th>{{ t('ui.unit.price.label') }}</th><th>{{ t('ui.service.records') }}</th><th>{{ t('ui.related.items') }}</th><th>{{ t('ui.status') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
+        <thead><tr><th>{{ t('ui.image') }}</th><th>{{ t('ui.main.item') }}</th><th>{{ t('ui.item.category') }}</th><th>{{ t('ui.model') }}</th><th>{{ t('ui.unit.price.label') }}</th><th>{{ t('ui.service.records') }}</th><th>{{ t('ui.related.items') }}</th><th>{{ t('ui.status') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
         <tbody>
         {% for item in items %}
           <tr>
             <td>{% if item.image_storage_key %}<img src="/pricing/items/{{ item.id }}/image?size=thumb" alt="{{ item.name }}" style="width:64px;height:48px;object-fit:cover;border-radius:6px;">{% else %}<span class="hint">{{ t('ui.no.image') }}</span>{% endif %}</td>
             <td><strong>{{ item.name }}</strong></td>
+            <td>{{ item.category.name if item.category else t('ui.uncategorized') }}</td>
             <td>{{ item.model or '—' }}</td>
             <td class="num">{{ item.unit_price|money }} {{ item.currency }}</td>
             <td>{{ t('ui.available') if item.service_enabled else t('ui.not.available') }}</td>
@@ -101,7 +126,7 @@
             </td>
           </tr>
           <tr id="pricing-item-{{ item.id }}" hidden>
-            <td colspan="8" style="background:#f7f9fa;">
+            <td colspan="9" style="background:#f7f9fa;">
               <div class="grid cols-2">
                 <form method="post" action="/pricing/items/{{ item.id }}/edit" enctype="multipart/form-data">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -110,6 +135,7 @@
                   <div class="field"><label for="pim{{ item.id }}">{{ t('ui.model') }}</label><input id="pim{{ item.id }}" name="model" value="{{ item.model }}" maxlength="120" dir="auto"></div>
                   <div class="field"><label for="pip{{ item.id }}">{{ t('ui.unit.price.label') }}</label><input id="pip{{ item.id }}" name="unit_price" type="number" min="0" step="0.01" value="{{ item.unit_price }}" required></div>
                   <div class="field"><label for="pic{{ item.id }}">{{ t('ui.currency') }}</label><select id="pic{{ item.id }}" name="currency" required>{% for code in currencies %}<option value="{{ code }}" {{ 'selected' if code == item.currency }}>{{ code }}</option>{% endfor %}</select></div>
+                  <div class="field"><label for="pict{{ item.id }}">{{ t('ui.item.category') }}</label><select id="pict{{ item.id }}" name="category_id"><option value="">{{ t('ui.uncategorized') }}</option>{% for category in categories %}<option value="{{ category.id }}" {{ 'selected' if item.category_id == category.id }}>{{ category.name }}</option>{% endfor %}</select></div>
                   <input type="hidden" name="service_enabled" value="0"><label class="choice"><input type="checkbox" name="service_enabled" value="1" {{ 'checked' if item.service_enabled }}><span>{{ t('ui.available.for.service.records') }}</span></label>
                   <div class="field"><label for="pii{{ item.id }}">{{ t('ui.replace.image') if item.image_storage_key else t('ui.add.image') }}</label><input id="pii{{ item.id }}" name="image" type="file" accept="image/jpeg,image/png,image/webp"></div>
                   <div style="display:flex;gap:8px;flex-wrap:wrap;">

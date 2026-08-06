@@ -22,11 +22,10 @@ from ..helpers import (
     render,
     to_utc_from_display,
 )
+from ..maintenance_items import active_catalog_items, resolve_maintenance_item
 from ..models import (
     DeviceCatalog,
     EvidencePhotoStage,
-    InstalledDevice,
-    InstallationRecord,
     MaintenanceParticipant,
     MaintenanceItemPhoto,
     MaintenancePhoto,
@@ -88,26 +87,6 @@ def _active_work_sites(db: Session) -> list[WorkSite]:
     )
 
 
-def _installed_devices(db: Session) -> list[InstalledDevice]:
-    return list(
-        db.scalars(
-            select(InstalledDevice)
-            .options(
-                selectinload(InstalledDevice.work_site_evidence),
-                selectinload(InstalledDevice.installation_record).selectinload(
-                    InstallationRecord.work_site_evidence
-                ),
-            )
-            .where(InstalledDevice.is_active.is_(True))
-            .order_by(
-                InstalledDevice.customer_name,
-                InstalledDevice.site_name,
-                InstalledDevice.device_name,
-            )
-        )
-    )
-
-
 def _form_context(
     request: Request,
     db: Session,
@@ -120,7 +99,7 @@ def _form_context(
         "projects": _active_sites(db),
         "work_sites": _active_work_sites(db),
         "services": _active_services(db),
-        "installed_devices": _installed_devices(db),
+        "catalog_items": active_catalog_items(db),
         "quotations": quotation_choices(db),
         "form": form or {"participants": [], "devices": [{}]},
         "technical_users": technical_user_choices(db, request.state.user),
@@ -237,7 +216,7 @@ async def submit_record(
         values.extend([""] * (item_count - len(values)))
 
     device_entries: list[dict] = []
-    seen_devices: set[int] = set()
+    seen_items: set[tuple[str, int]] = set()
     for index in range(item_count):
         installed_raw = installed_device_ids[index]
         service_raw = service_ids[index]
@@ -251,30 +230,28 @@ async def submit_record(
         recommendations = recommendation_values[index]
         suffix = f"_{index}"
 
-        installed_id = entity_id(installed_raw)
-        installed_device = (
-            db.get(InstalledDevice, installed_id)
-            if installed_id is not None
-            else None
-        )
+        selected_item = None
         if not installed_raw:
-            errors[f"installed_device_id{suffix}"] = "Select the device you maintained."
-        elif installed_device is None:
-            errors[f"installed_device_id{suffix}"] = "That installed device no longer exists."
-        elif not installed_device.is_active:
-            errors[f"installed_device_id{suffix}"] = "That installed device is deactivated."
-        elif project and installed_device.site_id != project.id:
+            errors[f"installed_device_id{suffix}"] = "Select the item you maintained."
+        else:
+            selected_item, item_error = resolve_maintenance_item(db, installed_raw)
+            if item_error:
+                errors[f"installed_device_id{suffix}"] = item_error
+        installed_device = selected_item.installed_device if selected_item else None
+        if selected_item and installed_device and project and installed_device.site_id != project.id:
             errors[f"installed_device_id{suffix}"] = (
                 "Select a device installed for that project."
             )
-        elif work_site and installed_device.effective_work_site_id != work_site.id:
+        elif selected_item and installed_device and work_site and installed_device.effective_work_site_id != work_site.id:
             errors[f"installed_device_id{suffix}"] = "Select a device installed at that site."
-        elif installed_device.id in seen_devices:
+        elif selected_item and selected_item.key in seen_items:
             errors[f"installed_device_id{suffix}"] = (
                 "Each device can appear only once in this record."
+                if selected_item.installed_device_id is not None
+                else "Each item can appear only once in this record."
             )
-        if installed_device:
-            seen_devices.add(installed_device.id)
+        if selected_item:
+            seen_items.add(selected_item.key)
 
         service_id = entity_id(service_raw)
         service = db.get(ServiceType, service_id) if service_id is not None else None
@@ -308,7 +285,7 @@ async def submit_record(
                 "notes": notes,
                 "issue_description": issue_description,
                 "recommendations": recommendations,
-                "installed_device": installed_device,
+                "selected_item": selected_item,
                 "service": service,
                 "result_value": result,
             }
@@ -435,12 +412,12 @@ async def submit_record(
     assert project and work_site
     assert quotation
     assert all(
-        entry["service"] and entry["installed_device"] and entry["result_value"]
+        entry["service"] and entry["selected_item"] and entry["result_value"]
         for entry in device_entries
     )
     first = device_entries[0]
     first_service: ServiceType = first["service"]
-    first_device: InstalledDevice = first["installed_device"]
+    first_device = first["selected_item"]
     now = utcnow()
     record = MaintenanceRecord(
         record_number=next_record_number(db, now),
@@ -477,7 +454,7 @@ async def submit_record(
         for _, s in stored_by_item[0]
     ]
     record.device_evidence = MaintenanceRecordDevice(
-        installed_device_id=first_device.id,
+        installed_device_id=first_device.installed_device_id,
         device_id=first_device.device_id,
         device_name=first_device.device_name,
         manufacturer=first_device.manufacturer,
@@ -489,11 +466,11 @@ async def submit_record(
         site_name=work_site.name,
     )
     for entry in device_entries[1:]:
-        item_device: InstalledDevice = entry["installed_device"]
+        item_device = entry["selected_item"]
         item_service: ServiceType = entry["service"]
         record.additional_device_evidence.append(
             MaintenanceRecordAdditionalDevice(
-                installed_device_id=item_device.id,
+                installed_device_id=item_device.installed_device_id,
                 service_type_id=item_service.id,
                 service_name=item_service.name,
                 device_id=item_device.device_id,
@@ -504,10 +481,10 @@ async def submit_record(
             )
         )
     for index, entry in enumerate(device_entries):
-        item_device: InstalledDevice = entry["installed_device"]
+        item_device = entry["selected_item"]
         item_service: ServiceType = entry["service"]
         item = MaintenanceRecordItem(
-            installed_device_id=item_device.id,
+            installed_device_id=item_device.installed_device_id,
             service_type_id=item_service.id,
             position=index,
             service_name=item_service.name,

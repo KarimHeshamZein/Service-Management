@@ -342,6 +342,7 @@
     <button class="tb-btn equipment-add" data-equipment-kind="solar_panel">+ Solar Panel</button>
     <button class="tb-btn equipment-add" data-equipment-kind="guard_room">+ Guard Room</button>
     <button class="tb-btn equipment-add" data-equipment-kind="metal_pole">+ Metal Pole</button>
+    <button class="tb-btn equipment-add" data-equipment-kind="tree_pole">+ Tree Pole</button>
     <button class="tb-btn equipment-add" data-equipment-kind="sign">+ Sign</button>
     <button class="tb-btn" id="btn-add-text">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6V5h14v1M12 5v14M9 19h6"/></svg>
@@ -681,6 +682,10 @@ document.addEventListener("DOMContentLoaded", () => {
     metal_pole: {
       label: "Metal Pole", defaultWidth: 1.5, defaultVariant: "white",
       variants: { white: ["White", "/static/img/planner-equipment/metal-pole-white-transparent.png"], black: ["Black", "/static/img/planner-equipment/metal-pole-black-transparent.png"] }, blend: false,
+    },
+    tree_pole: {
+      label: "Tree Pole", defaultWidth: 2.5, defaultVariant: "front",
+      variants: { front: ["Front view", "/static/img/planner-equipment/tree-pole-front-transparent.png"], side: ["Side view", "/static/img/planner-equipment/tree-pole-side-transparent.png"] }, blend: false,
     },
     sign: {
       label: "Sign", defaultWidth: 3, defaultVariant: "standard",

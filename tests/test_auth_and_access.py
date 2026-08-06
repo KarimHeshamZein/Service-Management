@@ -58,6 +58,9 @@ def test_login_enables_browser_password_manager(client):
     assert response.status_code == 200
     assert 'name="username" type="text" autocomplete="username"' in response.text
     assert 'name="password" type="password" autocomplete="current-password"' in response.text
+    assert 'data-password-toggle="password"' in response.text
+    assert 'aria-controls="password" aria-pressed="false"' in response.text
+    assert "Show password" in response.text
     assert "Your browser can securely save and fill this password." in response.text
 
 

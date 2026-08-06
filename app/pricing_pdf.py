@@ -316,14 +316,19 @@ def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
     ]
     row_index = 0
     for position, line in enumerate(quotation.lines, start=1):
+        item_description = line.item_name
+        if line.item_model:
+            item_description += f"\n{line.item_model}"
+        if line.alternative_to:
+            item_description += (
+                f"\nAlternative to item {line.alternative_to.position} — "
+                f"{line.alternative_to.item_name}"
+            )
         rows.append(
             [
                 _paragraph(position, styles["small"]),
                 _item_image(line, styles),
-                _paragraph(
-                    line.item_name + (f"\n{line.item_model}" if line.item_model else ""),
-                    styles["body"],
-                ),
+                _paragraph(item_description, styles["body"]),
                 _paragraph(line.quantity, styles["right"]),
                 _paragraph(_amount(line.unit_price, line.currency), styles["right"]),
                 _paragraph(_amount(line.main_total, line.currency), styles["right"]),

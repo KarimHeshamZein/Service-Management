@@ -905,9 +905,9 @@ class MaintenanceRecordDevice(Base):
         unique=True,
         index=True,
     )
-    installed_device_id: Mapped[int] = mapped_column(
+    installed_device_id: Mapped[int | None] = mapped_column(
         ForeignKey("installed_devices.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
     device_id: Mapped[int] = mapped_column(
@@ -919,7 +919,7 @@ class MaintenanceRecordDevice(Base):
     serial_number: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
 
     record: Mapped[MaintenanceRecord] = relationship(back_populates="device_evidence")
-    installed_device: Mapped[InstalledDevice] = relationship(
+    installed_device: Mapped[InstalledDevice | None] = relationship(
         back_populates="maintenance_links"
     )
     catalog_device: Mapped[DeviceCatalog] = relationship(
@@ -938,9 +938,9 @@ class MaintenanceRecordAdditionalDevice(Base):
         nullable=False,
         index=True,
     )
-    installed_device_id: Mapped[int] = mapped_column(
+    installed_device_id: Mapped[int | None] = mapped_column(
         ForeignKey("installed_devices.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
     service_type_id: Mapped[int] = mapped_column(
@@ -958,7 +958,7 @@ class MaintenanceRecordAdditionalDevice(Base):
     record: Mapped[MaintenanceRecord] = relationship(
         back_populates="additional_device_evidence"
     )
-    installed_device: Mapped[InstalledDevice] = relationship()
+    installed_device: Mapped[InstalledDevice | None] = relationship()
     service_type: Mapped[ServiceType] = relationship()
     catalog_device: Mapped[DeviceCatalog] = relationship()
 
@@ -972,8 +972,8 @@ class MaintenanceRecordItem(Base):
     record_id: Mapped[int] = mapped_column(
         ForeignKey("maintenance_records.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    installed_device_id: Mapped[int] = mapped_column(
-        ForeignKey("installed_devices.id", ondelete="RESTRICT"), nullable=False, index=True
+    installed_device_id: Mapped[int | None] = mapped_column(
+        ForeignKey("installed_devices.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     service_type_id: Mapped[int] = mapped_column(
         ForeignKey("service_types.id", ondelete="RESTRICT"), nullable=False, index=True
@@ -995,7 +995,7 @@ class MaintenanceRecordItem(Base):
     recommendations: Mapped[str | None] = mapped_column(Text)
 
     record: Mapped[MaintenanceRecord] = relationship(back_populates="work_items")
-    installed_device: Mapped[InstalledDevice] = relationship()
+    installed_device: Mapped[InstalledDevice | None] = relationship()
     service_type: Mapped[ServiceType] = relationship()
     catalog_device: Mapped[DeviceCatalog] = relationship()
     photos: Mapped[list["MaintenanceItemPhoto"]] = relationship(
@@ -1108,8 +1108,8 @@ class GeneralMaintenanceItem(Base):
         nullable=False,
         index=True,
     )
-    installed_device_id: Mapped[int] = mapped_column(
-        ForeignKey("installed_devices.id", ondelete="RESTRICT"), nullable=False, index=True
+    installed_device_id: Mapped[int | None] = mapped_column(
+        ForeignKey("installed_devices.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     service_type_id: Mapped[int] = mapped_column(
         ForeignKey("service_types.id", ondelete="RESTRICT"), nullable=False, index=True
@@ -1131,7 +1131,7 @@ class GeneralMaintenanceItem(Base):
     recommendations: Mapped[str | None] = mapped_column(Text)
 
     record: Mapped[GeneralMaintenanceRecord] = relationship(back_populates="work_items")
-    installed_device: Mapped[InstalledDevice] = relationship()
+    installed_device: Mapped[InstalledDevice | None] = relationship()
     service_type: Mapped[ServiceType] = relationship()
     catalog_device: Mapped[DeviceCatalog] = relationship()
     photos: Mapped[list["GeneralMaintenancePhoto"]] = relationship(
@@ -1329,6 +1329,27 @@ class DeploymentSettingsAudit(Base):
         return value if isinstance(value, dict) else {}
 
 
+class PricingItemCategory(Base):
+    """User-managed grouping for Pricing Items."""
+
+    __tablename__ = "pricing_item_categories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    items: Mapped[list["PricingItem"]] = relationship(back_populates="category")
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(name)) > 0", name="ck_pricing_item_category_name_present"
+        ),
+    )
+
+
 class PricingItem(Base):
     """Reusable main item offered on price quotations."""
 
@@ -1341,6 +1362,9 @@ class PricingItem(Base):
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="SAR")
     service_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, index=True
+    )
+    category_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_item_categories.id", ondelete="SET NULL"), index=True
     )
     device_catalog_id: Mapped[int | None] = mapped_column(
         ForeignKey("device_catalog.id", ondelete="RESTRICT"), unique=True, index=True
@@ -1361,6 +1385,7 @@ class PricingItem(Base):
         cascade="all, delete-orphan",
         order_by="PricingRelatedItem.name",
     )
+    category: Mapped[PricingItemCategory | None] = relationship(back_populates="items")
     legacy_device: Mapped[DeviceCatalog | None] = relationship(
         back_populates="pricing_item"
     )
@@ -1375,6 +1400,10 @@ class PricingItem(Base):
     @property
     def display_label(self) -> str:
         return f"{self.name} — {self.model}" if self.model else self.name
+
+    @property
+    def category_name(self) -> str:
+        return self.category.name if self.category else ""
 
 
 class PricingRelatedItem(Base):
@@ -1639,6 +1668,9 @@ class PricingQuotationLine(Base):
     source_item_id: Mapped[int | None] = mapped_column(
         ForeignKey("pricing_items.id", ondelete="SET NULL"), index=True
     )
+    alternative_to_line_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_quotation_lines.id", ondelete="SET NULL"), index=True
+    )
     item_name: Mapped[str] = mapped_column(String(160), nullable=False)
     item_model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
@@ -1655,6 +1687,18 @@ class PricingQuotationLine(Base):
     image_file_size: Mapped[int | None] = mapped_column(Integer)
 
     quotation: Mapped[PricingQuotation] = relationship(back_populates="lines")
+    alternative_to: Mapped["PricingQuotationLine | None"] = relationship(
+        "PricingQuotationLine",
+        back_populates="alternatives",
+        foreign_keys=[alternative_to_line_id],
+        remote_side="PricingQuotationLine.id",
+        post_update=True,
+    )
+    alternatives: Mapped[list["PricingQuotationLine"]] = relationship(
+        "PricingQuotationLine",
+        back_populates="alternative_to",
+        foreign_keys="PricingQuotationLine.alternative_to_line_id",
+    )
     related_items: Mapped[list["PricingQuotationRelatedLine"]] = relationship(
         back_populates="line",
         cascade="all, delete-orphan",
@@ -1667,6 +1711,10 @@ class PricingQuotationLine(Base):
             "unit_price >= 0", name="ck_pricing_line_price_nonnegative"
         ),
         CheckConstraint("length(trim(currency)) = 3", name="ck_pricing_line_currency"),
+        CheckConstraint(
+            "alternative_to_line_id IS NULL OR alternative_to_line_id <> id",
+            name="ck_pricing_line_not_own_alternative",
+        ),
         UniqueConstraint(
             "quotation_id", "position", name="uq_pricing_quotation_line_position"
         ),

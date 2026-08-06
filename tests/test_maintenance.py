@@ -3,15 +3,18 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 
 from app.config import settings
 from app.models import (
     EvidencePhotoStage,
+    DeviceCatalog,
     InstalledDevice,
     InstalledDeviceSite,
     MaintenancePhoto,
     MaintenanceRecord,
     MaintenanceResult,
+    PricingItem,
     RecordRevision,
     ServiceType,
     Site,
@@ -49,6 +52,35 @@ def test_preventive_maintenance_stores_before_and_after_photos(client, db):
     assert response.status_code == 303
     stages = [photo.stage for photo in _record(db).work_items[0].photos]
     assert stages == [EvidencePhotoStage.BEFORE, EvidencePhotoStage.AFTER]
+
+
+def test_preventive_maintenance_lists_and_accepts_uninstalled_catalog_item(client, db):
+    device = DeviceCatalog(name="Solar Panel", model="SP-500")
+    item = PricingItem(
+        name="Solar Panel",
+        model="SP-500",
+        unit_price=Decimal("750.00"),
+        currency="SAR",
+        service_enabled=True,
+        legacy_device=device,
+    )
+    db.add(item)
+    db.commit()
+
+    login(client, *LEADER_A)
+    page = client.get("/maintenance")
+    assert page.status_code == 200
+    assert f'value="catalog:{item.id}"' in page.text
+    assert "Solar Panel" in page.text
+    assert "BASE-SN-001" not in page.text
+    assert "Installed items" not in page.text
+
+    response = submit_record(client, installed_device_id=f"catalog:{item.id}")
+    assert response.status_code == 303
+    record = _record(db)
+    assert record.work_items[0].device_name == "Solar Panel"
+    assert record.work_items[0].installed_device_id is None
+    assert record.device_evidence.installed_device_id is None
 
 
 # ------------------------------------------------------------ happy path

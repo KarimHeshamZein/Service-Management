@@ -10,8 +10,10 @@ from app.models import (
     EvidencePhotoStage,
     InstalledDevice,
     InstallationRecord,
+    PricingItem,
     RecordRevision,
 )
+from app.uploads import store_image
 from tests.conftest import (
     ADMIN,
     CUSTOMER_A,
@@ -52,6 +54,32 @@ def test_team_leader_can_submit_installation(client, db):
     assert [person.name for person in record.participants] == ["Leader Two"]
     assert len(record.photos) == 1
     assert record.submitted_at.year != 1900
+
+
+def test_data_entry_item_selectors_use_shared_image_picker(client, db):
+    item = db.get(PricingItem, 1)
+    stored = store_image("service-item.jpg", make_image())
+    item.image_storage_key = stored.storage_key
+    item.image_thumbnail_key = stored.thumbnail_key
+    item.image_original_filename = stored.original_filename
+    item.image_content_type = stored.content_type
+    item.image_file_size = stored.file_size
+    db.commit()
+
+    login(client, *LEADER_A)
+    for path in ("/installations/submit", "/maintenance", "/general-maintenance"):
+        page = client.get(path)
+        assert page.status_code == 200
+        assert "data-service-item-picker" in page.text
+        assert "data-service-item-trigger" in page.text
+        assert "/service-items/1/image?size=thumb" in page.text
+    image = client.get("/service-items/1/image?size=thumb")
+    assert image.status_code == 200
+    assert image.headers["content-type"] == "image/jpeg"
+
+    logout(client)
+    login(client, *CUSTOMER_A)
+    assert client.get("/service-items/1/image?size=thumb").status_code == 403
 
 
 def test_installation_keeps_before_and_after_photos_separate(client, db):

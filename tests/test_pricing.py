@@ -6,6 +6,7 @@ import json
 import re
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 from pypdf import PdfReader
 from sqlalchemy.exc import SQLAlchemyError
@@ -13,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     PricingItem,
+    PricingItemCategory,
     PricingQuotation,
     PricingQuotationInvoiceImage,
     PricingQuotationSiteSurveyImage,
@@ -21,6 +23,7 @@ from app.models import (
     User,
 )
 from app.pricing import quotation_totals
+from app.quotation_planner import validate_installation_plan_state
 from app.config import settings
 from app.uploads import store_image
 from tests.conftest import (
@@ -191,17 +194,93 @@ def test_camera_planner_is_embedded_and_fully_offline(client):
         "solar_panel",
         "guard_room",
         "metal_pole",
+        "tree_pole",
         "sign",
     ):
         assert f'data-equipment-kind="{kind}"' in planner.text
     assert "/static/img/planner-equipment/barrier-left-transparent.png" in planner.text
     assert "/static/img/planner-equipment/metal-pole-white-transparent.png" in planner.text
     assert "/static/img/planner-equipment/metal-pole-black-transparent.png" in planner.text
+    assert "/static/img/planner-equipment/tree-pole-front-transparent.png" in planner.text
+    assert "/static/img/planner-equipment/tree-pole-side-transparent.png" in planner.text
     assert "/static/img/planner-equipment/sign-transparent.png" in planner.text
     assert 'id="cam-width"' in planner.text
     assert 'id="cam-mounted-on"' in planner.text
     assert "cdn.jsdelivr.net" not in planner.text
     assert "fonts.googleapis.com" not in planner.text
+
+
+def test_tree_pole_front_and_side_variants_are_valid_plan_equipment():
+    state = _camera_plan_state()
+    state["items"].extend(
+        [
+            {
+                "id": "tree-pole-front",
+                "kind": "tree_pole",
+                "name": "Tree pole front",
+                "variant": "front",
+                "x": 500,
+                "y": 300,
+                "widthMeters": 2.5,
+                "rotation": 0,
+                "opacity": 1,
+            },
+            {
+                "id": "tree-pole-side",
+                "kind": "tree_pole",
+                "name": "Tree pole side",
+                "variant": "side",
+                "x": 600,
+                "y": 300,
+                "widthMeters": 2.5,
+                "rotation": 0,
+                "opacity": 1,
+            },
+        ]
+    )
+    normalized = validate_installation_plan_state(json.dumps(state))
+    tree_variants = [
+        item["variant"] for item in normalized["items"] if item["kind"] == "tree_pole"
+    ]
+    assert tree_variants == ["front", "side"]
+
+
+def test_quotation_add_item_control_opens_catalogue_picker_at_end(client, db):
+    camera, recorder = _create_catalogue(db)
+    login(client, *ADMIN)
+    page = client.get("/pricing/quotations/new")
+    assert page.status_code == 200
+    assert 'data-pricing-item-picker' in page.text
+    assert 'data-pricing-item-picker-search' in page.text
+    assert 'data-choose-pricing-item' in page.text
+    assert f'data-item-id="{camera.id}"' in page.text
+    assert f'data-item-id="{recorder.id}"' in page.text
+    assert page.text.index('data-pricing-lines') < page.text.index(
+        'class="pricing-add-line-footer"'
+    )
+
+
+def test_quotation_quantity_steppers_use_whole_units_without_changing_prices(client, db):
+    _create_catalogue(db)
+    login(client, *ADMIN)
+    html = client.get("/pricing/quotations/new").text
+    for field_name in (
+        "line_0_quantity",
+        "charge_manpower_quantity",
+        "charge_transportation_quantity",
+        "charge_installation_quantity",
+    ):
+        assert re.search(
+            rf'name="{field_name}"[^>]*min="1" step="1"',
+            html,
+        )
+    assert re.search(
+        r'name="line_0_unit_price"[^>]*min="0" step="0.01"',
+        html,
+    )
+    javascript = Path("app/static/js/app.js").read_text(encoding="utf-8")
+    assert 'quantityInput.step = "1"' in javascript
+    assert 'priceInput.step = "0.01"' in javascript
 
 
 def test_quotation_camera_plan_is_saved_protected_exported_and_deleted(client, db):
@@ -693,6 +772,102 @@ def test_item_and_related_item_crud_obeys_delete_rules(client, db):
     assert "Delete" not in page
 
 
+def test_item_categories_assign_existing_items_and_group_item_pickers(client, db):
+    camera, _recorder = _create_catalogue(db)
+    _grant_pricing(db)
+    login(client, *LEADER_A)
+    token = csrf_of(client, "/pricing/items")
+
+    created = client.post(
+        "/pricing/categories",
+        data={"csrf_token": token, "name": "Cameras"},
+    )
+    assert created.status_code == 303
+    category = db.query(PricingItemCategory).filter_by(name="Cameras").one()
+
+    duplicate = client.post(
+        "/pricing/categories",
+        data={"csrf_token": token, "name": "cameras"},
+    )
+    assert duplicate.status_code == 303
+    assert db.query(PricingItemCategory).count() == 1
+
+    assigned = client.post(
+        f"/pricing/items/{camera.id}/edit",
+        data={
+            "csrf_token": token,
+            "name": camera.name,
+            "model": camera.model,
+            "unit_price": str(camera.unit_price),
+            "currency": camera.currency,
+            "category_id": str(category.id),
+            "service_enabled": "1",
+        },
+    )
+    assert assigned.status_code == 303
+    db.refresh(camera)
+    assert camera.category_id == category.id
+
+    page = client.get("/pricing/items?q=Cameras")
+    assert page.status_code == 200
+    assert "Quotation Camera" in page.text
+    assert "Cameras" in page.text
+
+    quotation_form = client.get("/pricing/quotations/new")
+    assert quotation_form.status_code == 200
+    assert '<h3>Cameras</h3>' in quotation_form.text
+    assert "Quotation Camera" in quotation_form.text
+
+    installation_form = client.get("/installations/submit")
+    assert installation_form.status_code == 200
+    assert '<h3>Cameras</h3>' in installation_form.text
+
+    renamed = client.post(
+        f"/pricing/categories/{category.id}/edit",
+        data={"csrf_token": token, "name": "Security Cameras"},
+    )
+    assert renamed.status_code == 303
+    db.refresh(category)
+    assert category.name == "Security Cameras"
+
+    assert client.post(
+        f"/pricing/categories/{category.id}/delete",
+        data={"csrf_token": token},
+    ).status_code == 403
+
+    logout(client)
+    login(client, *ADMIN)
+    admin_token = csrf_of(client, "/pricing/items")
+    in_use = client.post(
+        f"/pricing/categories/{category.id}/delete",
+        data={"csrf_token": admin_token},
+    )
+    assert in_use.status_code == 303
+    assert db.get(PricingItemCategory, category.id) is not None
+
+    unassigned = client.post(
+        f"/pricing/items/{camera.id}/edit",
+        data={
+            "csrf_token": admin_token,
+            "name": camera.name,
+            "model": camera.model,
+            "unit_price": str(camera.unit_price),
+            "currency": camera.currency,
+            "category_id": "",
+            "service_enabled": "1",
+        },
+    )
+    assert unassigned.status_code == 303
+    deleted = client.post(
+        f"/pricing/categories/{category.id}/delete",
+        data={"csrf_token": admin_token},
+    )
+    assert deleted.status_code == 303
+    category_id = category.id
+    db.expire_all()
+    assert db.get(PricingItemCategory, category_id) is None
+
+
 def test_main_item_image_is_validated_protected_and_removed(client, db):
     login(client, *ADMIN)
     token = csrf_of(client, "/pricing/items")
@@ -835,6 +1010,84 @@ def test_quotation_saves_catalogue_and_project_snapshots_with_exact_totals(clien
     assert quotation.project_name == project
     assert quotation.lines[0].item_name == "Quotation Camera"
     assert quotation_totals(quotation)["grand_total"] == Decimal("220.00")
+
+
+def test_quotation_numbers_lines_and_supports_multiple_alternatives(client, db):
+    camera, recorder = _create_catalogue(db)
+    third_item = PricingItem(
+        name="Alternative Solar Camera",
+        model="ALT-SOLAR-1",
+        unit_price=Decimal("350.00"),
+    )
+    db.add(third_item)
+    db.commit()
+    login(client, *ADMIN)
+
+    response = _submit_quote(
+        client,
+        camera,
+        line_1_item_id=str(recorder.id),
+        line_1_quantity="1",
+        line_1_unit_price=str(recorder.unit_price),
+        line_1_alternative_to_index="0",
+        line_2_item_id=str(third_item.id),
+        line_2_quantity="1",
+        line_2_unit_price=str(third_item.unit_price),
+        line_2_alternative_to_index="0",
+    )
+
+    assert response.status_code == 303
+    quotation = db.query(PricingQuotation).one()
+    assert [line.position for line in quotation.lines] == [1, 2, 3]
+    assert quotation.lines[0].alternative_to is None
+    assert quotation.lines[1].alternative_to is quotation.lines[0]
+    assert quotation.lines[2].alternative_to is quotation.lines[0]
+    assert quotation.lines[1].unit_price == Decimal("500.00")
+    assert quotation.lines[2].unit_price == Decimal("350.00")
+
+    detail = client.get(f"/pricing/quotations/{quotation.id}")
+    assert detail.status_code == 200
+    assert detail.text.count("Alternative to item 1") == 2
+
+    edit = client.get(f"/pricing/quotations/{quotation.id}/edit")
+    assert edit.status_code == 200
+    assert 'name="line_1_alternative_to_index"' in edit.text
+    assert '<option value="0" selected>Item 1</option>' in edit.text
+
+    pdf = client.get(f"/pricing/quotations/{quotation.id}/pdf")
+    assert pdf.status_code == 200
+    pdf_text = "\n".join(
+        page.extract_text() or ""
+        for page in PdfReader(io.BytesIO(pdf.content)).pages
+    )
+    assert pdf_text.count("Alternative to item 1") == 2
+
+
+def test_quotation_rejects_self_and_circular_alternative_links(client, db):
+    camera, recorder = _create_catalogue(db)
+    login(client, *ADMIN)
+
+    self_link = _submit_quote(
+        client,
+        camera,
+        line_0_alternative_to_index="0",
+    )
+    assert self_link.status_code == 422
+    assert "An item cannot be an alternative to itself." in self_link.text
+    assert db.query(PricingQuotation).count() == 0
+
+    circular = _submit_quote(
+        client,
+        camera,
+        line_0_alternative_to_index="1",
+        line_1_item_id=str(recorder.id),
+        line_1_quantity="1",
+        line_1_unit_price=str(recorder.unit_price),
+        line_1_alternative_to_index="0",
+    )
+    assert circular.status_code == 422
+    assert "Alternative items cannot form a circular link." in circular.text
+    assert db.query(PricingQuotation).count() == 0
 
 
 def test_create_quotation_commit_failure_removes_new_image_snapshots(

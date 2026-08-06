@@ -54,6 +54,103 @@
     });
   });
 
+  /* ------------------------------------------- service item image picker */
+  var activeServiceItemSelect = null;
+  var activeServiceItemPicker = null;
+
+  function syncServiceItemTrigger(select) {
+    var trigger = select.parentElement.querySelector("[data-service-item-trigger]");
+    if (!trigger) return;
+    var option = select.options[select.selectedIndex];
+    trigger.textContent = option && option.value
+      ? option.textContent.trim()
+      : select.options[0].textContent.trim();
+  }
+
+  window.initializeServiceItemPickers = function (root) {
+    (root || document).querySelectorAll("[data-service-item-select]").forEach(function (select) {
+      if (select.dataset.itemPickerReady === "true") return;
+      var trigger = select.parentElement.querySelector("[data-service-item-trigger]");
+      if (!trigger) return;
+      select.dataset.itemPickerReady = "true";
+      select.hidden = true;
+      select.required = false;
+      trigger.hidden = false;
+      syncServiceItemTrigger(select);
+      select.addEventListener("change", function () { syncServiceItemTrigger(select); });
+    });
+  };
+
+  document.querySelectorAll("[data-password-toggle]").forEach(function (button) {
+    var input = document.getElementById(button.dataset.passwordToggle);
+    if (!input) return;
+    button.addEventListener("click", function () {
+      var show = input.type === "password";
+      input.type = show ? "text" : "password";
+      button.textContent = show ? button.dataset.hideLabel : button.dataset.showLabel;
+      button.setAttribute("aria-pressed", show ? "true" : "false");
+      input.focus();
+    });
+  });
+
+  document.querySelectorAll("[data-service-item-picker]").forEach(function (picker) {
+    var search = picker.querySelector("[data-service-item-picker-search]");
+    var empty = picker.querySelector("[data-service-item-picker-empty]");
+    var close = picker.querySelector("[data-close-service-item-picker]");
+    if (close) close.addEventListener("click", function () { picker.close(); });
+    if (search) {
+      search.addEventListener("input", function () {
+        var query = search.value.trim().toLowerCase();
+        var visibleCount = 0;
+        picker.querySelectorAll("[data-service-item-choice]").forEach(function (choice) {
+          var matches = !query || choice.dataset.searchText.indexOf(query) !== -1;
+          choice.hidden = !matches;
+          if (matches) visibleCount += 1;
+        });
+        picker.querySelectorAll(".pricing-item-picker-category").forEach(function (category) {
+          category.hidden = !category.querySelector(
+            "[data-service-item-choice]:not([hidden])"
+          );
+        });
+        if (empty) empty.hidden = visibleCount !== 0;
+      });
+    }
+    picker.querySelectorAll("[data-service-item-choice]").forEach(function (choice) {
+      choice.addEventListener("click", function () {
+        if (!activeServiceItemSelect || activeServiceItemPicker !== picker) return;
+        activeServiceItemSelect.value = choice.dataset.itemValue;
+        activeServiceItemSelect.dispatchEvent(new Event("change", { bubbles: true }));
+        picker.close();
+        activeServiceItemSelect.closest("[data-device-row]").scrollIntoView({
+          behavior: "smooth",
+          block: "center"
+        });
+      });
+    });
+  });
+
+  document.addEventListener("click", function (event) {
+    var trigger = event.target.closest("[data-service-item-trigger]");
+    if (!trigger) return;
+    var select = trigger.parentElement.querySelector("[data-service-item-select]");
+    if (!select) return;
+    var picker = document.querySelector(
+      '[data-service-item-picker="' + select.dataset.serviceItemSelect + '"]'
+    );
+    if (!picker) return;
+    activeServiceItemSelect = select;
+    activeServiceItemPicker = picker;
+    var search = picker.querySelector("[data-service-item-picker-search]");
+    if (search) {
+      search.value = "";
+      search.dispatchEvent(new Event("input"));
+    }
+    picker.showModal();
+    if (search) search.focus();
+  });
+
+  window.initializeServiceItemPickers(document);
+
   /* -------------------------------------------------- pricing quotation */
   var pricingForm = document.querySelector("[data-pricing-quotation-form]");
   var catalogueNode = document.getElementById("pricing-catalogue-data");
@@ -65,13 +162,86 @@
       pricingCatalogue = [];
     }
     var pricingLines = pricingForm.querySelector("[data-pricing-lines]");
-    var addPricingLine = pricingForm.querySelector("[data-add-pricing-line]");
+    var addPricingLineButtons = pricingForm.querySelectorAll("[data-add-pricing-line]");
+    var pricingLineFooter = pricingForm.querySelector(".pricing-add-line-footer");
+    var pricingItemPicker = pricingForm.querySelector("[data-pricing-item-picker]");
+    var pricingItemPickerSearch = pricingForm.querySelector("[data-pricing-item-picker-search]");
+    var pricingItemPickerEmpty = pricingForm.querySelector("[data-pricing-item-picker-empty]");
+    var pricingPickerSection = null;
     var nextPricingIndex = 0;
 
     function catalogueItem(value) {
       return pricingCatalogue.filter(function (item) {
         return String(item.id) === String(value);
       })[0];
+    }
+
+    function syncPricingItemTrigger(section) {
+      var select = section.querySelector("[data-pricing-item-select]");
+      var trigger = section.querySelector("[data-choose-pricing-item]");
+      if (!trigger) return;
+      var item = catalogueItem(select.value);
+      trigger.textContent = item ? item.label : select.options[0].textContent.trim();
+    }
+
+    function refreshPricingLineNumbersAndAlternatives() {
+      var sections = Array.from(
+        pricingLines.querySelectorAll("[data-pricing-line]")
+      );
+      var itemLabel = pricingLines.dataset.itemLabel || "Item";
+      var notAlternativeLabel =
+        pricingLines.dataset.notAlternativeLabel || "Not an alternative";
+
+      sections.forEach(function (section, position) {
+        var heading = section.querySelector("[data-pricing-line-number]");
+        if (heading) heading.textContent = itemLabel + " " + (position + 1);
+      });
+
+      sections.forEach(function (section) {
+        var alternativeSelect = section.querySelector(
+          "[data-pricing-alternative-select]"
+        );
+        if (!alternativeSelect) return;
+        var selectedValue =
+          alternativeSelect.value || alternativeSelect.dataset.currentAlternative || "";
+        alternativeSelect.replaceChildren();
+
+        var noneOption = document.createElement("option");
+        noneOption.value = "";
+        noneOption.textContent = notAlternativeLabel;
+        alternativeSelect.appendChild(noneOption);
+
+        sections.forEach(function (candidate, position) {
+          if (candidate === section) return;
+          var candidateItem = catalogueItem(
+            candidate.querySelector("[data-pricing-item-select]").value
+          );
+          var option = document.createElement("option");
+          option.value = candidate.dataset.lineIndex;
+          option.textContent =
+            itemLabel +
+            " " +
+            (position + 1) +
+            (candidateItem ? " — " + candidateItem.label : "");
+          alternativeSelect.appendChild(option);
+        });
+        if (
+          Array.from(alternativeSelect.options).some(function (option) {
+            return option.value === selectedValue;
+          })
+        ) {
+          alternativeSelect.value = selectedValue;
+        } else {
+          alternativeSelect.value = "";
+        }
+        alternativeSelect.dataset.currentAlternative = alternativeSelect.value;
+        if (!alternativeSelect.dataset.alternativeListener) {
+          alternativeSelect.addEventListener("change", function () {
+            alternativeSelect.dataset.currentAlternative = alternativeSelect.value;
+          });
+          alternativeSelect.dataset.alternativeListener = "true";
+        }
+      });
     }
 
     function relatedSelection(section) {
@@ -134,8 +304,8 @@
         quantityInput.id = quantityId;
         quantityInput.name = "line_" + index + "_related_qty_" + related.id;
         quantityInput.type = "number";
-        quantityInput.min = "0.01";
-        quantityInput.step = "0.01";
+        quantityInput.min = "1";
+        quantityInput.step = "1";
         quantityInput.value = previous && previous.quantity ? previous.quantity : "1";
         quantityInput.required = checkbox.checked;
         quantityWrap.appendChild(quantityLabel);
@@ -283,6 +453,17 @@
       var index = Number(section.dataset.lineIndex);
       nextPricingIndex = Math.max(nextPricingIndex, index + 1);
       var select = section.querySelector("[data-pricing-item-select]");
+      var pickerTrigger = section.querySelector("[data-choose-pricing-item]");
+      if (pickerTrigger) {
+        select.hidden = true;
+        select.required = false;
+        pickerTrigger.hidden = false;
+        syncPricingItemTrigger(section);
+        pickerTrigger.addEventListener("click", function () {
+          pricingPickerSection = section;
+          openPricingItemPicker();
+        });
+      }
       updateMainItem(section, false);
       renderRelatedItems(section, relatedSelection(section));
       select.addEventListener("change", function () {
@@ -290,12 +471,15 @@
         section.dataset.skipOptional = "false";
         updateMainItem(section, true);
         renderRelatedItems(section, []);
+        syncPricingItemTrigger(section);
+        refreshPricingLineNumbersAndAlternatives();
       });
       section.querySelector("[data-remove-pricing-line]").addEventListener(
         "click",
         function () {
           section.remove();
           refreshRemoveButtons();
+          refreshPricingLineNumbersAndAlternatives();
         }
       );
     }
@@ -304,45 +488,130 @@
       initialisePricingLine
     );
     refreshRemoveButtons();
+    refreshPricingLineNumbersAndAlternatives();
 
-    if (addPricingLine) {
-      addPricingLine.addEventListener("click", function () {
-        var source = pricingLines.querySelector("[data-pricing-line]");
-        if (!source) return;
-        var oldIndex = source.dataset.lineIndex;
-        var newIndex = String(nextPricingIndex++);
-        var section = source.cloneNode(true);
-        section.dataset.lineIndex = newIndex;
-        section.dataset.relatedSelection = "[]";
-        section.dataset.skipOptional = "false";
-        section.querySelectorAll("[name]").forEach(function (field) {
-          field.name = field.name.replace(
-            "line_" + oldIndex + "_",
-            "line_" + newIndex + "_"
-          );
-        });
-        section.querySelectorAll("[id]").forEach(function (field) {
-          field.id = field.id.replace("-" + oldIndex, "-" + newIndex);
-        });
-        section.querySelectorAll("label[for]").forEach(function (label) {
-          label.htmlFor = label.htmlFor.replace("-" + oldIndex, "-" + newIndex);
-        });
-        section.querySelectorAll(".field-error").forEach(function (error) {
-          error.remove();
-        });
-        section.querySelector("[data-pricing-item-select]").value = "";
-        section.querySelector(
-          'input[name="line_' + newIndex + '_quantity"]'
-        ).value = "1";
-        section.querySelector("[data-pricing-main-price]").value = "";
-        section.querySelector("[data-pricing-main-currency]").value = "SAR";
-        section.querySelector("[data-pricing-item-image]").hidden = true;
-        section.querySelector("[data-pricing-related-items]").replaceChildren();
-        pricingLines.appendChild(section);
-        initialisePricingLine(section);
-        refreshRemoveButtons();
-        section.querySelector("[data-pricing-item-select]").focus();
+    function usePricingItem(itemId) {
+      var emptySection = Array.from(
+        pricingLines.querySelectorAll("[data-pricing-line]")
+      ).filter(function (candidate) {
+        return !candidate.querySelector("[data-pricing-item-select]").value;
+      })[0];
+      if (emptySection) {
+        var emptySelect = emptySection.querySelector("[data-pricing-item-select]");
+        emptySection.dataset.relatedSelection = "[]";
+        emptySection.dataset.skipOptional = "false";
+        emptySelect.value = String(itemId);
+        updateMainItem(emptySection, true);
+        renderRelatedItems(emptySection, []);
+        syncPricingItemTrigger(emptySection);
+        refreshPricingLineNumbersAndAlternatives();
+        emptySection.scrollIntoView({ behavior: "smooth", block: "center" });
+        emptySection.querySelector('input[type="number"]').focus();
+        return;
+      }
+      var source = pricingLines.querySelector("[data-pricing-line]");
+      if (!source) return;
+      var oldIndex = source.dataset.lineIndex;
+      var newIndex = String(nextPricingIndex++);
+      var section = source.cloneNode(true);
+      section.dataset.lineIndex = newIndex;
+      section.dataset.relatedSelection = "[]";
+      section.dataset.skipOptional = "false";
+      section.querySelectorAll("[name]").forEach(function (field) {
+        field.name = field.name.replace(
+          "line_" + oldIndex + "_",
+          "line_" + newIndex + "_"
+        );
       });
+      section.querySelectorAll("[id]").forEach(function (field) {
+        field.id = field.id.replace("-" + oldIndex, "-" + newIndex);
+      });
+      section.querySelectorAll("label[for]").forEach(function (label) {
+        label.htmlFor = label.htmlFor.replace("-" + oldIndex, "-" + newIndex);
+      });
+      section.querySelectorAll(".field-error").forEach(function (error) {
+        error.remove();
+      });
+      section.querySelector("[data-pricing-item-select]").value = String(itemId);
+      section.querySelector(
+        'input[name="line_' + newIndex + '_quantity"]'
+      ).value = "1";
+      section.querySelector("[data-pricing-main-price]").value = "";
+      section.querySelector("[data-pricing-main-currency]").value = "SAR";
+      section.querySelector("[data-pricing-item-image]").hidden = true;
+      section.querySelector("[data-pricing-related-items]").replaceChildren();
+      var alternativeSelect = section.querySelector(
+        "[data-pricing-alternative-select]"
+      );
+      if (alternativeSelect) {
+        alternativeSelect.value = "";
+        alternativeSelect.dataset.currentAlternative = "";
+        delete alternativeSelect.dataset.alternativeListener;
+      }
+      pricingLines.insertBefore(section, pricingLineFooter || null);
+      initialisePricingLine(section);
+      refreshRemoveButtons();
+      refreshPricingLineNumbersAndAlternatives();
+      section.scrollIntoView({ behavior: "smooth", block: "center" });
+      section.querySelector('input[type="number"]').focus();
+    }
+
+    function openPricingItemPicker() {
+      if (!pricingItemPicker) return;
+      if (pricingItemPickerSearch) {
+        pricingItemPickerSearch.value = "";
+        pricingItemPickerSearch.dispatchEvent(new Event("input"));
+      }
+      if (typeof pricingItemPicker.showModal === "function") {
+        pricingItemPicker.showModal();
+      } else {
+        pricingItemPicker.setAttribute("open", "");
+      }
+      if (pricingItemPickerSearch) pricingItemPickerSearch.focus();
+    }
+
+    addPricingLineButtons.forEach(function (button) {
+      button.addEventListener("click", function () {
+        pricingPickerSection = null;
+        openPricingItemPicker();
+      });
+    });
+
+    if (pricingItemPicker) {
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-item]").forEach(function (choice) {
+        choice.addEventListener("click", function () {
+          pricingItemPicker.close();
+          if (pricingPickerSection) {
+            var section = pricingPickerSection;
+            var select = section.querySelector("[data-pricing-item-select]");
+            select.value = String(choice.dataset.itemId);
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+            section.scrollIntoView({ behavior: "smooth", block: "center" });
+          } else {
+            usePricingItem(choice.dataset.itemId);
+          }
+          pricingPickerSection = null;
+        });
+      });
+      var closePicker = pricingItemPicker.querySelector("[data-close-pricing-item-picker]");
+      if (closePicker) closePicker.addEventListener("click", function () { pricingItemPicker.close(); });
+      if (pricingItemPickerSearch) {
+        pricingItemPickerSearch.addEventListener("input", function () {
+          var query = pricingItemPickerSearch.value.trim().toLowerCase();
+          var visibleCount = 0;
+          pricingItemPicker.querySelectorAll("[data-pricing-picker-item]").forEach(function (choice) {
+            var matches = !query || choice.dataset.searchText.indexOf(query) !== -1;
+            choice.hidden = !matches;
+            if (matches) visibleCount += 1;
+          });
+          pricingItemPicker.querySelectorAll(".pricing-item-picker-category").forEach(function (category) {
+            category.hidden = !category.querySelector(
+              "[data-pricing-picker-item]:not([hidden])"
+            );
+          });
+          if (pricingItemPickerEmpty) pricingItemPickerEmpty.hidden = visibleCount !== 0;
+        });
+      }
     }
 
     var manpowerQuantity = pricingForm.querySelector("[data-manpower-quantity]");

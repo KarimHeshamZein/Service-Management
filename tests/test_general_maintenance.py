@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import re
+from decimal import Decimal
 
 from app.models import (
     EvidencePhotoStage,
+    DeviceCatalog,
     GeneralMaintenanceRecord,
     InstalledDevice,
     InstalledDeviceSite,
+    PricingItem,
     RecordRevision,
 )
 from tests.conftest import (
@@ -72,6 +75,48 @@ def test_normal_maintenance_stores_before_and_after_photos(client, db):
         EvidencePhotoStage.BEFORE,
         EvidencePhotoStage.AFTER,
     ]
+
+
+def test_normal_maintenance_lists_and_accepts_uninstalled_catalog_item(client, db):
+    device = DeviceCatalog(name="Generator", model="GEN-20")
+    item = PricingItem(
+        name="Generator",
+        model="GEN-20",
+        unit_price=Decimal("2500.00"),
+        currency="SAR",
+        service_enabled=True,
+        legacy_device=device,
+    )
+    db.add(item)
+    db.commit()
+
+    login(client, *LEADER_A)
+    page = client.get("/general-maintenance")
+    assert page.status_code == 200
+    assert f'value="catalog:{item.id}"' in page.text
+    assert "Generator" in page.text
+    assert "BASE-SN-001" not in page.text
+    assert "Installed items" not in page.text
+    csrf, form_token = _tokens(client)
+    response = client.post(
+        "/general-maintenance/submit",
+        data={
+            "csrf_token": csrf,
+            "form_token": form_token,
+            "project_id": "1",
+            "quotation_number": ensure_service_quotation("1"),
+            "work_site_id": "1",
+            "service_type_id": "1",
+            "installed_device_id": f"catalog:{item.id}",
+            "result_0": "completed_successfully",
+            "notes": "Serviced the generator.",
+        },
+        files=[("photos_0", ("proof.jpg", make_image(), "image/jpeg"))],
+    )
+    assert response.status_code == 303
+    record = db.query(GeneralMaintenanceRecord).one()
+    assert record.work_items[0].device_name == "Generator"
+    assert record.work_items[0].installed_device_id is None
 
 
 def test_one_maintenance_record_contains_independent_device_evidence(client, db):

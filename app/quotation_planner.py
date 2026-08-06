@@ -22,6 +22,7 @@ EQUIPMENT_VARIANTS = {
     "solar_panel": {"solid", "outline"},
     "guard_room": {"standard"},
     "metal_pole": {"white", "black"},
+    "tree_pole": {"front", "side"},
     "sign": {"standard"},
 }
 MOUNTABLE_EQUIPMENT_KINDS = {"solar_pole", "metal_pole"}

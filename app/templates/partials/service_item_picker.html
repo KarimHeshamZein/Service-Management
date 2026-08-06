@@ -1,0 +1,25 @@
+{% macro service_item_picker(picker_id, items, value_prefix='') %}
+<dialog class="pricing-item-picker" data-service-item-picker="{{ picker_id }}" aria-labelledby="{{ picker_id }}-title">
+  <div class="pricing-item-picker-head">
+    <div><span class="eyebrow">{{ t('ui.all.service.items') }}</span><h2 id="{{ picker_id }}-title">{{ t('ui.choose.an.item') }}</h2></div>
+    <button type="button" class="btn btn-quiet btn-sm" data-close-service-item-picker>{{ t('ui.close') }}</button>
+  </div>
+  <div class="field"><label for="{{ picker_id }}-search">{{ t('ui.search') }}</label><input id="{{ picker_id }}-search" type="search" placeholder="{{ t('ui.search.name.or.model') }}" autocomplete="off" data-service-item-picker-search></div>
+  <div class="pricing-item-picker-grid">
+    {% for category_group in items|groupby('category_name') %}
+    <section class="pricing-item-picker-category">
+      <h3>{{ category_group.grouper or t('ui.uncategorized') }}</h3>
+      <div class="pricing-item-picker-category-grid">
+      {% for item in category_group.list %}
+      <button type="button" class="pricing-item-picker-choice" data-service-item-choice data-item-value="{{ value_prefix }}{{ item.id }}" data-search-text="{{ (item.display_label ~ ' ' ~ item.category_name)|lower }}">
+        {% if item.image_storage_key %}<img src="/service-items/{{ item.id }}/image?size=thumb" alt="">{% else %}<span class="pricing-item-picker-placeholder" aria-hidden="true">{{ item.name[:1] }}</span>{% endif %}
+        <span><strong>{{ item.display_label }}</strong></span>
+      </button>
+      {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+  </div>
+  <p class="hint" data-service-item-picker-empty hidden>{{ t('ui.no.matching.items') }}</p>
+</dialog>
+{% endmacro %}

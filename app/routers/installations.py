@@ -92,7 +92,10 @@ def _active_devices(db: Session) -> list[PricingItem]:
     return list(
         db.scalars(
             select(PricingItem)
-            .options(selectinload(PricingItem.legacy_device))
+            .options(
+                selectinload(PricingItem.legacy_device),
+                selectinload(PricingItem.category),
+            )
             .where(
                 PricingItem.is_active.is_(True),
                 PricingItem.service_enabled.is_(True),
@@ -155,6 +158,41 @@ def submit_form(
     db: Session = Depends(get_db),
 ):
     return render(request, "installation_entry.html", _form_context(request, db))
+
+
+@router.get("/service-items/{item_id}/image")
+def service_item_image(
+    item_id: int,
+    size: str = "original",
+    user: User = Depends(require_record_submitter),
+    db: Session = Depends(get_db),
+):
+    item = db.get(PricingItem, item_id)
+    if (
+        item is None
+        or not item.is_active
+        or not item.service_enabled
+        or not item.image_storage_key
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item image not found.")
+    key = (
+        item.image_thumbnail_key
+        if size == "thumb" and item.image_thumbnail_key
+        else item.image_storage_key
+    )
+    try:
+        path = resolve_storage_path(key)
+    except UploadError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Item image not found.")
+    return FileResponse(
+        path,
+        media_type=(
+            "image/jpeg"
+            if key == item.image_thumbnail_key
+            else item.image_content_type
+        ),
+        headers={"Cache-Control": "private, max-age=600"},
+    )
 
 
 @router.post("/installations/submit")

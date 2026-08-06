@@ -61,9 +61,12 @@
 
             <div class="field">
               <label for="password">{{ t('login.field.password') }} <span class="req" aria-hidden="true">*</span></label>
-              <input id="password" name="password" type="password" autocomplete="current-password" required
-                     aria-invalid="{{ 'true' if errors.password else 'false' }}"
-                     {% if errors.password %}aria-describedby="password-error"{% endif %}>
+              <div class="password-input-wrap">
+                <input id="password" name="password" type="password" autocomplete="current-password" required
+                       aria-invalid="{{ 'true' if errors.password else 'false' }}"
+                       {% if errors.password %}aria-describedby="password-error"{% endif %}>
+                <button type="button" class="btn btn-quiet btn-sm password-visibility-toggle" data-password-toggle="password" data-show-label="{{ t('login.action.show_password') }}" data-hide-label="{{ t('login.action.hide_password') }}" aria-controls="password" aria-pressed="false">{{ t('login.action.show_password') }}</button>
+              </div>
               {% if errors.password %}<p class="error-text" id="password-error">{{ errors.password }}</p>{% endif %}
               <p class="hint">{{ t('login.password_manager_hint') }}</p>
             </div>
