@@ -5,6 +5,8 @@ Updated: 2026-08-06
 This file is the portable context for continuing development on another PC or
 with another Codex account. It is committed with the source. A new agent must
 also read `AGENTS.md`, `CLAUDE.md`, and `README.md` completely before acting.
+For a step-by-step Windows setup after copying the project folder, follow
+`NEW_PC_SETUP.md`.
 
 ## Quick resume prompt
 
@@ -230,4 +232,3 @@ approval for each phase.
 - Run focused tests and the full suite for product changes.
 - Installer changes require repeatable end-to-end installer/repair testing.
 - Do not change the fixed stack or add dependencies without permission.
-
