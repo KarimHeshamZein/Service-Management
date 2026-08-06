@@ -2,6 +2,11 @@
 
 Updated: 2026-08-06
 
+For an automated setup, copy the prompt from `NEW_PC_CODEX_PROMPT.md` into the
+first Codex session on the new PC. Codex will perform the steps in this guide and
+pause only for required credentials, administrator approval, or an existing
+database decision.
+
 Use this guide after copying the complete folder:
 
 `C:\Users\karimAi\Desktop\Islam\service-management-system`
