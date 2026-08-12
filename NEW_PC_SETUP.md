@@ -219,7 +219,7 @@ alembic current
 
 The expected single migration head/current revision is:
 
-`f3a8d7c52e14`
+`e7c2a91bd460`
 
 Do not use `Base.metadata.create_all()` or manually create application tables.
 Alembic owns the normal schema.
@@ -257,7 +257,7 @@ python -m pytest -q
 
 The latest known result is:
 
-`343 passed, 1 warning`
+`356 passed, 1 warning`
 
 The warning is the existing Starlette TestClient/httpx deprecation warning.
 
@@ -345,7 +345,7 @@ alembic upgrade head
 alembic current
 ```
 
-Confirm the current revision is `f3a8d7c52e14`.
+Confirm the current revision is `b7e5d8c41f20`.
 
 ### Port 8999 is already occupied
 

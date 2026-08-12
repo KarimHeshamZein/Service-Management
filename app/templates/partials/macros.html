@@ -46,14 +46,15 @@
   <table>
     <thead>
       <tr>
-        <th>{{ t('ui.record') }}</th><th>{{ t('ui.site') }}</th><th>{{ t('ui.service') }}</th><th>{{ t('ui.result') }}</th>
+        <th>{{ t('ui.record') }}</th><th>{{ t('ui.type') }}</th><th>{{ t('ui.site') }}</th><th>{{ t('ui.service') }}</th><th>{{ t('ui.result') }}</th>
         {% if show_leader %}<th>{{ t('ui.submitted.by') }}</th>{% endif %}<th>{{ t('ui.submitted') }}</th>
       </tr>
     </thead>
     <tbody>
       {% for r in records %}
       <tr>
-        <td><a class="record-no" href="/maintenance/records/{{ r.id }}">{{ r.record_number }}</a></td>
+        <td><a class="record-no" href="{{ r.href }}">{{ r.record_number }}</a></td>
+        <td><span class="tag">{{ t('record.type.' ~ r.record_key) }}</span></td>
         <td>{{ r.site_name }}<br><span style="color:var(--slate);font-size:.8rem;">{{ r.customer_name }}</span></td>
         <td>{{ r.service_name }}</td>
         <td>{{ result_badge(r.result) }}</td>
@@ -68,9 +69,10 @@
   {% for r in records %}
   <div class="record-card">
     <div class="row1">
-      <a class="record-no" href="/maintenance/records/{{ r.id }}">{{ r.record_number }}</a>
+      <a class="record-no" href="{{ r.href }}">{{ r.record_number }}</a>
       {{ result_badge(r.result) }}
     </div>
+    <div class="meta"><span class="tag">{{ t('record.type.' ~ r.record_key) }}</span></div>
     <div class="site">{{ r.site_name }}</div>
     <div class="meta">{{ r.customer_name }} · {{ r.service_name }}</div>
     <div class="meta mono">{{ r.submitted_at | datetime }}</div>
@@ -88,9 +90,12 @@
       <p class="section-title">{{ stage_label }}</p>
       <div class="evidence-strip">
         {% for photo in stage_photos %}
+          <figure class="evidence-photo-card">
           <button type="button" data-lb-open data-full="{{ media_path }}/{{ photo.id }}" data-caption="{{ stage_label }} · {{ photo.original_filename }} · {{ photo.file_size | filesize }}">
             <img src="{{ media_path }}/{{ photo.id }}?size=thumb" alt="{{ stage_label }} {{ loop.index }}" loading="lazy">
           </button>
+          {% if photo.description %}<figcaption>{{ photo.description }}</figcaption>{% endif %}
+          </figure>
         {% endfor %}
       </div>
     {% endif %}

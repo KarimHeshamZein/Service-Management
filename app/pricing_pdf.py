@@ -285,6 +285,23 @@ def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
                 Paragraph("<b>Prepared by</b>", styles["small"]),
                 _paragraph(quotation.created_by_name, styles["body"]),
             ],
+            [
+                Paragraph("<b>Attention to</b>", styles["small"]),
+                _paragraph(
+                    " | ".join(value for value in (quotation.addressee_name, quotation.addressee_title) if value),
+                    styles["body"],
+                ),
+                Paragraph("<b>Contact details</b>", styles["small"]),
+                _paragraph(
+                    " | ".join(value for value in (quotation.addressee_email, quotation.addressee_phone) if value),
+                    styles["body"],
+                ),
+            ] if quotation.addressee_name else [
+                Paragraph("<b>Attention to</b>", styles["small"]),
+                _paragraph("-", styles["body"]),
+                Paragraph("<b>Contact details</b>", styles["small"]),
+                _paragraph("-", styles["body"]),
+            ],
         ],
         colWidths=[23 * mm, 62 * mm, 28 * mm, 57 * mm],
     )

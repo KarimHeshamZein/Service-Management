@@ -162,6 +162,62 @@ def test_user_language_migration_upgrades_and_downgrades(monkeypatch):
         engine.dispose()
 
 
+def test_project_hierarchy_migration_backfills_general_sub_projects(monkeypatch):
+    engine = _scratch_engine()
+    config = Config("alembic.ini")
+    monkeypatch.setattr(settings, "database_url", _scratch_database_url())
+    try:
+        _empty_public_schema(engine)
+        command.upgrade(config, "f3a8d7c52e14")
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO sites
+                        (name, customer_name, address, is_active, created_at, updated_at)
+                    VALUES
+                        ('Migration Project A', 'Migration Project A', 'Riyadh', true,
+                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                        ('Migration Project B', 'Migration Project B', 'Jeddah', true,
+                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """
+                )
+            )
+            connection.execute(
+                text(
+                    """
+                    INSERT INTO work_sites (name, is_active, created_at, updated_at)
+                    VALUES
+                        ('Migration Gate 1', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                        ('Migration Gate 2', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """
+                )
+            )
+
+        command.upgrade(config, "head")
+        with engine.connect() as connection:
+            site_columns = {
+                column["name"] for column in inspect(engine).get_columns("sites")
+            }
+            assert {"description", "start_date", "end_date"} <= site_columns
+            assert connection.execute(
+                text("SELECT count(*) FROM sub_projects WHERE name = 'General'")
+            ).scalar_one() == 2
+            assert connection.execute(
+                text("SELECT count(*) FROM sub_project_sites")
+            ).scalar_one() == 4
+
+        command.downgrade(config, "f3a8d7c52e14")
+        assert "sub_projects" not in inspect(engine).get_table_names()
+        downgraded_columns = {
+            column["name"] for column in inspect(engine).get_columns("sites")
+        }
+        assert not {"description", "start_date", "end_date"} & downgraded_columns
+        command.upgrade(config, "head")
+    finally:
+        engine.dispose()
+
+
 def test_item_unification_migrates_devices_and_currency_snapshots(monkeypatch):
     engine = _scratch_engine()
     config = Config("alembic.ini")

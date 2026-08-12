@@ -9,10 +9,13 @@
 </div>
 
 {% if errors.form %}<div class="alert error">{{ errors.form }}</div>{% endif %}
-<form method="post" enctype="multipart/form-data" action="{{ "/pricing/quotations/" ~ quotation.id ~ "/edit" if quotation else "/pricing/quotations" }}" data-pricing-quotation-form>
+<form method="post" enctype="multipart/form-data" action="{{ "/pricing/quotations/" ~ quotation.id ~ "/edit" if quotation else "/pricing/quotations" }}" data-pricing-quotation-form class="guided-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   {% if not quotation %}<input type="hidden" name="form_token" value="{{ form_token }}">{% endif %}
-  <div class="card">
+  <nav class="workflow-jumpbar no-print" aria-label="{{ t('ui.create.quotation') }}">
+    <a href="#quotation-details"><span class="step-number">1</span>{{ t('ui.quotation.details') }}</a><a href="#quotation-items"><span class="step-number">2</span>{{ t('nav.pricing.items') }}</a><a href="#quotation-planner"><span class="step-number">3</span>{{ t('ui.camera.installation.plan') }}</a><a href="#quotation-review"><span class="step-number">4</span>{{ t('ui.notes.and.terms') }}</a>
+  </nav>
+  <div class="card workflow-section" id="quotation-details">
     <div class="card-head"><h2>{{ t('ui.quotation.details') }}</h2></div>
     <div class="card-body">
       <div class="grid cols-3">
@@ -25,10 +28,17 @@
         <div class="field"><label for="pq-date">{{ t('ui.quotation.date') }} <span class="req">*</span></label><input id="pq-date" name="quotation_date" type="date" value="{{ form.quotation_date }}" required>{% if errors.quotation_date %}<p class="field-error">{{ errors.quotation_date }}</p>{% endif %}</div>
         <div class="field"><label for="pq-until">{{ t('ui.valid.until.label') }} <span class="req">*</span></label><input id="pq-until" name="valid_until" type="date" value="{{ form.valid_until }}" required>{% if errors.valid_until %}<p class="field-error">{{ errors.valid_until }}</p>{% endif %}</div>
       </div>
+      <div class="field"><label for="pq-addressee">{{ t('ui.address.quotation.to') }}</label><select id="pq-addressee" name="addressee_source" data-quotation-addressee><option value="none" {{ 'selected' if form.addressee_source == 'none' }}>{{ t('ui.no.specific.person') }}</option><option value="project" {{ 'selected' if form.addressee_source == 'project' }}>{{ t('ui.project.contact.person') }}</option>{% for customer, project_id in quotation_addressees %}<option value="customer:{{ customer.id }}" data-project-id="{{ project_id }}" {{ 'selected' if form.addressee_source == ('customer:' ~ customer.id) }}>{{ customer.full_name }}{% if customer.username %} · {{ customer.username }}{% endif %}</option>{% endfor %}<option value="custom" {{ 'selected' if form.addressee_source == 'custom' }}>{{ t('ui.custom.person') }}</option></select>{% if errors.addressee_source %}<p class="field-error">{{ errors.addressee_source }}</p>{% endif %}<p class="hint">{{ t('ui.addressee.snapshot.help') }}</p></div>
+      <div class="grid cols-2" data-custom-addressee {{ 'hidden' if form.addressee_source != 'custom' }}>
+        <div class="field"><label for="pq-addressee-name">{{ t('ui.person.name') }} <span class="req">*</span></label><input id="pq-addressee-name" name="addressee_name" maxlength="120" value="{{ form.addressee_name }}" dir="auto">{% if errors.addressee_name %}<p class="field-error">{{ errors.addressee_name }}</p>{% endif %}</div>
+        <div class="field"><label for="pq-addressee-title">{{ t('ui.job.title.department') }}</label><input id="pq-addressee-title" name="addressee_title" maxlength="120" value="{{ form.addressee_title }}" dir="auto"></div>
+        <div class="field"><label for="pq-addressee-email">{{ t('ui.email') }}</label><input id="pq-addressee-email" name="addressee_email" type="email" maxlength="254" value="{{ form.addressee_email }}"></div>
+        <div class="field"><label for="pq-addressee-phone">{{ t('ui.phone') }}</label><input id="pq-addressee-phone" name="addressee_phone" maxlength="40" value="{{ form.addressee_phone }}"></div>
+      </div>
     </div>
   </div>
 
-  <div class="card">
+  <div class="card workflow-section" id="quotation-items">
     <div class="card-head"><div><h2>{{ t('nav.pricing.items') }}</h2><p class="hint" style="margin:4px 0 0;">{{ t('ui.prices.are.copied.from.the.items.tab.when.you.save') }}</p></div></div>
     <div class="card-body" data-pricing-lines data-item-label="{{ t('ui.item') }}" data-alternative-to-label="{{ t('ui.alternative.to') }}" data-not-alternative-label="{{ t('ui.not.an.alternative') }}">
       {% if errors.lines %}<p class="field-error">{{ errors.lines }}</p>{% endif %}
@@ -79,7 +89,7 @@
     <p class="hint" data-pricing-item-picker-empty hidden>{{ t('ui.no.matching.items') }}</p>
   </dialog>
 
-  <div class="card">
+  <div class="card workflow-section" id="quotation-charges">
     <div class="card-head"><div><h2>{{ t('ui.required.quotation.charges') }}</h2><p class="hint" style="margin:4px 0 0;">{{ t('ui.these.three.charges.appear.on.every.quotation.and.cannot.be.removed') }}</p></div></div>
     <div class="card-body">
       <div class="pricing-charge-row">
@@ -103,7 +113,7 @@
     </div>
   </div>
 
-  <div class="card quotation-planner-card" data-quotation-planner>
+  <div class="card quotation-planner-card workflow-section" id="quotation-planner" data-quotation-planner>
     <div class="card-head">
       <div>
         <h2>{{ t('ui.camera.installation.plan') }}</h2>
@@ -126,7 +136,7 @@
   </div>
 
   {% if not quotation %}
-  <div class="card">
+  <div class="card workflow-section" id="quotation-attachments">
     <div class="card-head"><div><h2>{{ t('ui.site.survey.layouts') }}</h2><p class="hint" style="margin:4px 0 0;">{{ t('ui.site.survey.layouts.help') }}</p></div></div>
     <div class="card-body" data-image-upload-queue data-remove-label="{{ t('ui.remove') }}" data-selected-template="{{ t('ui.site.survey.images.selected', count='__COUNT__') }}">
       <div class="field"><label for="new-quotation-site-survey-images">{{ t('ui.upload.site.survey.images') }}</label><input id="new-quotation-site-survey-images" name="site_survey_images" type="file" accept="image/jpeg,image/png,image/webp" multiple data-image-file-input><p class="hint">{{ t('ui.site.survey.upload.queue.help') }}</p>{% if errors.site_survey_images %}<p class="field-error">{{ errors.site_survey_images }}</p>{% endif %}</div>
@@ -136,11 +146,11 @@
   </div>
   {% endif %}
 
-  <div class="card"><div class="card-head"><h2>{{ t('ui.notes.and.terms') }}</h2></div><div class="card-body grid cols-2">
+  <div class="card workflow-section" id="quotation-review"><div class="card-head"><h2>{{ t('ui.notes.and.terms') }}</h2></div><div class="card-body grid cols-2">
     <div class="field"><label for="pq-notes">{{ t('ui.notes') }}</label><textarea id="pq-notes" name="notes" rows="6" dir="auto">{{ form.notes }}</textarea></div>
     <div class="field"><label for="pq-terms">{{ t('ui.terms.and.conditions') }}</label><textarea id="pq-terms" name="terms" rows="6" dir="auto">{{ form.terms }}</textarea></div>
   </div></div>
-  <button class="btn btn-primary" type="submit">{{ t('ui.save.quotation') if quotation else t('ui.create.quotation') }}</button>
+  <div class="sticky-form-actions no-print"><a class="btn btn-secondary" href="{{ "/pricing/quotations/" ~ quotation.id if quotation else "/pricing/quotations" }}">{{ t('ui.cancel') }}</a><button class="btn btn-primary" type="submit">{{ t('ui.save.quotation') if quotation else t('ui.create.quotation') }}</button></div>
 </form>
 {% if quotation %}
 {% set survey_return_to = 'edit' %}

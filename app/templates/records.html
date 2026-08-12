@@ -4,19 +4,45 @@
 {% block topbar_title %}{{ t('nav.records.all') }}{% endblock %}
 
 {% block content %}
+{% if export_error %}<div class="alert error">{{ export_error }}</div>{% endif %}
 <div class="page-head">
   <div>
     <span class="eyebrow">{{ t('ui.service.evidence') }}</span>
     <h1>{{ t('nav.records.all') }}</h1>
     <p class="lede">{% if user.is_customer %}{{ t('ui.records.for.your.assigned.projects.in.one.place') }}{% else %}{{ t('ui.every.maintenance.and.installation.record.in.one.place') }}{% endif %}</p>
   </div>
+  <form method="get" action="/reports/pdf" class="no-print record-export-actions">
+    <input type="hidden" name="q" value="{{ filters.q }}">
+    <input type="hidden" name="type" value="{{ filters.type }}">
+    {% if user.can_access_pricing %}<label class="choice-inline"><input type="checkbox" name="include_quotation" value="1"> {{ t('ui.include.quotation.id') }}</label>{% endif %}
+    <button class="btn btn-primary" type="submit">{{ t('ui.export.filtered.records.pdf') }}</button>
+  </form>
+</div>
+
+<div class="records-reports-guide no-print">
+  <section class="records-reports-guide-item is-current">
+    <span class="guide-number">1</span>
+    <div><h2>{{ t('ui.service.records.help.title') }}</h2><p>{{ t('ui.service.records.help.body') }}</p></div>
+  </section>
+  <section class="records-reports-guide-item">
+    <span class="guide-number">2</span>
+    <div>
+      <h2>{{ t('ui.generated.reports.help.title') }}</h2>
+      <p>{{ t('ui.generated.reports.help.body') }}</p>
+      <div class="guide-actions">
+        <a href="/reports/installation">{{ t('nav.reports.installation') }}</a>
+        <a href="/reports/preventive-maintenance">{{ t('nav.reports.preventive_maintenance') }}</a>
+        <a href="/reports/maintenance">{{ t('nav.reports.maintenance') }}</a>
+      </div>
+    </div>
+  </section>
 </div>
 
 <div class="card no-print">
   <div class="card-body">
-    <form method="get" action="/records">
+    <form method="get" action="{{ search_action or '/records' }}">
       <div class="filters">
-        <div class="field"><label for="q">{{ t('ui.search') }}</label><input id="q" name="q" type="search" value="{{ filters.q }}" placeholder="{{ t('ui.record.site.customer.equipment') }}" dir="auto"></div>
+        <div class="field"><label for="q">{{ t('ui.search') }}</label><input id="q" name="q" type="search" value="{{ filters.q }}" placeholder="{{ t('ui.record.number.site.customer.equipment') }}" dir="auto"></div>
         <div class="field">
           <label for="type">{{ t('ui.record.type') }}</label>
           <select id="type" name="type">
@@ -28,7 +54,7 @@
         </div>
         <div class="filter-actions">
           <button type="submit" class="btn btn-primary">{{ t('ui.apply.filters') }}</button>
-          {% if has_filters %}<a class="btn btn-secondary" href="/records">{{ t('ui.clear.filters') }}</a>{% endif %}
+          {% if has_filters %}<a class="btn btn-secondary" href="{{ search_action or '/records' }}">{{ t('ui.clear.filters') }}</a>{% endif %}
         </div>
       </div>
     </form>

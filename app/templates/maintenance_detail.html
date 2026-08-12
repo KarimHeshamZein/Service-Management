@@ -13,11 +13,12 @@
   <div style="display:flex;gap:10px;flex-wrap:wrap;" class="no-print">
     {{ ui.result_badge(record.result) }}
     {% if user.can_submit_records %}<a class="btn btn-secondary btn-sm" href="/maintenance/records/{{ record.id }}/edit">{{ t('ui.edit.record') }}</a>{% endif %}
-    {% if user.is_admin %}<form method="post" action="/maintenance/records/{{ record.id }}/delete" style="display:inline;" onsubmit="return confirm('{{ t("ui.permanently.delete.this.preventive.maintenance.record.and.its.photos") }}');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-danger btn-sm" type="submit">{{ t('ui.delete.record') }}</button></form>{% endif %}
+    {% if user.is_admin %}<form method="post" action="/maintenance/records/{{ record.id }}/delete" style="display:inline;" onsubmit="return confirm('{{ t("ui.delete.service.record.and.linked.reports.confirm") }}');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-danger btn-sm" type="submit">{{ t('ui.delete.record') }}</button></form>{% endif %}
     <a class="btn btn-secondary btn-sm" href="/maintenance/records">{{ t('ui.back.to.records') }}</a>
   </div>
 </div>
 
+{% if user.is_admin and linked_reports %}<div class="alert warning no-print" role="alert">{{ t('ui.service.record.linked.reports.warning', count=linked_reports|length) }}</div>{% endif %}
 <div class="alert info no-print" role="note">
   {{ t('ui.administrators.and.technical.users.can.correct.work.details.every.change.is.recorded') }}
 </div>
@@ -26,10 +27,11 @@
   <div>
     {% if record.work_items %}
     {% for item in record.work_items %}
+    {% if loop.first or item.scope_position != loop.previtem.scope_position %}<div class="card site-section-banner"><div class="card-body"><span class="eyebrow">{{ t('ui.site') }} {{ (item.scope_position or 0) + 1 }}</span><h2>{{ item.project_name or record.customer_name }} → {{ item.sub_project_name or record.sub_project_name or 'General' }} → {{ item.work_site_name or record.site_name }}</h2></div></div>{% endif %}
     <div class="card">
       <div class="card-head"><h2>{{ t('nav.maintenance') }} {{ loop.index }} · {{ item.device_name }}</h2>{{ ui.result_badge(item.result) }}</div>
       <div class="card-body">
-        <dl class="kv"><dt>{{ t('ui.service') }}</dt><dd>{{ item.service_name }}</dd><dt>{{ t('ui.device.title') }}</dt><dd>{{ item.device_name }} — {{ item.device_model }}</dd><dt>{{ t('ui.serial.number') }}</dt><dd class="mono">{{ item.serial_number }}</dd></dl>
+        <dl class="kv"><dt>{{ t('ui.service') }}</dt><dd>{{ item.service_name }}</dd><dt>{{ t('ui.device.title') }}</dt><dd>{{ item.device_name }} — {{ item.device_model }}</dd><dt>{{ t('ui.serial.number') }}</dt><dd class="mono">{{ item.serial_number or '—' }}</dd></dl>
         <p class="section-title">{{ t('ui.maintenance.notes') }}</p><p class="prose">{{ item.notes }}</p>
         {% if item.issue_description %}<p class="section-title">{{ t('ui.issue.found') }}</p><p class="prose">{{ item.issue_description }}</p>{% endif %}
         {% if item.recommendations %}<p class="section-title">{{ t('ui.recommendations') }}</p><p class="prose">{{ item.recommendations }}</p>{% endif %}
@@ -62,8 +64,8 @@
       <div class="card-head"><h2>{{ t('ui.maintained.devices') }}</h2><span class="tag">{{ (1 if record.device_evidence else 0) + record.additional_device_evidence|length }} {{ t('ui.device') if record.additional_device_evidence|length == 0 else t('ui.devices.lowercase') }}</span></div>
       <div class="card-body">
         <div class="table-wrap"><table><thead><tr><th>{{ t('ui.service') }}</th><th>{{ t('ui.device.title') }}</th><th>{{ t('ui.serial.number') }}</th></tr></thead><tbody>
-          {% if record.device_evidence %}<tr><td>{{ record.service_name }}</td><td>{{ record.device_evidence.device_name }} — {{ record.device_evidence.device_model }}</td><td class="mono">{{ record.device_evidence.serial_number }}</td></tr>{% endif %}
-          {% for item in record.additional_device_evidence %}<tr><td>{{ item.service_name }}</td><td>{{ item.device_name }} — {{ item.device_model }}</td><td class="mono">{{ item.serial_number }}</td></tr>{% endfor %}
+          {% if record.device_evidence %}<tr><td>{{ record.service_name }}</td><td>{{ record.device_evidence.device_name }} — {{ record.device_evidence.device_model }}</td><td class="mono">{{ record.device_evidence.serial_number or '—' }}</td></tr>{% endif %}
+          {% for item in record.additional_device_evidence %}<tr><td>{{ item.service_name }}</td><td>{{ item.device_name }} — {{ item.device_model }}</td><td class="mono">{{ item.serial_number or '—' }}</td></tr>{% endfor %}
         </tbody></table></div>
       </div>
     </div>
@@ -105,7 +107,6 @@
           <dt>{{ t('ui.site') }}</dt><dd>{{ record.site_name }}</dd>
           <dt>{{ t('ui.location') }}</dt><dd>{{ record.site_address or '—' }}</dd>
           <dt>{{ t('nav.management.devices') }}</dt><dd>{{ record.work_items|length if record.work_items else (1 if record.device_evidence else 0) + record.additional_device_evidence|length }}</dd>
-          {% if user.can_access_pricing and record.quotation_number %}<dt>{{ t('ui.quotation.id') }}</dt><dd class="mono">{{ record.quotation_number }}</dd>{% endif %}
           <dt>{{ t('ui.submitted.by') }}</dt><dd>{{ record.team_leader_name }}</dd>
           <dt>{{ t('ui.submitted') }}</dt><dd class="mono">{{ record.submitted_at | datetime }} ({{ display_tz_label }})</dd>
           <dt>{{ t('ui.recorded') }}</dt><dd class="mono">{{ record.created_at | datetime }}</dd>

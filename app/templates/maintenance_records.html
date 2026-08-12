@@ -24,7 +24,7 @@
 {% for r in records %}{% set device_total = r.work_items|length if r.work_items else ((1 if r.device_evidence else 0) + r.additional_device_evidence|length) %}<tr>
   <td><a class="record-no" href="/maintenance/records/{{ r.id }}">{{ r.record_number }}</a><br><span class="mono meta">{{ r.submitted_at | datetime }}</span></td>
   <td>{{ r.customer_name }}</td><td>{{ r.site_name }}</td>
-  <td>{% if r.device_evidence %}{{ r.device_evidence.device_name }}<br><span class="meta">{{ r.device_evidence.device_model }} · {{ r.device_evidence.serial_number }}</span>{% else %}—{% endif %}{% if device_total > 1 %}<br><span class="tag">{{ t('record.device.more', count=device_total - 1) }}</span>{% endif %}</td>
+  <td>{% if r.device_evidence %}{{ r.device_evidence.device_name }}<br><span class="meta">{{ r.device_evidence.device_model }} · {{ r.device_evidence.serial_number or '—' }}</span>{% else %}—{% endif %}{% if device_total > 1 %}<br><span class="tag">{{ t('record.device.more', count=device_total - 1) }}</span>{% endif %}</td>
   <td>{{ r.service_name }}{% if r.additional_device_evidence %}<br><span class="meta">+ {{ r.additional_device_evidence|length }} {{ t('ui.more.item') if r.additional_device_evidence|length == 1 else t('ui.more.items') }}</span>{% endif %}</td><td>{{ ui.result_badge(r.result) }}</td>{% if user.can_view_all_records %}<td>{{ r.team_leader_name }}</td>{% endif %}
   <td><a class="btn btn-secondary btn-sm" href="/maintenance/records/{{ r.id }}">{{ t('ui.view') }}</a></td>
 </tr>{% endfor %}</tbody></table></div>

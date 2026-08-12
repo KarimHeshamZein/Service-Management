@@ -115,14 +115,14 @@ Setup procedure:
    already exists, inspect it and ask before dropping, resetting, or reusing it.
 9. Run alembic heads and require exactly one head. Run alembic upgrade head
    against the new service_management database, then run alembic current. The
-   expected handoff revision is f3a8d7c52e14 unless the repository contains a
+    expected handoff revision is e7c2a91bd460 unless the repository contains a
    newer committed migration.
 10. Run python seed.py once. Confirm the development Administrator exists
     without exposing password hashes or secrets.
 11. Run python -m compileall -q app alembic/versions and
     node --check app/static/js/app.js when Node is available. Node is optional;
     do not install Node merely for this vanilla-JavaScript project.
-12. Run python -m pytest -q. The handoff baseline is 343 passed with one existing
+12. Run python -m pytest -q. The handoff baseline is 356 passed with one existing
     Starlette TestClient/httpx deprecation warning. Report the actual result.
 13. Start the application with the new .venv on 0.0.0.0:8999. Use a hidden
     background process only after tests pass. Keep stdout/stderr in ignored tmp

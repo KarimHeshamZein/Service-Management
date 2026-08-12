@@ -254,7 +254,6 @@ def submit_record(client: TestClient, *, site_id="1", work_site_id="1", service_
         payload["service_type_id"] = service_id
     if participants:
         payload["participant_ids"] = participants
-    payload["quotation_number"] = ensure_service_quotation(site_id or "1")
     payload.update(extra)
 
     files = photos if photos is not None else [("photos", ("proof.jpg", make_image(), "image/jpeg"))]

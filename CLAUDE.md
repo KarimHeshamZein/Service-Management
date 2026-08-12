@@ -4,7 +4,142 @@ Service Management System — a maintenance evidence portal. Read `README.md` fo
 full architecture, entities and known limitations. This file is the short version
 plus the rules that aren't inferable from the code.
 
-## Current handoff — 2026-08-06
+## Current handoff — 2026-08-11
+
+- Browser-entered per-Site service data
+  tables are implemented for Installation, Preventive Maintenance, and
+  Maintenance. Installation uses the detailed device columns; both maintenance
+  workflows use the approved `No / Item / Quantity / Notes` layout. Rows can be
+  added and removed in each Site section. Maintenance entry no longer selects
+  or links a catalogue/installed Item; each service/photo card is headed by the
+  selected Service Performed.
+- Saved report PDFs keep the optional Include device data checkbox and append
+  the browser-entered tables at the end, separated by Main Project, Sub Project,
+  and Site. Historical confirmed Excel snapshots remain a report fallback. The
+  current PDF table render was visually checked with no clipping or overlap.
+- New migration `c8e4f2a91d73` creates the three browser data-row tables and
+  makes maintenance item catalogue/model references optional. It has passed the
+  full Alembic upgrade/downgrade/metadata-drift gate against the scratch test
+  database. With approval, a pre-migration dump was created at
+  `tmp/phase2-dev-backups/service_management-before-c8e4f2a91d73-20260811-172621.dump`,
+  the local database was migrated to `c8e4f2a91d73`, and the application was
+  restarted successfully on port 8999. `/login` returned HTTP 200.
+- Focused gate for this pending feature: `11 passed, 1 warning`.
+  `python -m compileall -q app` and `git diff --check` pass (only existing
+  line-ending notices).
+
+- The approved hierarchical service-report feature is implemented on
+  `feature/hierarchical-installation-reports`. The existing Project entity is
+  the Main Project, with optional description/start/end dates, additive Sub
+  Projects, and scoped assignments to the existing Site catalog.
+- The `/projects` management page now provides a searchable expandable
+  Main Project → Sub Project → Site hierarchy, customer-user visibility,
+  metadata editing, Sub Project management, and server-validated Site
+  assignments. Existing Project/Site IDs, URLs, customer assignments, and
+  service-record authorization remain unchanged.
+- The hierarchy tree now uses connected compact rows with localized `Main` and
+  `Sub` level badges, Site markers, a selected Main Project state, anchor links
+  to Sub Project controls, and a reference-style project detail/statistics
+  layout.
+- Installation, normal-maintenance, and preventive-maintenance entry support
+  one parent record/number containing multiple Main Project → Sub Project →
+  Site sections. Each Site section is a complete work area with its own devices,
+  before/after evidence and one Excel import, while shared
+  personnel remain at parent-record level. The UI provides Add another device
+  inside each Site and Add another Site below the complete sections. Saved
+  customer-facing reports
+  can explicitly combine authorized records across one or many Main Projects,
+  Sub Projects, and Sites. Created By is fixed to the authenticated user while
+  Team Leader and technicians are selected separately.
+- Installation, Maintenance, and Preventive Maintenance entry each provide a
+  direct-download Excel template, validated preview, and explicit confirmation.
+  The technician workbook uses the exact eleven approved device columns. New
+  Installation rows create Installed Assets; maintenance rows update a matched
+  asset only under the approved conflict rules and otherwise remain record
+  snapshots. Saved report PDFs can include the device snapshots captured at
+  entry. Before/after evidence supports ordered descriptions.
+- The workbook Status column is formula-driven: blank for unused rows, `Valid`
+  only when columns A-J are complete, otherwise `Invalid`. The template columns
+  are Item / Device Name, Model, Serial Number, IMEI, SIM Serial Number, Sim
+  Type, Main Project, Sub Project, Site, Remarks, and Status; Phone Number was
+  removed. Status has no dropdown,
+  is not mapped to the service-result controls, and the dashboard preview no
+  longer shows a separate Validation column. Valid is green and Invalid is red
+  in both Excel and the preview. Excel Location/Site text, IMEI, and SIM Serial
+  Number are stored as entered without the former scope/format rejection.
+- The approved usability pass adds an application-wide desktop top bar with
+  Quick Create, icon-led accordion navigation that keeps one group open, clearer
+  shared form/table styling, and mobile-safe tables. Installation, Maintenance,
+  and Preventive Maintenance now have sticky four-step navigation, an expanded
+  Excel section, anchored sections, and persistent submit controls.
+  Quotation Create/Edit has equivalent section navigation and persistent Save.
+  Entry forms provide repeatable, self-contained Site cards; devices are nested
+  directly inside their Site instead of using a separate assignment dropdown.
+- Saved-report Device Data includes only confirmed Excel rows, never ordinary
+  Data Entry fallback values, and renders a separate table for each selected
+  Main Project. Report creation has inclusive From/To submission filters with
+  second precision in the configured display timezone.
+- Migration `c4d8e2f71a90` creates the hierarchy and backfills `General` Sub
+  Projects. Migration `e9b4c7a21d36` attaches records/assets to Sub Projects and
+  creates saved reports, report links/counters, photo metadata, and imported
+  device fields. Migration `b7e5d8c41f20` adds device-data snapshots to all
+  three service item tables. Migration `f2a6c9d14e73` adds the explicit Excel
+  source marker and best-effort historical backfill. Migration `a3f8d1c62b04`
+  adds immutable hierarchy/quotation snapshots to every service item so one
+  parent record can safely contain multiple Sites. The current single Alembic
+  head before the current pending migration was `d5b9e2a74c16`. Migration `d5b9e2a74c16` adds quotation addressee
+  snapshots, immutable catalogue price history, and the append-only audit log.
+- The full post-change regression result is `356 passed, 1 warning`. The focused
+  entry/report suite is `8 passed, 1 warning`, and the broader entry/i18n/
+  migration gate was `110 passed, 1 warning`; after the Status correction, the
+  three entry/i18n/report suites pass `112 passed, 1 warning`.
+- Per the user's request, the usability pass used focused tests instead of the
+  full suite: `12 passed, 1 warning` for rendering/navigation/i18n plus `4
+  passed, 1 warning` for the four affected submission workflows. Authenticated
+  live checks returned HTTP 200 for 15 representative tabs on port 8999.
+- The latest focused change gate is `93 passed, 1 warning` for all affected
+  entry/report workflows plus `1 passed, 1 warning` for the Alembic round-trip
+  and ORM drift check. Authenticated live checks returned HTTP 200 for all three
+  entry pages and the second-precision report filter.
+- With explicit approval, the local development database was backed up and
+  migrated to `b7e5d8c41f20`, and the application was restarted on port `8999`
+  on 2026-08-09. The live `/login` endpoint returned HTTP 200. The pre-migration
+  dump is under `tmp/phase2-dev-backups/` and is ignored local state. The latest
+  pre-`b7e5d8c41f20` dump is
+  `service_management-before-b7e5d8c41f20-20260809-134910.dump`.
+- With approval, the local development database was migrated to
+  `f2a6c9d14e73` and the application restarted successfully on port `8999`.
+- With approval, the local development database was migrated to
+  `a3f8d1c62b04`; focused nested-site/report/migration gates passed (`10 passed`
+  and `13 passed`, each with the existing warning), and authenticated live
+  checks returned HTTP 200 for all three nested entry pages on port `8999`.
+- Quotation Create/Edit can optionally address the quotation to the Project
+  contact, an active Customer assigned to that Project, or a custom person.
+  Name, title, email, and phone are snapshotted and printed on the detail/PDF.
+  Pricing Items now retain catalogue edits as immutable price history and show
+  quoted snapshot prices separately. Administrators have a filterable combined
+  Audit Log covering mutations, authentication, and sensitive downloads; it
+  records actor/request/change metadata without passwords or upload contents.
+- Catalogue and quoted-price graphs now render interactive points. Hover,
+  keyboard focus, click, or touch shows the formatted price and date; quoted
+  points also show the quotation number. This applies to main and related items.
+- Structured report selection and saved-report detail trees now expand one
+  atomic record across every saved Main/Sub/Site section; repeated choices stay
+  synchronized as one record ID. Excel import panels are collapsed by default
+  on all three Data Entry workflows. Serial number, installation warranty date,
+  and workflow notes are optional when creating records. Migration
+  `e7c2a91bd460` supplies the required nullable serial schema and removes the
+  legacy non-empty note constraints.
+- The source and local development database Alembic head is `e7c2a91bd460`.
+  With approval, the migration was applied and port 8999 restarted successfully
+  on 2026-08-10. The focused gate passed `12 passed, 1 warning`; live inspection
+  confirmed nullable serials and all saved hierarchy branches in the latest
+  installation report tree.
+- With approval, the local development database was migrated to
+  `d5b9e2a74c16` and the app restarted on port `8999`. The focused new-feature
+  and migration gate passed `9 passed, 1 warning`; the broader affected gate
+  passed `78` tests with one pre-existing customer top-bar expectation failure.
+  Live `/login` returned HTTP 200.
 
 - The complete portable continuation guide is `PROJECT_HANDOFF.md`. A new Codex
   session must read it after this file and `README.md`.
@@ -13,15 +148,59 @@ plus the rules that aren't inferable from the code.
   unified image-card item selection across quotations and Data Entry, whole-unit
   quantity steps, quotation line numbering and multi-alternative relationships,
   Pricing Item categories, and a login Show/Hide password control.
-- The current single Alembic head is `f3a8d7c52e14`. The recent chain is
+- The previous approved Main-branch Alembic head was `f3a8d7c52e14`. Its recent chain is
   `a6c1e9b42f70` (catalog items in maintenance) → `d2e7a4c91b63` (quotation
   alternatives) → `f3a8d7c52e14` (Pricing Item categories).
-- The latest full regression result is `343 passed, 1 warning`. The warning is
-  the existing Starlette TestClient/httpx deprecation warning.
-- The latest verified offline installer is `1.1.0-rc28`. Its ignored files are
-  `dist/service-management-offline-1.1.0-rc28.zip` and the adjacent checksum.
-  The ZIP is `534702194` bytes and its SHA-256 is
-  `3ff83476bade9611524dbc94bafc2eae80aefbed976039c1b0732e301625fa9f`.
+- The previous Main-branch regression baseline was `343 passed, 1 warning`.
+  The feature branch raises the verified baseline to `356 passed, 1 warning`; the
+  warning remains the existing Starlette TestClient/httpx deprecation warning.
+- Saved-report PDFs normalize invisible formatting characters, retain complete
+  uncropped evidence images in equal frames, and center English/Arabic photo
+  notes. Record editing now provides thumbnail cards for existing photos,
+  editable notes, removal controls, and per-photo previews/notes for new uploads
+  across Installation, Maintenance, and Preventive Maintenance. Administrators
+  can delete a generated report alone, while deleting a source service record
+  also removes every complete generated report containing it.
+- Quotation selection is now Installation-only. New Preventive Maintenance and
+  Maintenance records store no quotation link, including multi-Site entries.
+  Administrator quotation deletion preserves all service records; it retains
+  the historical Installation quotation number while clearing legacy
+  Maintenance/Preventive links and fake number snapshots. Saved report PDFs now
+  label each device's service, result, model, serial, workflow notes, Installation
+  warranty/handover details, or Maintenance issue/recommendations as applicable.
+  The report ends with manual-signature placeholders for Customer Representative,
+  Afaqy Representative, and Project Manager. The focused gate passed `10 passed,
+  1 warning`, and both the device-detail and approvals pages were rendered and
+  visually inspected without an intervening blank page.
+- The Pricing Quotations list now exposes Administrator-only View/Edit/Delete
+  row actions plus checkbox selection, Select All for the visible page, and one
+  confirmed bulk-delete action. Single and bulk deletion share the same
+  service-record-preserving implementation and bulk deletion has an explicit
+  Audit Log event. The focused pricing/i18n gate passed `27 passed, 1 warning`;
+  port 8999 was restarted and `/login` returned HTTP 200.
+- Saved-report creation now filters submissions by a full or partial Record ID,
+  independently or together with the second-precision From/To fields. The
+  shared Reports search also stays within the Reports tab and explicitly
+  supports record numbers. Generated PDFs process each device as one complete
+  sequence: its Installation or Maintenance details, then its own Before/After
+  evidence beginning on a fresh page, before the next device starts. Record
+  context is repeated at each device/evidence boundary without an intervening
+  blank page. Main/Sub/Site hierarchy headings use a compact font and reduced
+  padding so normal device details fit with them on one page. Each Record banner
+  and its device details are kept as one layout block; oversized notes can flow
+  onward without orphaning the banner. Evidence pages start directly with
+  `PHOTO EVIDENCE` and the device name and do not duplicate the Record banner.
+  The focused report/search/i18n gate
+  passed `30 passed, 1 warning`, and the compact normal, long-note, single-device,
+  and six-page multi-device layouts were rendered and inspected.
+- The latest verified offline installer is `1.1.0-rc33`. Its ignored files are
+  `dist/service-management-offline-1.1.0-rc33.zip` and the adjacent checksum.
+  The ZIP is `535146924` bytes and its SHA-256 is
+  `f494123c624279313dba1613c46367c39790e6485a8f1fccf894d564450b1906`.
+  The focused release-workflow gate passed `20 passed, 1 warning`; both outer
+  and embedded application ZIP CRC checks passed, the package reports Alembic
+  head `c8e4f2a91d73`, the packaged PDF source matches the current source, and
+  protected data/root `index.html` are excluded.
 - The local development server was verified at port `8999`, but a new PC must
   configure its own `.env`, PostgreSQL database, uploads, and port.
 - The root `index.html` remains an unrelated untracked original planner file.
@@ -182,9 +361,10 @@ tests/             4 files; test_acceptance_workflow.py is the end-to-end scenar
   row is not counted a second time. A main item with
   active optional items must either select at least one or explicitly store one
   skip decision for the entire optional set.
-- **New service records require a Project-matched quotation reference.** Store
-  both the nullable FK and quotation-number snapshot so older records remain
-  compatible and quotation deletion does not erase the historical identifier.
+- **New Installation records require a Project-matched quotation reference.**
+  Preventive Maintenance and Maintenance are independent from quotations. Store
+  both the nullable FK and quotation-number snapshot for Installation so older records remain
+  compatible and quotation deletion does not erase the historical Installation identifier.
   All submitters may select the ID without gaining Pricing access. Only
   Administrators and Pricing-authorized Technical users may see it later or
   explicitly include it in a standard report PDF. Never include it in record

@@ -95,6 +95,20 @@ class EvidencePhotoStage(str, enum.Enum):
         }[self.value]
 
 
+class ServiceReportType(str, enum.Enum):
+    INSTALLATION = "installation"
+    MAINTENANCE = "general_maintenance"
+    PREVENTIVE_MAINTENANCE = "maintenance"
+
+    @property
+    def label(self) -> str:
+        return {
+            "installation": "Installation",
+            "general_maintenance": "Maintenance",
+            "maintenance": "Preventive maintenance",
+        }[self.value]
+
+
 NEEDS_ISSUE_DETAIL = {
     MaintenanceResult.COMPLETED_WITH_OBSERVATIONS,
     MaintenanceResult.FURTHER_ACTION_REQUIRED,
@@ -261,6 +275,9 @@ class Site(Base):
     city: Mapped[str | None] = mapped_column(String(80))
     contact_person: Mapped[str | None] = mapped_column(String(120))
     contact_number: Mapped[str | None] = mapped_column(String(40))
+    description: Mapped[str | None] = mapped_column(Text)
+    start_date: Mapped[date | None] = mapped_column(Date)
+    end_date: Mapped[date | None] = mapped_column(Date)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -273,6 +290,12 @@ class Site(Base):
     )
     customer_assignments: Mapped[list["CustomerProjectAssignment"]] = relationship(
         back_populates="project"
+    )
+    sub_projects: Mapped[list["SubProject"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="SubProject.name",
     )
 
     __table_args__ = (
@@ -326,6 +349,37 @@ class RecordRevision(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=utcnow, index=True
     )
+
+    @property
+    def changes(self) -> dict:
+        try:
+            value = json.loads(self.changes_json)
+        except (TypeError, ValueError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+
+class AuditEvent(Base):
+    """Append-only administrator audit trail for application activity."""
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    actor_user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    actor_name: Mapped[str] = mapped_column(String(120), nullable=False, default="Anonymous", index=True)
+    actor_role: Mapped[str | None] = mapped_column(String(20), index=True)
+    action: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    module: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    entity_type: Mapped[str | None] = mapped_column(String(80), index=True)
+    entity_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    entity_label: Mapped[str | None] = mapped_column(String(200))
+    method: Mapped[str] = mapped_column(String(10), nullable=False)
+    path: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), index=True)
+    user_agent: Mapped[str | None] = mapped_column(String(255))
+    changes_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, index=True)
 
     @property
     def changes(self) -> dict:
@@ -418,6 +472,11 @@ class WorkSite(Base):
     maintenance_links: Mapped[list["MaintenanceRecordSite"]] = relationship(
         back_populates="catalog_site"
     )
+    sub_project_assignments: Mapped[list["SubProjectSite"]] = relationship(
+        back_populates="site",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         CheckConstraint("length(trim(name)) > 0", name="ck_work_site_name_present"),
@@ -445,6 +504,10 @@ class MaintenanceRecord(Base):
         ForeignKey("pricing_quotations.id", ondelete="SET NULL"), index=True
     )
     quotation_number: Mapped[str | None] = mapped_column(String(30))
+    sub_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sub_projects.id", ondelete="SET NULL"), index=True
+    )
+    sub_project_name: Mapped[str | None] = mapped_column(String(160), index=True)
 
     # Snapshots: history must not change when a site/service/user is renamed.
     site_name: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -472,7 +535,9 @@ class MaintenanceRecord(Base):
         back_populates="record", cascade="all, delete-orphan", order_by="MaintenanceParticipant.id"
     )
     photos: Mapped[list["MaintenancePhoto"]] = relationship(
-        back_populates="record", cascade="all, delete-orphan", order_by="MaintenancePhoto.id"
+        back_populates="record",
+        cascade="all, delete-orphan",
+        order_by="MaintenancePhoto.position, MaintenancePhoto.id",
     )
     device_evidence: Mapped["MaintenanceRecordDevice | None"] = relationship(
         back_populates="record", cascade="all, delete-orphan", uselist=False
@@ -487,12 +552,16 @@ class MaintenanceRecord(Base):
         cascade="all, delete-orphan",
         order_by="MaintenanceRecordItem.position",
     )
+    device_data_rows: Mapped[list["MaintenanceDataRow"]] = relationship(
+        back_populates="record",
+        cascade="all, delete-orphan",
+        order_by="MaintenanceDataRow.scope_position, MaintenanceDataRow.position",
+    )
     work_site_evidence: Mapped["MaintenanceRecordSite | None"] = relationship(
         back_populates="record", cascade="all, delete-orphan", uselist=False
     )
 
     __table_args__ = (
-        CheckConstraint("length(trim(notes)) > 0", name="ck_records_notes_present"),
         Index("ix_records_leader_submitted", "submitted_by_id", "submitted_at"),
     )
 
@@ -534,6 +603,8 @@ class MaintenancePhoto(Base):
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str] = mapped_column(String(60), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
     record: Mapped[MaintenanceRecord] = relationship(back_populates="photos")
@@ -581,6 +652,10 @@ class InstallationRecord(Base):
         ForeignKey("pricing_quotations.id", ondelete="SET NULL"), index=True
     )
     quotation_number: Mapped[str | None] = mapped_column(String(30))
+    sub_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sub_projects.id", ondelete="SET NULL"), index=True
+    )
+    sub_project_name: Mapped[str | None] = mapped_column(String(160), index=True)
 
     # Snapshots keep installation history stable after master-data changes.
     site_name: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -590,7 +665,7 @@ class InstallationRecord(Base):
     team_leader_name: Mapped[str] = mapped_column(String(120), nullable=False)
 
     equipment_model: Mapped[str] = mapped_column(String(160), nullable=False)
-    serial_number: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    serial_number: Mapped[str | None] = mapped_column(String(160), index=True)
     warranty_start: Mapped[date | None] = mapped_column(Date)
     result: Mapped[MaintenanceResult] = mapped_column(
         enum_column(MaintenanceResult, 40), nullable=False, index=True
@@ -612,7 +687,9 @@ class InstallationRecord(Base):
         order_by="InstallationParticipant.id",
     )
     photos: Mapped[list["InstallationPhoto"]] = relationship(
-        back_populates="record", cascade="all, delete-orphan", order_by="InstallationPhoto.id"
+        back_populates="record",
+        cascade="all, delete-orphan",
+        order_by="InstallationPhoto.position, InstallationPhoto.id",
     )
     installed_device: Mapped["InstalledDevice | None"] = relationship(
         back_populates="installation_record",
@@ -629,6 +706,11 @@ class InstallationRecord(Base):
         cascade="all, delete-orphan",
         order_by="InstallationRecordItem.position",
     )
+    device_data_rows: Mapped[list["InstallationDataRow"]] = relationship(
+        back_populates="record",
+        cascade="all, delete-orphan",
+        order_by="InstallationDataRow.scope_position, InstallationDataRow.position",
+    )
     work_site_evidence: Mapped["InstallationRecordSite | None"] = relationship(
         back_populates="record",
         cascade="all, delete-orphan",
@@ -640,11 +722,6 @@ class InstallationRecord(Base):
             "length(trim(equipment_model)) > 0",
             name="ck_installation_equipment_model_present",
         ),
-        CheckConstraint(
-            "length(trim(serial_number)) > 0",
-            name="ck_installation_serial_number_present",
-        ),
-        CheckConstraint("length(trim(notes)) > 0", name="ck_installation_notes_present"),
         Index(
             "ix_installation_leader_submitted",
             "submitted_by_id",
@@ -691,6 +768,8 @@ class InstallationPhoto(Base):
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
     content_type: Mapped[str] = mapped_column(String(60), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
     record: Mapped[InstallationRecord] = relationship(back_populates="photos")
@@ -731,6 +810,12 @@ class InstalledDevice(Base):
         unique=True,
         index=True,
     )
+    source_report_id: Mapped[int | None] = mapped_column(
+        ForeignKey("service_reports.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    sub_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sub_projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     site_id: Mapped[int] = mapped_column(
         ForeignKey("sites.id", ondelete="RESTRICT"), nullable=False, index=True
     )
@@ -742,15 +827,24 @@ class InstalledDevice(Base):
     device_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     manufacturer: Mapped[str | None] = mapped_column(String(120))
     device_model: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
-    serial_number: Mapped[str] = mapped_column(
-        String(160), nullable=False, unique=True, index=True
+    serial_number: Mapped[str | None] = mapped_column(
+        String(160), unique=True, index=True
     )
+    sub_project_name: Mapped[str | None] = mapped_column(String(160), index=True)
+    imei: Mapped[str | None] = mapped_column(String(15), unique=True, index=True)
+    iccid: Mapped[str | None] = mapped_column(String(22), unique=True, index=True)
+    sim_type: Mapped[str | None] = mapped_column(String(20), index=True)
+    phone_number: Mapped[str | None] = mapped_column(String(40))
+    remarks: Mapped[str | None] = mapped_column(Text)
     warranty_start: Mapped[date | None] = mapped_column(Date)
     installed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
 
     installation_record: Mapped[InstallationRecord] = relationship(
         back_populates="installed_device"
+    )
+    source_report: Mapped["ServiceReport | None"] = relationship(
+        back_populates="imported_devices"
     )
     site: Mapped[Site] = relationship()
     catalog_device: Mapped[DeviceCatalog] = relationship(
@@ -763,6 +857,13 @@ class InstalledDevice(Base):
         back_populates="installed_device",
         cascade="all, delete-orphan",
         uselist=False,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "sim_type IS NULL OR sim_type IN ('zain', 'mobily', 'stc')",
+            name="ck_installed_devices_sim_type",
+        ),
     )
 
     @property
@@ -836,6 +937,24 @@ class InstallationRecordItem(Base):
     record_id: Mapped[int] = mapped_column(
         ForeignKey("installation_records.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    scope_position: Mapped[int | None] = mapped_column(Integer, index=True)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sites.id", ondelete="RESTRICT"), index=True
+    )
+    project_name: Mapped[str | None] = mapped_column(String(160), index=True)
+    project_address: Mapped[str | None] = mapped_column(String(255))
+    sub_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sub_projects.id", ondelete="SET NULL"), index=True
+    )
+    sub_project_name: Mapped[str | None] = mapped_column(String(160), index=True)
+    work_site_id: Mapped[int | None] = mapped_column(
+        ForeignKey("work_sites.id", ondelete="RESTRICT"), index=True
+    )
+    work_site_name: Mapped[str | None] = mapped_column(String(120), index=True)
+    quotation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_quotations.id", ondelete="SET NULL"), index=True
+    )
+    quotation_number: Mapped[str | None] = mapped_column(String(30), index=True)
     installed_device_id: Mapped[int] = mapped_column(
         ForeignKey("installed_devices.id", ondelete="RESTRICT"),
         nullable=False,
@@ -850,7 +969,14 @@ class InstallationRecordItem(Base):
     device_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     manufacturer: Mapped[str | None] = mapped_column(String(120))
     device_model: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
-    serial_number: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    serial_number: Mapped[str | None] = mapped_column(String(160), index=True)
+    imei: Mapped[str | None] = mapped_column(String(15))
+    iccid: Mapped[str | None] = mapped_column(String(22))
+    sim_type: Mapped[str | None] = mapped_column(String(20))
+    phone_number: Mapped[str | None] = mapped_column(String(40))
+    location_name: Mapped[str | None] = mapped_column(String(120))
+    remarks: Mapped[str | None] = mapped_column(Text)
+    imported_from_excel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     warranty_start: Mapped[date | None] = mapped_column(Date)
     result: Mapped[MaintenanceResult] = mapped_column(
         enum_column(MaintenanceResult, 40), nullable=False, index=True
@@ -864,7 +990,7 @@ class InstallationRecordItem(Base):
     photos: Mapped[list["InstallationItemPhoto"]] = relationship(
         back_populates="item",
         cascade="all, delete-orphan",
-        order_by="InstallationItemPhoto.id",
+        order_by="InstallationItemPhoto.position, InstallationItemPhoto.id",
     )
 
 
@@ -888,6 +1014,8 @@ class InstallationItemPhoto(Base):
         default=EvidencePhotoStage.LEGACY,
         index=True,
     )
+    description: Mapped[str | None] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
     item: Mapped[InstallationRecordItem] = relationship(back_populates="photos")
@@ -916,7 +1044,7 @@ class MaintenanceRecordDevice(Base):
     device_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     manufacturer: Mapped[str | None] = mapped_column(String(120))
     device_model: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
-    serial_number: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    serial_number: Mapped[str | None] = mapped_column(String(160), index=True)
 
     record: Mapped[MaintenanceRecord] = relationship(back_populates="device_evidence")
     installed_device: Mapped[InstalledDevice | None] = relationship(
@@ -953,14 +1081,14 @@ class MaintenanceRecordAdditionalDevice(Base):
     device_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     manufacturer: Mapped[str | None] = mapped_column(String(120))
     device_model: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
-    serial_number: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    serial_number: Mapped[str | None] = mapped_column(String(160), index=True)
 
     record: Mapped[MaintenanceRecord] = relationship(
         back_populates="additional_device_evidence"
     )
     installed_device: Mapped[InstalledDevice | None] = relationship()
     service_type: Mapped[ServiceType] = relationship()
-    catalog_device: Mapped[DeviceCatalog] = relationship()
+    catalog_device: Mapped[DeviceCatalog | None] = relationship()
 
 
 class MaintenanceRecordItem(Base):
@@ -972,6 +1100,24 @@ class MaintenanceRecordItem(Base):
     record_id: Mapped[int] = mapped_column(
         ForeignKey("maintenance_records.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    scope_position: Mapped[int | None] = mapped_column(Integer, index=True)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sites.id", ondelete="RESTRICT"), index=True
+    )
+    project_name: Mapped[str | None] = mapped_column(String(160), index=True)
+    project_address: Mapped[str | None] = mapped_column(String(255))
+    sub_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sub_projects.id", ondelete="SET NULL"), index=True
+    )
+    sub_project_name: Mapped[str | None] = mapped_column(String(160), index=True)
+    work_site_id: Mapped[int | None] = mapped_column(
+        ForeignKey("work_sites.id", ondelete="RESTRICT"), index=True
+    )
+    work_site_name: Mapped[str | None] = mapped_column(String(120), index=True)
+    quotation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_quotations.id", ondelete="SET NULL"), index=True
+    )
+    quotation_number: Mapped[str | None] = mapped_column(String(30), index=True)
     installed_device_id: Mapped[int | None] = mapped_column(
         ForeignKey("installed_devices.id", ondelete="RESTRICT"), nullable=True, index=True
     )
@@ -980,13 +1126,20 @@ class MaintenanceRecordItem(Base):
     )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     service_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
-    device_id: Mapped[int] = mapped_column(
-        ForeignKey("device_catalog.id", ondelete="RESTRICT"), nullable=False, index=True
+    device_id: Mapped[int | None] = mapped_column(
+        ForeignKey("device_catalog.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     device_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     manufacturer: Mapped[str | None] = mapped_column(String(120))
-    device_model: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
-    serial_number: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    device_model: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    serial_number: Mapped[str | None] = mapped_column(String(160), index=True)
+    imei: Mapped[str | None] = mapped_column(String(15))
+    iccid: Mapped[str | None] = mapped_column(String(22))
+    sim_type: Mapped[str | None] = mapped_column(String(20))
+    phone_number: Mapped[str | None] = mapped_column(String(40))
+    location_name: Mapped[str | None] = mapped_column(String(120))
+    remarks: Mapped[str | None] = mapped_column(Text)
+    imported_from_excel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     result: Mapped[MaintenanceResult] = mapped_column(
         enum_column(MaintenanceResult, 40), nullable=False, index=True
     )
@@ -1001,7 +1154,7 @@ class MaintenanceRecordItem(Base):
     photos: Mapped[list["MaintenanceItemPhoto"]] = relationship(
         back_populates="item",
         cascade="all, delete-orphan",
-        order_by="MaintenanceItemPhoto.id",
+        order_by="MaintenanceItemPhoto.position, MaintenanceItemPhoto.id",
     )
 
 
@@ -1025,6 +1178,8 @@ class MaintenanceItemPhoto(Base):
         default=EvidencePhotoStage.LEGACY,
         index=True,
     )
+    description: Mapped[str | None] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
     item: Mapped[MaintenanceRecordItem] = relationship(back_populates="photos")
@@ -1053,6 +1208,10 @@ class GeneralMaintenanceRecord(Base):
         ForeignKey("pricing_quotations.id", ondelete="SET NULL"), index=True
     )
     quotation_number: Mapped[str | None] = mapped_column(String(30))
+    sub_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sub_projects.id", ondelete="SET NULL"), index=True
+    )
+    sub_project_name: Mapped[str | None] = mapped_column(String(160), index=True)
     project_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
     site_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     project_address: Mapped[str] = mapped_column(String(255), nullable=False, default="")
@@ -1081,6 +1240,11 @@ class GeneralMaintenanceRecord(Base):
         cascade="all, delete-orphan",
         order_by="GeneralMaintenanceItem.position",
     )
+    device_data_rows: Mapped[list["GeneralMaintenanceDataRow"]] = relationship(
+        back_populates="record",
+        cascade="all, delete-orphan",
+        order_by="GeneralMaintenanceDataRow.scope_position, GeneralMaintenanceDataRow.position",
+    )
 
 
 class GeneralMaintenanceParticipant(Base):
@@ -1108,6 +1272,24 @@ class GeneralMaintenanceItem(Base):
         nullable=False,
         index=True,
     )
+    scope_position: Mapped[int | None] = mapped_column(Integer, index=True)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sites.id", ondelete="RESTRICT"), index=True
+    )
+    project_name: Mapped[str | None] = mapped_column(String(160), index=True)
+    project_address: Mapped[str | None] = mapped_column(String(255))
+    sub_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sub_projects.id", ondelete="SET NULL"), index=True
+    )
+    sub_project_name: Mapped[str | None] = mapped_column(String(160), index=True)
+    work_site_id: Mapped[int | None] = mapped_column(
+        ForeignKey("work_sites.id", ondelete="RESTRICT"), index=True
+    )
+    work_site_name: Mapped[str | None] = mapped_column(String(120), index=True)
+    quotation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_quotations.id", ondelete="SET NULL"), index=True
+    )
+    quotation_number: Mapped[str | None] = mapped_column(String(30), index=True)
     installed_device_id: Mapped[int | None] = mapped_column(
         ForeignKey("installed_devices.id", ondelete="RESTRICT"), nullable=True, index=True
     )
@@ -1116,13 +1298,20 @@ class GeneralMaintenanceItem(Base):
     )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     service_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
-    device_id: Mapped[int] = mapped_column(
-        ForeignKey("device_catalog.id", ondelete="RESTRICT"), nullable=False, index=True
+    device_id: Mapped[int | None] = mapped_column(
+        ForeignKey("device_catalog.id", ondelete="RESTRICT"), nullable=True, index=True
     )
     device_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     manufacturer: Mapped[str | None] = mapped_column(String(120))
-    device_model: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
-    serial_number: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    device_model: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    serial_number: Mapped[str | None] = mapped_column(String(160), index=True)
+    imei: Mapped[str | None] = mapped_column(String(15))
+    iccid: Mapped[str | None] = mapped_column(String(22))
+    sim_type: Mapped[str | None] = mapped_column(String(20))
+    phone_number: Mapped[str | None] = mapped_column(String(40))
+    location_name: Mapped[str | None] = mapped_column(String(120))
+    remarks: Mapped[str | None] = mapped_column(Text)
+    imported_from_excel: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     result: Mapped[MaintenanceResult] = mapped_column(
         enum_column(MaintenanceResult, 40), nullable=False, index=True
     )
@@ -1133,11 +1322,11 @@ class GeneralMaintenanceItem(Base):
     record: Mapped[GeneralMaintenanceRecord] = relationship(back_populates="work_items")
     installed_device: Mapped[InstalledDevice | None] = relationship()
     service_type: Mapped[ServiceType] = relationship()
-    catalog_device: Mapped[DeviceCatalog] = relationship()
+    catalog_device: Mapped[DeviceCatalog | None] = relationship()
     photos: Mapped[list["GeneralMaintenancePhoto"]] = relationship(
         back_populates="item",
         cascade="all, delete-orphan",
-        order_by="GeneralMaintenancePhoto.id",
+        order_by="GeneralMaintenancePhoto.position, GeneralMaintenancePhoto.id",
     )
 
 
@@ -1161,9 +1350,125 @@ class GeneralMaintenancePhoto(Base):
         default=EvidencePhotoStage.LEGACY,
         index=True,
     )
+    description: Mapped[str | None] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
     item: Mapped[GeneralMaintenanceItem] = relationship(back_populates="photos")
+
+
+class InstallationDataRow(Base):
+    """Browser-entered installation device data scoped to one selected Site."""
+
+    __tablename__ = "installation_data_rows"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    record_id: Mapped[int] = mapped_column(
+        ForeignKey("installation_records.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    scope_position: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sites.id", ondelete="RESTRICT"), index=True
+    )
+    project_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    sub_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sub_projects.id", ondelete="SET NULL"), index=True
+    )
+    sub_project_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    work_site_id: Mapped[int | None] = mapped_column(
+        ForeignKey("work_sites.id", ondelete="RESTRICT"), index=True
+    )
+    work_site_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    item_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(160))
+    serial_number: Mapped[str | None] = mapped_column(String(160), index=True)
+    imei: Mapped[str | None] = mapped_column(String(40))
+    iccid: Mapped[str | None] = mapped_column(String(40))
+    sim_type: Mapped[str | None] = mapped_column(String(20))
+    remarks: Mapped[str | None] = mapped_column(Text)
+
+    record: Mapped[InstallationRecord] = relationship(back_populates="device_data_rows")
+
+    __table_args__ = (
+        CheckConstraint("length(trim(item_name)) > 0", name="ck_installation_data_item_present"),
+        CheckConstraint("position >= 0", name="ck_installation_data_position_nonnegative"),
+        CheckConstraint("scope_position >= 0", name="ck_installation_data_scope_nonnegative"),
+    )
+
+
+class MaintenanceDataRow(Base):
+    """Browser-entered preventive-maintenance materials scoped to one Site."""
+
+    __tablename__ = "maintenance_data_rows"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    record_id: Mapped[int] = mapped_column(
+        ForeignKey("maintenance_records.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    scope_position: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sites.id", ondelete="RESTRICT"), index=True
+    )
+    project_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    sub_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sub_projects.id", ondelete="SET NULL"), index=True
+    )
+    sub_project_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    work_site_id: Mapped[int | None] = mapped_column(
+        ForeignKey("work_sites.id", ondelete="RESTRICT"), index=True
+    )
+    work_site_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    item_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    record: Mapped[MaintenanceRecord] = relationship(back_populates="device_data_rows")
+
+    __table_args__ = (
+        CheckConstraint("length(trim(item_name)) > 0", name="ck_maintenance_data_item_present"),
+        CheckConstraint("quantity > 0", name="ck_maintenance_data_quantity_positive"),
+        CheckConstraint("position >= 0", name="ck_maintenance_data_position_nonnegative"),
+        CheckConstraint("scope_position >= 0", name="ck_maintenance_data_scope_nonnegative"),
+    )
+
+
+class GeneralMaintenanceDataRow(Base):
+    """Browser-entered normal-maintenance materials scoped to one Site."""
+
+    __tablename__ = "general_maintenance_data_rows"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    record_id: Mapped[int] = mapped_column(
+        ForeignKey("general_maintenance_records.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    scope_position: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sites.id", ondelete="RESTRICT"), index=True
+    )
+    project_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    sub_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sub_projects.id", ondelete="SET NULL"), index=True
+    )
+    sub_project_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    work_site_id: Mapped[int | None] = mapped_column(
+        ForeignKey("work_sites.id", ondelete="RESTRICT"), index=True
+    )
+    work_site_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    item_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    record: Mapped[GeneralMaintenanceRecord] = relationship(back_populates="device_data_rows")
+
+    __table_args__ = (
+        CheckConstraint("length(trim(item_name)) > 0", name="ck_general_maintenance_data_item_present"),
+        CheckConstraint("quantity > 0", name="ck_general_maintenance_data_quantity_positive"),
+        CheckConstraint("position >= 0", name="ck_general_maintenance_data_position_nonnegative"),
+        CheckConstraint("scope_position >= 0", name="ck_general_maintenance_data_scope_nonnegative"),
+    )
 
 
 class RecordCounter(Base):
@@ -1350,6 +1655,192 @@ class PricingItemCategory(Base):
     )
 
 
+class SubProject(Base):
+    """A named workstream beneath one existing Main Project."""
+
+    __tablename__ = "sub_projects"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    project: Mapped[Site] = relationship(back_populates="sub_projects")
+    site_assignments: Mapped[list["SubProjectSite"]] = relationship(
+        back_populates="sub_project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="SubProjectSite.site_id",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_sub_project_project_name"),
+        CheckConstraint("length(trim(name)) > 0", name="ck_sub_project_name_present"),
+    )
+
+
+class SubProjectSite(Base):
+    """An existing Site catalog entry assigned beneath a Sub Project."""
+
+    __tablename__ = "sub_project_sites"
+
+    sub_project_id: Mapped[int] = mapped_column(
+        ForeignKey("sub_projects.id", ondelete="CASCADE"), primary_key=True
+    )
+    site_id: Mapped[int] = mapped_column(
+        ForeignKey("work_sites.id", ondelete="CASCADE"), primary_key=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    sub_project: Mapped[SubProject] = relationship(back_populates="site_assignments")
+    site: Mapped["WorkSite"] = relationship(back_populates="sub_project_assignments")
+
+
+class ServiceReport(Base):
+    """Saved customer-facing report assembled from authorized service records."""
+
+    __tablename__ = "service_reports"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    report_number: Mapped[str] = mapped_column(
+        String(30), nullable=False, unique=True, index=True
+    )
+    report_type: Mapped[ServiceReportType] = mapped_column(
+        enum_column(ServiceReportType, 30), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_by_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    created_by_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    team_leader_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    team_leader_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    report_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+    include_device_data: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    created_by: Mapped[User] = relationship(foreign_keys=[created_by_id])
+    team_leader: Mapped[User] = relationship(foreign_keys=[team_leader_id])
+    technicians: Mapped[list["ServiceReportTechnician"]] = relationship(
+        back_populates="report",
+        cascade="all, delete-orphan",
+        order_by="ServiceReportTechnician.id",
+    )
+    record_links: Mapped[list["ServiceReportRecord"]] = relationship(
+        back_populates="report",
+        cascade="all, delete-orphan",
+        order_by="ServiceReportRecord.position",
+    )
+    imported_devices: Mapped[list[InstalledDevice]] = relationship(
+        back_populates="source_report",
+        order_by="InstalledDevice.id",
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(trim(name)) > 0", name="ck_service_report_name_present"),
+    )
+
+
+class ServiceReportTechnician(Base):
+    __tablename__ = "service_report_technicians"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    report_id: Mapped[int] = mapped_column(
+        ForeignKey("service_reports.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+
+    report: Mapped[ServiceReport] = relationship(back_populates="technicians")
+
+
+class ServiceReportRecord(Base):
+    """One explicitly selected immutable service record plus hierarchy snapshots."""
+
+    __tablename__ = "service_report_records"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    report_id: Mapped[int] = mapped_column(
+        ForeignKey("service_reports.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    installation_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("installation_records.id", ondelete="RESTRICT"), index=True
+    )
+    maintenance_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("general_maintenance_records.id", ondelete="RESTRICT"), index=True
+    )
+    preventive_record_id: Mapped[int | None] = mapped_column(
+        ForeignKey("maintenance_records.id", ondelete="RESTRICT"), index=True
+    )
+    main_project_id: Mapped[int] = mapped_column(
+        ForeignKey("sites.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    main_project_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    customer_names: Mapped[str | None] = mapped_column(Text)
+    sub_project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sub_projects.id", ondelete="SET NULL"), index=True
+    )
+    sub_project_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    site_id: Mapped[int] = mapped_column(
+        ForeignKey("work_sites.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    site_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    report: Mapped[ServiceReport] = relationship(back_populates="record_links")
+    installation_record: Mapped["InstallationRecord | None"] = relationship()
+    maintenance_record: Mapped["GeneralMaintenanceRecord | None"] = relationship()
+    preventive_record: Mapped["MaintenanceRecord | None"] = relationship()
+
+    __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN installation_record_id IS NULL THEN 0 ELSE 1 END + "
+            "CASE WHEN maintenance_record_id IS NULL THEN 0 ELSE 1 END + "
+            "CASE WHEN preventive_record_id IS NULL THEN 0 ELSE 1 END) = 1",
+            name="ck_service_report_record_one_source",
+        ),
+        UniqueConstraint(
+            "report_id", "installation_record_id", name="uq_report_installation_record"
+        ),
+        UniqueConstraint(
+            "report_id", "maintenance_record_id", name="uq_report_maintenance_record"
+        ),
+        UniqueConstraint(
+            "report_id", "preventive_record_id", name="uq_report_preventive_record"
+        ),
+        UniqueConstraint("report_id", "position", name="uq_report_record_position"),
+    )
+
+
+class ServiceReportCounter(Base):
+    __tablename__ = "service_report_counters"
+
+    report_type: Mapped[ServiceReportType] = mapped_column(
+        enum_column(ServiceReportType, 30), primary_key=True
+    )
+    year: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class PricingItem(Base):
     """Reusable main item offered on price quotations."""
 
@@ -1389,6 +1880,11 @@ class PricingItem(Base):
     legacy_device: Mapped[DeviceCatalog | None] = relationship(
         back_populates="pricing_item"
     )
+    price_history: Mapped[list["PricingItemPriceHistory"]] = relationship(
+        back_populates="item",
+        cascade="all, delete-orphan",
+        order_by="PricingItemPriceHistory.changed_at.desc()",
+    )
 
     __table_args__ = (
         UniqueConstraint("name", "model", name="uq_pricing_item_name_model"),
@@ -1425,6 +1921,11 @@ class PricingRelatedItem(Base):
     )
 
     main_item: Mapped[PricingItem] = relationship(back_populates="related_items")
+    price_history: Mapped[list["PricingItemPriceHistory"]] = relationship(
+        back_populates="related_item",
+        cascade="all, delete-orphan",
+        order_by="PricingItemPriceHistory.changed_at.desc()",
+    )
 
     __table_args__ = (
         UniqueConstraint(
@@ -1439,6 +1940,40 @@ class PricingRelatedItem(Base):
         CheckConstraint(
             "length(trim(currency)) = 3", name="ck_pricing_related_item_currency"
         ),
+    )
+
+
+class PricingItemPriceHistory(Base):
+    """Immutable catalogue price changes, separate from quotation snapshots."""
+
+    __tablename__ = "pricing_item_price_history"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pricing_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_items.id", ondelete="CASCADE"), index=True
+    )
+    related_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_related_items.id", ondelete="CASCADE"), index=True
+    )
+    old_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    new_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    old_currency: Mapped[str | None] = mapped_column(String(3))
+    new_currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    changed_by_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    changed_by_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    source: Mapped[str] = mapped_column(String(30), nullable=False, default="catalog_edit", index=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, index=True)
+
+    item: Mapped[PricingItem | None] = relationship(back_populates="price_history")
+    related_item: Mapped[PricingRelatedItem | None] = relationship(back_populates="price_history")
+
+    __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN pricing_item_id IS NULL THEN 0 ELSE 1 END + "
+            "CASE WHEN related_item_id IS NULL THEN 0 ELSE 1 END) = 1",
+            name="ck_pricing_price_history_one_item",
+        ),
+        CheckConstraint("new_price >= 0", name="ck_pricing_price_history_nonnegative"),
     )
 
 
@@ -1530,6 +2065,14 @@ class PricingQuotation(Base):
     project_city: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     contact_person: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     contact_number: Mapped[str] = mapped_column(String(40), nullable=False, default="")
+    addressee_source: Mapped[str] = mapped_column(String(30), nullable=False, default="none")
+    addressee_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    addressee_name: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    addressee_title: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    addressee_email: Mapped[str] = mapped_column(String(254), nullable=False, default="")
+    addressee_phone: Mapped[str] = mapped_column(String(40), nullable=False, default="")
     quotation_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     valid_until: Mapped[date] = mapped_column(Date, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="SAR")

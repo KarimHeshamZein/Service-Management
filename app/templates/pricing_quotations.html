@@ -20,19 +20,23 @@
   </div>
   <div class="card-body tight">
     {% if quotations %}
+    <form method="post" action="/pricing/quotations/bulk-delete" data-quotation-bulk-form data-bulk-confirm="{{ t('ui.delete.selected.quotations.confirm') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if can_delete %}<div class="actions-row" style="margin-bottom:12px;"><button class="btn btn-danger btn-sm" type="submit" data-quotation-bulk-delete disabled>{{ t('ui.delete.selected') }}</button><span class="hint" data-quotation-selection-count data-selection-label="{{ t('ui.selected') }}"></span></div>{% endif %}
     <div class="table-wrap"><table>
-      <thead><tr><th>{{ t('ui.quotation') }}</th><th>{{ t('ui.project') }}</th><th>{{ t('ui.date') }}</th><th>{{ t('ui.valid.until.label') }}</th><th>{{ t('ui.created.by') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
+      <thead><tr>{% if can_delete %}<th style="width:44px;"><label><span class="sr-only">{{ t('ui.select.all.quotations') }}</span><input type="checkbox" data-quotation-select-all aria-label="{{ t('ui.select.all.quotations') }}"></label></th>{% endif %}<th>{{ t('ui.quotation') }}</th><th>{{ t('ui.project') }}</th><th>{{ t('ui.date') }}</th><th>{{ t('ui.valid.until.label') }}</th><th>{{ t('ui.created.by') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
       <tbody>{% for quotation in quotations %}
         <tr>
+          {% if can_delete %}<td><input type="checkbox" name="quotation_ids" value="{{ quotation.id }}" data-quotation-select aria-label="{{ t('ui.select.quotation', number=quotation.quotation_number) }}"></td>{% endif %}
           <td><a class="record-no" href="/pricing/quotations/{{ quotation.id }}">{{ quotation.quotation_number }}</a></td>
           <td><strong>{{ quotation.project_name }}</strong></td>
           <td class="num">{{ quotation.quotation_date|date }}</td>
           <td class="num">{{ quotation.valid_until|date }}</td>
           <td>{{ quotation.created_by_name }}</td>
-          <td style="white-space:nowrap;"><a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}">{{ t('ui.view') }}</a><a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}/edit">{{ t('ui.edit') }}</a></td>
+          <td><div class="actions-row" style="flex-wrap:nowrap;"><a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}">{{ t('ui.view') }}</a><a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}/edit">{{ t('ui.edit') }}</a>{% if can_delete %}<button class="btn btn-danger btn-sm" type="submit" formaction="/pricing/quotations/{{ quotation.id }}/delete" onclick="return confirm('{{ t("ui.permanently.delete.this.quotation") }}');">{{ t('ui.delete') }}</button>{% endif %}</div></td>
         </tr>
       {% endfor %}</tbody>
-    </table></div>
+    </table></div></form>
     {% if page_info.pages > 1 %}
     <nav class="pagination" aria-label="{{ t('ui.quotation.pages') }}">
       {% if page_info.page > 1 %}<a href="?q={{ q|urlencode }}&page={{ page_info.page - 1 }}">{{ t('ui.previous') }}</a>{% endif %}

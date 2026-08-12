@@ -283,7 +283,7 @@ def test_default_english_login_and_navigation_copy_remains_unchanged(client):
         "Dashboard",
         "Data entry",
         "Preventive Maintenance",
-        "All records",
+        "All service records",
         "Technician activity",
         "Price quotations",
         "Service types",

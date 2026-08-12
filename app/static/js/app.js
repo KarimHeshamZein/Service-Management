@@ -3,6 +3,490 @@
 (function () {
   "use strict";
 
+  /* --------------------------------------- Main Project / Sub Project / Site */
+  document.querySelectorAll("[data-project-hierarchy]").forEach(function (form) {
+    var dataNode = form.querySelector("[data-project-hierarchy-data]");
+    if (!dataNode) return;
+    var hierarchy;
+    try { hierarchy = JSON.parse(dataNode.textContent); } catch (_) { return; }
+    function initializeScope(scope) {
+      if (scope.dataset.hierarchyInitialized === "true") return;
+      var projectSelect = scope.querySelector("[name=project_id]");
+      var subSelect = scope.querySelector("[name=sub_project_id]");
+      var siteSelect = scope.querySelector("[name=work_site_id]");
+      if (!projectSelect || !subSelect || !siteSelect) return;
+      scope.dataset.hierarchyInitialized = "true";
+      var subOptions = Array.prototype.slice.call(subSelect.options, 1);
+      var siteOptions = Array.prototype.slice.call(siteSelect.options, 1);
+      function selectedProject() {
+        return hierarchy.find(function (entry) { return String(entry.project_id) === projectSelect.value; });
+      }
+      function refreshSites(clearInvalid) {
+        var project = selectedProject();
+        var subProject = project && project.sub_projects.find(function (item) { return String(item.id) === subSelect.value; });
+        var allowed = (subProject ? subProject.site_ids : []).map(String);
+        siteOptions.forEach(function (option) { option.hidden = allowed.indexOf(option.value) === -1; option.disabled = option.hidden; });
+        if (clearInvalid && allowed.indexOf(siteSelect.value) === -1) siteSelect.value = "";
+        scope.dispatchEvent(new CustomEvent("scopechange", { bubbles: true }));
+      }
+      function refreshSubProjects(clearInvalid) {
+        var project = selectedProject();
+        var allowed = (project ? project.sub_projects : []).map(function (item) { return String(item.id); });
+        subOptions.forEach(function (option) { option.hidden = allowed.indexOf(option.value) === -1; option.disabled = option.hidden; });
+        if (clearInvalid && allowed.indexOf(subSelect.value) === -1) subSelect.value = "";
+        refreshSites(clearInvalid);
+      }
+      projectSelect.addEventListener("change", function () { refreshSubProjects(true); });
+      subSelect.addEventListener("change", function () { refreshSites(true); });
+      siteSelect.addEventListener("change", function () { scope.dispatchEvent(new CustomEvent("scopechange", { bubbles: true })); });
+      refreshSubProjects(false);
+    }
+    window.initializeProjectScope = initializeScope;
+    var initialScopes = form.querySelectorAll("[data-site-scope]");
+    (initialScopes.length ? initialScopes : [form]).forEach(initializeScope);
+
+    var scopesRoot = form.querySelector("[data-site-scopes]");
+    var addSite = form.querySelector("[data-add-site]");
+    if (!scopesRoot || !addSite) return;
+    function optionLabel(scope, index) {
+      var names = ["project_id", "sub_project_id", "work_site_id"].map(function (name) {
+        var select = scope.querySelector('[name="' + name + '"]');
+        return select && select.selectedIndex > 0 ? select.options[select.selectedIndex].text : "";
+      }).filter(Boolean);
+      return names.length ? names.join(" › ") : "Site " + (index + 1);
+    }
+    function refreshScopes() {
+      var scopes = Array.from(scopesRoot.querySelectorAll("[data-site-scope]"));
+      scopes.forEach(function (scope, index) {
+        var number = scope.querySelector("[data-site-number]");
+        var remove = scope.querySelector("[data-remove-site]");
+        if (number) number.textContent = index + 1;
+        if (remove) remove.hidden = scopes.length === 1;
+      });
+      form.querySelectorAll("[data-item-scope-select]").forEach(function (select) {
+        var previous = select.value;
+        select.replaceChildren();
+        scopes.forEach(function (scope, index) {
+          var option = document.createElement("option");
+          option.value = String(index);
+          option.textContent = optionLabel(scope, index);
+          select.appendChild(option);
+        });
+        select.value = previous && Number(previous) < scopes.length ? previous : "0";
+      });
+    }
+    addSite.addEventListener("click", function () {
+      var clone = scopesRoot.querySelector("[data-site-scope]").cloneNode(true);
+      var deviceTemplate = form.querySelector("[data-device-template]");
+      var clonedItems = clone.querySelector("[data-device-items]");
+      if (deviceTemplate && clonedItems) clonedItems.replaceChildren(deviceTemplate.content.cloneNode(true));
+      clone.querySelectorAll("[data-entry-data-table]").forEach(function (table) {
+        var body = table.querySelector("[data-entry-data-rows]");
+        var rows = Array.from(body.querySelectorAll("[data-entry-data-row]"));
+        rows.slice(1).forEach(function (row) { row.remove(); });
+        if (rows[0]) clearEntryDataRow(rows[0], table.dataset.tableKind === "maintenance");
+      });
+      delete clone.dataset.hierarchyInitialized;
+      clone.querySelectorAll("[data-entry-device-import]").forEach(function (panel) { delete panel.dataset.importInitialized; });
+      clone.removeAttribute("id");
+      clone.querySelectorAll("[id]").forEach(function (node) { node.removeAttribute("id"); });
+      clone.querySelectorAll("select, input").forEach(function (field) {
+        if (field.type === "checkbox" || field.type === "radio") field.checked = false;
+        else field.value = "";
+      });
+      clone.querySelectorAll(".error-text").forEach(function (error) { error.textContent = ""; error.style.display = "none"; });
+      clone.querySelectorAll("[data-device-import-body], .preview-grid").forEach(function (node) { node.replaceChildren(); });
+      clone.querySelectorAll("[data-device-import-results]").forEach(function (node) { node.hidden = true; });
+      scopesRoot.appendChild(clone);
+      initializeScope(clone);
+      clone.querySelectorAll("[data-entry-device-import]").forEach(window.initializeEntryDeviceImport || function () {});
+      if (window.refreshNestedEntryDevices) window.refreshNestedEntryDevices(form);
+      refreshScopes();
+    });
+    scopesRoot.addEventListener("click", function (event) {
+      var remove = event.target.closest("[data-remove-site]");
+      if (remove && scopesRoot.querySelectorAll("[data-site-scope]").length > 1) {
+        remove.closest("[data-site-scope]").remove();
+        refreshScopes();
+      }
+    });
+    scopesRoot.addEventListener("scopechange", refreshScopes);
+    form.addEventListener("deviceitemschange", refreshScopes);
+    scopesRoot.querySelectorAll("[data-device-items]").forEach(function (itemRoot) {
+      new MutationObserver(refreshScopes).observe(itemRoot, { childList: true });
+    });
+    refreshScopes();
+  });
+
+  /* ------------------------------------------------ Excel device entry import */
+  function initializeEntryDeviceImport(panel) {
+    if (panel.dataset.importInitialized === "true") return;
+    panel.dataset.importInitialized = "true";
+    var form = panel.closest("form");
+    var scope = panel.closest("[data-site-scope]") || form;
+    var kind = panel.dataset.entryKind;
+    var fileInput = panel.querySelector("[data-device-import-file]");
+    var previewButton = panel.querySelector("[data-device-import-preview]");
+    var tokenInput = panel.querySelector("[data-device-import-token]");
+    var errorsBox = panel.querySelector("[data-device-import-errors]");
+    var results = panel.querySelector("[data-device-import-results]");
+    var body = panel.querySelector("[data-device-import-body]");
+    var count = panel.querySelector("[data-device-import-count]");
+    var conflicts = panel.querySelector("[data-device-import-conflicts]");
+    var overwrite = conflicts.querySelector("input[name=confirm_asset_overwrites]");
+
+    function clearPreview() {
+      tokenInput.value = "";
+      body.replaceChildren();
+      results.hidden = true;
+      conflicts.hidden = true;
+      overwrite.checked = false;
+    }
+    function showErrors(messages) {
+      errorsBox.replaceChildren();
+      (messages || []).forEach(function (message) {
+        var line = document.createElement("div");
+        line.textContent = message;
+        errorsBox.appendChild(line);
+      });
+      errorsBox.hidden = !messages || messages.length === 0;
+    }
+    function addCell(row, value, className) {
+      var cell = document.createElement("td");
+      cell.textContent = value || "—";
+      if (className) cell.className = className;
+      row.appendChild(cell);
+    }
+    function applyRows(rows) {
+      var itemsRoot = scope.querySelector("[data-device-items]");
+      var addButton = scope.querySelector("[data-add-device]");
+      if (!itemsRoot || !addButton) return;
+      function assigned() {
+        return Array.from(itemsRoot.querySelectorAll("[data-device-row]"));
+      }
+      while (assigned().length < rows.length) {
+        addButton.click();
+      }
+      while (assigned().length > rows.length) {
+        var scopedRows = assigned();
+        scopedRows[scopedRows.length - 1].querySelector("[data-remove-device]").click();
+      }
+      assigned().forEach(function (itemRow, index) {
+        var imported = rows[index];
+        if (!imported) return;
+        var itemSelect = itemRow.querySelector('[name="device_id"], [name="installed_device_id"]');
+        if (itemSelect) {
+          var value = kind === "installation" ? String(imported.pricing_item_id) : "catalog:" + imported.pricing_item_id;
+          itemSelect.value = value;
+          itemSelect.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        var serial = itemRow.querySelector('[name="serial_number"]');
+        if (serial) serial.value = imported.serial_number || "";
+      });
+    }
+    function renderRows(rows) {
+      body.replaceChildren();
+      rows.forEach(function (item) {
+        var row = document.createElement("tr");
+        addCell(row, item.item_name);
+        addCell(row, item.model);
+        addCell(row, item.serial_number, "mono");
+        addCell(row, item.imei, "mono");
+        addCell(row, item.iccid, "mono");
+        addCell(row, item.sim_type ? item.sim_type.toUpperCase() : "");
+        addCell(row, item.main_project);
+        addCell(row, item.sub_project);
+        addCell(row, item.site);
+        addCell(row, item.remarks);
+        addCell(row, item.status, item.status === "Valid" ? "status-valid" : "status-invalid");
+        body.appendChild(row);
+      });
+      count.textContent = rows.length;
+      results.hidden = false;
+    }
+
+    previewButton.addEventListener("click", async function () {
+      clearPreview();
+      showErrors([]);
+      if (!fileInput.files.length) { showErrors([panel.dataset.fileRequired]); return; }
+      var data = new FormData();
+      ["csrf_token", "project_id", "sub_project_id", "work_site_id"].forEach(function (name) {
+        var field = name === "csrf_token" ? form.querySelector('[name="csrf_token"]') : scope.querySelector('[name="' + name + '"]');
+        data.append(name, field ? field.value : "");
+      });
+      data.append("device_file", fileInput.files[0]);
+      previewButton.disabled = true;
+      try {
+        var response = await fetch("/data-entry/" + kind + "/device-import-preview", {
+          method: "POST",
+          body: data,
+          headers: { "X-Requested-With": "XMLHttpRequest" }
+        });
+        var payload = await response.json();
+        renderRows(payload.rows || []);
+        showErrors(payload.errors || []);
+        if (payload.ok) {
+          tokenInput.value = payload.token;
+          conflicts.hidden = !payload.has_asset_conflicts;
+          applyRows(payload.rows || []);
+        }
+      } catch (_) {
+        showErrors([panel.dataset.previewFailed]);
+      } finally {
+        previewButton.disabled = false;
+      }
+    });
+    fileInput.addEventListener("change", clearPreview);
+    ["project_id", "sub_project_id", "work_site_id"].forEach(function (name) {
+      var field = scope.querySelector('[name="' + name + '"]');
+      if (field) field.addEventListener("change", function () { if (tokenInput.value) clearPreview(); });
+    });
+  }
+  window.initializeEntryDeviceImport = initializeEntryDeviceImport;
+  document.querySelectorAll("[data-entry-device-import]").forEach(initializeEntryDeviceImport);
+
+  document.querySelectorAll("[data-price-chart]").forEach(function (chart) {
+    var markers = Array.from(chart.querySelectorAll("[data-price-point]"));
+    var values = markers.length
+      ? markers.map(function (marker) { return Number(marker.dataset.value); })
+      : String(chart.dataset.values || "").split(",").map(Number).filter(Number.isFinite);
+    var line = chart.querySelector("polyline");
+    if (!line || !values.length) return;
+    var minimum = Math.min.apply(Math, values), maximum = Math.max.apply(Math, values);
+    var span = maximum - minimum || 1;
+    var points = values.map(function (value, index) {
+      var x = values.length === 1 ? 160 : 10 + index * 300 / (values.length - 1);
+      var y = 78 - (value - minimum) * 66 / span;
+      return x.toFixed(1) + "," + y.toFixed(1);
+    });
+    if (values.length === 1) points = ["10," + points[0].split(",")[1], "310," + points[0].split(",")[1]];
+    line.setAttribute("points", points.join(" "));
+    if (!markers.length) return;
+
+    var svg = chart.querySelector("svg");
+    var tooltip = document.createElement("div");
+    tooltip.className = "price-chart-tooltip";
+    tooltip.hidden = true;
+    chart.appendChild(tooltip);
+    markers.forEach(function (marker, index) {
+      var coordinates = (values.length === 1 ? "160," + points[0].split(",")[1] : points[index]).split(",");
+      var x = Number(coordinates[0]), y = Number(coordinates[1]);
+      var point = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      point.setAttribute("cx", x);
+      point.setAttribute("cy", y);
+      point.setAttribute("r", "7");
+      point.setAttribute("class", "price-chart-point");
+      point.setAttribute("tabindex", "0");
+      point.setAttribute("role", "button");
+      var detail = [marker.dataset.price, marker.dataset.date, marker.dataset.context].filter(Boolean);
+      point.setAttribute("aria-label", detail.join(" · "));
+      svg.appendChild(point);
+
+      function showTooltip() {
+        tooltip.replaceChildren();
+        var price = document.createElement("strong");
+        price.textContent = marker.dataset.price || marker.dataset.value;
+        tooltip.appendChild(price);
+        [marker.dataset.date, marker.dataset.context].filter(Boolean).forEach(function (text) {
+          var row = document.createElement("span");
+          row.textContent = text;
+          tooltip.appendChild(row);
+        });
+        tooltip.style.left = (x / 320 * 100) + "%";
+        tooltip.style.top = (y / 90 * 100) + "%";
+        tooltip.hidden = false;
+        point.classList.add("is-active");
+      }
+      function hideTooltip() {
+        tooltip.hidden = true;
+        point.classList.remove("is-active");
+      }
+      point.addEventListener("mouseenter", showTooltip);
+      point.addEventListener("mouseleave", hideTooltip);
+      point.addEventListener("focus", showTooltip);
+      point.addEventListener("blur", hideTooltip);
+      point.addEventListener("click", showTooltip);
+    });
+  });
+
+  document.querySelectorAll("[data-pricing-quotation-form]").forEach(function (form) {
+    var project = form.querySelector('[name="project_id"]');
+    var addressee = form.querySelector("[data-quotation-addressee]");
+    var custom = form.querySelector("[data-custom-addressee]");
+    if (!project || !addressee || !custom) return;
+    function refreshAddressees(clearInvalid) {
+      Array.from(addressee.options).forEach(function (option) {
+        if (!option.dataset.projectId) return;
+        option.hidden = option.dataset.projectId !== project.value;
+        option.disabled = option.hidden;
+      });
+      if (clearInvalid && addressee.selectedOptions[0] && addressee.selectedOptions[0].disabled) addressee.value = "none";
+      custom.hidden = addressee.value !== "custom";
+    }
+    project.addEventListener("change", function () { refreshAddressees(true); });
+    addressee.addEventListener("change", function () { refreshAddressees(false); });
+    refreshAddressees(false);
+  });
+
+  /* ------------------------------------------ Nested site/device entry forms */
+  function clearEntryDataRow(row, maintenance) {
+    row.dataset.autofilled = "";
+    row.querySelectorAll("input, select").forEach(function (field) {
+      if (field.hasAttribute("data-entry-data-scope")) return;
+      if (maintenance && field.name === "data_quantity") field.value = "1";
+      else field.value = "";
+    });
+  }
+  function addEntryDataRow(table) {
+    var body = table.querySelector("[data-entry-data-rows]");
+    var source = body && body.querySelector("[data-entry-data-row]");
+    if (!body || !source) return null;
+    var clone = source.cloneNode(true);
+    clearEntryDataRow(clone, table.dataset.tableKind === "maintenance");
+    body.appendChild(clone);
+    return clone;
+  }
+  function refreshEntryDataTables(form) {
+    form.querySelectorAll("[data-site-scope]").forEach(function (scope, scopeIndex) {
+      var project = scope.querySelector('[name="project_id"]');
+      var subProject = scope.querySelector('[name="sub_project_id"]');
+      var site = scope.querySelector('[name="work_site_id"]');
+      var selectedText = function (select) {
+        var option = select && select.selectedOptions && select.selectedOptions[0];
+        return option && option.value ? option.textContent.trim() : "-";
+      };
+      scope.querySelectorAll("[data-entry-data-table]").forEach(function (table) {
+        var rows = Array.from(table.querySelectorAll("[data-entry-data-row]"));
+        rows.forEach(function (row, rowIndex) {
+          var number = row.querySelector("[data-entry-data-number]");
+          var scopeInput = row.querySelector("[data-entry-data-scope]");
+          var remove = row.querySelector("[data-remove-data-row]");
+          if (number) number.textContent = rowIndex + 1;
+          if (scopeInput) scopeInput.value = String(scopeIndex);
+          if (remove) remove.hidden = rows.length === 1;
+          var mainLabel = row.querySelector("[data-entry-main-project]");
+          var subLabel = row.querySelector("[data-entry-sub-project]");
+          var siteLabel = row.querySelector("[data-entry-site]");
+          if (mainLabel) mainLabel.textContent = selectedText(project);
+          if (subLabel) subLabel.textContent = selectedText(subProject);
+          if (siteLabel) siteLabel.textContent = selectedText(site);
+        });
+      });
+    });
+  }
+  function syncInstallationDataRow(select) {
+    var scope = select.closest("[data-site-scope]");
+    var table = scope && scope.querySelector('[data-entry-data-table][data-table-kind="installation"]');
+    if (!table) return;
+    var deviceRows = Array.from(scope.querySelectorAll("[data-device-row]"));
+    var deviceIndex = deviceRows.indexOf(select.closest("[data-device-row]"));
+    var dataRows = Array.from(table.querySelectorAll("[data-entry-data-row]"));
+    while (dataRows.length <= deviceIndex) {
+      addEntryDataRow(table);
+      dataRows = Array.from(table.querySelectorAll("[data-entry-data-row]"));
+    }
+    var row = dataRows[deviceIndex];
+    var itemInput = row.querySelector('[name="data_item_name"]');
+    var modelInput = row.querySelector('[name="data_model"]');
+    var option = select.selectedOptions[0];
+    if (!option || !option.value) return;
+    if (!itemInput.value || row.dataset.autofilled === "true") itemInput.value = option.dataset.itemName || option.textContent.trim();
+    if (!modelInput.value || row.dataset.autofilled === "true") modelInput.value = option.dataset.itemModel || "";
+    row.dataset.autofilled = "true";
+    refreshEntryDataTables(form);
+  }
+  function refreshNestedEntryDevices(form) {
+    var prefix = form.dataset.photoPrefix || "entry";
+    var globalIndex = 0;
+    form.querySelectorAll("[data-site-scope]").forEach(function (scope, scopeIndex) {
+      var rows = Array.from(scope.querySelectorAll("[data-device-row]"));
+      rows.forEach(function (row, localIndex) {
+        var number = row.querySelector("[data-item-number]");
+        var remove = row.querySelector("[data-remove-device]");
+        var scopeInput = row.querySelector("[data-item-scope-index]");
+        if (number) number.textContent = localIndex + 1;
+        if (remove) remove.hidden = rows.length === 1;
+        if (scopeInput) scopeInput.value = String(scopeIndex);
+        row.querySelectorAll("[data-name-kind]").forEach(function (field) {
+          field.name = field.dataset.nameKind + "_" + globalIndex;
+        });
+        row.querySelectorAll("[data-description-kind]").forEach(function (root) {
+          root.dataset.descriptionName = root.dataset.descriptionKind + "_" + globalIndex;
+        });
+        row.querySelectorAll("[data-photo-kind]").forEach(function (input) {
+          input.id = prefix + "-" + input.dataset.photoKind + "-" + globalIndex;
+        });
+        row.querySelectorAll("[data-pick-kind]").forEach(function (button) {
+          button.dataset.pick = prefix + "-" + button.dataset.pickKind + "-" + globalIndex;
+        });
+        row.querySelectorAll("[data-error-kind]").forEach(function (error) {
+          error.dataset.errorFor = error.dataset.errorKind + "_" + globalIndex;
+        });
+        row.querySelectorAll("[data-photos]").forEach(window.initializePhotoPicker);
+        window.initializeServiceItemPickers(row);
+        globalIndex += 1;
+      });
+      var project = scope.querySelector('[name="project_id"]');
+      var site = scope.querySelector('[name="work_site_id"]');
+      scope.querySelectorAll("[data-installed-device-select]").forEach(function (select) {
+        Array.from(select.options).slice(1).forEach(function (option) {
+          option.hidden = option.dataset.catalog !== "true" && Boolean(
+            (project && project.value && option.dataset.project !== project.value) ||
+            (site && site.value && option.dataset.site !== site.value)
+          );
+        });
+        if (select.selectedOptions[0] && select.selectedOptions[0].hidden) select.value = "";
+      });
+    });
+    refreshEntryDataTables(form);
+    form.dispatchEvent(new CustomEvent("deviceitemschange"));
+  }
+  window.refreshNestedEntryDevices = refreshNestedEntryDevices;
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll("[data-nested-entry-devices]").forEach(function (form) {
+      var template = form.querySelector("[data-device-template]");
+      form.addEventListener("click", function (event) {
+        var addDataRow = event.target.closest("[data-add-data-row]");
+        if (addDataRow) {
+          addEntryDataRow(addDataRow.closest("[data-entry-data-table]"));
+          refreshEntryDataTables(form);
+          return;
+        }
+        var removeDataRow = event.target.closest("[data-remove-data-row]");
+        if (removeDataRow) {
+          var dataBody = removeDataRow.closest("[data-entry-data-rows]");
+          if (dataBody.querySelectorAll("[data-entry-data-row]").length > 1) {
+            removeDataRow.closest("[data-entry-data-row]").remove();
+          } else {
+            clearEntryDataRow(
+              removeDataRow.closest("[data-entry-data-row]"),
+              removeDataRow.closest("[data-entry-data-table]").dataset.tableKind === "maintenance"
+            );
+          }
+          refreshEntryDataTables(form);
+          return;
+        }
+        var add = event.target.closest("[data-add-device]");
+        if (add && template) {
+          add.closest("[data-site-scope]").querySelector("[data-device-items]").appendChild(template.content.cloneNode(true));
+          refreshNestedEntryDevices(form);
+          return;
+        }
+        var remove = event.target.closest("[data-remove-device]");
+        if (remove) {
+          var root = remove.closest("[data-device-items]");
+          if (root.querySelectorAll("[data-device-row]").length > 1) remove.closest("[data-device-row]").remove();
+          refreshNestedEntryDevices(form);
+        }
+      });
+      form.addEventListener("change", function (event) {
+        if (event.target.matches('[name="device_id"]')) syncInstallationDataRow(event.target);
+      });
+      form.addEventListener("scopechange", function () { refreshNestedEntryDevices(form); });
+      refreshNestedEntryDevices(form);
+    });
+  });
+
   /* ---------------------------------------------------------- navigation */
   var burger = document.querySelector("[data-nav-toggle]");
   var scrim = document.querySelector(".scrim");
@@ -25,17 +509,21 @@
     if (!panel) return;
 
     var storageKey = "service-management.nav." + section.dataset.navSection;
-    var storedState = null;
-    try {
-      storedState = window.localStorage.getItem(storageKey);
-    } catch (error) {
-      storedState = null;
-    }
-
     var isActive = section.dataset.active === "true";
-    var isOpen = isActive || storedState === "open";
+    var isOpen = isActive;
 
     function setGroupOpen(open, remember) {
+      if (open) {
+        document.querySelectorAll("[data-nav-section]").forEach(function (other) {
+          if (other === section) return;
+          var otherToggle = other.querySelector("[data-nav-group-toggle]");
+          var otherPanel = otherToggle && document.getElementById(otherToggle.getAttribute("aria-controls"));
+          if (otherToggle && otherPanel) {
+            otherToggle.setAttribute("aria-expanded", "false");
+            otherPanel.hidden = true;
+          }
+        });
+      }
       toggle.setAttribute("aria-expanded", open ? "true" : "false");
       panel.hidden = !open;
 
@@ -936,7 +1424,8 @@
     }
     function refresh() {
       grid.innerHTML = "";
-      selected.forEach(function (file, index) {
+      selected.forEach(function (entry, index) {
+        var file = entry.file;
         var cell = document.createElement("div");
         cell.className = "preview";
         var img = document.createElement("img");
@@ -954,6 +1443,35 @@
           refresh();
         });
         cell.append(img, name, kill);
+        if (photoRoot.dataset.descriptionName) {
+          cell.classList.add("preview-with-description");
+          var description = document.createElement("textarea");
+          description.name = photoRoot.dataset.descriptionName;
+          description.maxLength = 5000;
+          description.rows = 2;
+          description.placeholder = photoRoot.dataset.descriptionPlaceholder || "Photo description";
+          description.setAttribute("aria-label", (photoRoot.dataset.descriptionLabel || "Description for") + " " + file.name);
+          description.value = entry.description || "";
+          description.addEventListener("input", function () { entry.description = description.value; });
+          var ordering = document.createElement("div");
+          ordering.className = "preview-order-actions";
+          var up = document.createElement("button");
+          up.type = "button"; up.className = "btn btn-quiet btn-sm"; up.textContent = "↑";
+          up.setAttribute("aria-label", "Move " + file.name + " earlier");
+          up.disabled = index === 0;
+          up.addEventListener("click", function () {
+            if (index > 0) { var previous = selected[index - 1]; selected[index - 1] = selected[index]; selected[index] = previous; refresh(); }
+          });
+          var down = document.createElement("button");
+          down.type = "button"; down.className = "btn btn-quiet btn-sm"; down.textContent = "↓";
+          down.setAttribute("aria-label", "Move " + file.name + " later");
+          down.disabled = index === selected.length - 1;
+          down.addEventListener("click", function () {
+            if (index < selected.length - 1) { var next = selected[index + 1]; selected[index + 1] = selected[index]; selected[index] = next; refresh(); }
+          });
+          ordering.append(up, down);
+          cell.append(description, ordering);
+        }
         grid.appendChild(cell);
       });
       if (counter) {
@@ -965,7 +1483,7 @@
     }
     function syncInput() {
       var dt = new DataTransfer();
-      selected.forEach(function (f) { dt.items.add(f); });
+      selected.forEach(function (entry) { dt.items.add(entry.file); });
       fileInput.files = dt.files;
     }
     function accept(files) {
@@ -977,7 +1495,7 @@
           showError("“" + file.name + "” is larger than the " + (maxBytes / 1048576).toFixed(0) + " MB limit.");
           return;
         }
-        selected.push(file);
+        selected.push({ file: file, description: "" });
       });
       refresh();
     }
@@ -1179,6 +1697,35 @@
     window.addEventListener("beforeunload", function () {
       previewUrls.forEach(function (url) { URL.revokeObjectURL(url); });
     });
+  });
+
+  /* -------------------------------------------- quotation bulk selection */
+  document.querySelectorAll("[data-quotation-bulk-form]").forEach(function (form) {
+    var selectAll = form.querySelector("[data-quotation-select-all]");
+    var selections = Array.prototype.slice.call(form.querySelectorAll("[data-quotation-select]"));
+    var deleteButton = form.querySelector("[data-quotation-bulk-delete]");
+    var countLabel = form.querySelector("[data-quotation-selection-count]");
+    if (!selectAll || !deleteButton) return;
+
+    function updateSelection() {
+      var selectedCount = selections.filter(function (checkbox) { return checkbox.checked; }).length;
+      deleteButton.disabled = selectedCount === 0;
+      selectAll.checked = selectedCount > 0 && selectedCount === selections.length;
+      selectAll.indeterminate = selectedCount > 0 && selectedCount < selections.length;
+      if (countLabel) countLabel.textContent = selectedCount ? selectedCount + " " + (countLabel.dataset.selectionLabel || "selected") : "";
+    }
+    selectAll.addEventListener("change", function () {
+      selections.forEach(function (checkbox) { checkbox.checked = selectAll.checked; });
+      updateSelection();
+    });
+    selections.forEach(function (checkbox) { checkbox.addEventListener("change", updateSelection); });
+    form.addEventListener("submit", function (event) {
+      if (event.submitter && event.submitter.hasAttribute("formaction")) return;
+      if (!window.confirm(form.dataset.bulkConfirm || "Delete the selected quotations?")) {
+        event.preventDefault();
+      }
+    });
+    updateSelection();
   });
 
   /* ------------------------------------------------------------ lightbox */

@@ -1,6 +1,6 @@
 # Service Management System — Project Handoff
 
-Updated: 2026-08-06
+Updated: 2026-08-09
 
 This file is the portable context for continuing development on another PC or
 with another Codex account. It is committed with the source. A new agent must
@@ -70,6 +70,34 @@ Core locations:
 
 ## Current implemented state
 
+### Project hierarchy and saved service reports
+
+- Work is on `feature/hierarchical-installation-reports` pending final user review.
+- The existing Project model and URLs are preserved as Main Projects.
+- Main Projects now have optional description, start date, and end date.
+- Additive Sub Projects organize assignments to the existing global Site
+  catalog; no parallel Site or customer system was introduced.
+- Existing Customer-to-Project assignments remain the authorization boundary
+  and automatically cover descendant Sub Projects and Sites.
+- The Project page is a searchable Main Project → Sub Project → Site hierarchy
+  with customer-user names, record counts, metadata, Sub Project controls, and
+  Site assignment controls.
+- Existing databases receive a `General` Sub Project under every Main Project,
+  containing every previously selectable Site. Fresh development seeding builds
+  the same hierarchy.
+- Installation, Maintenance, and Preventive Maintenance entry use one selected
+  Main Project → Sub Project → Site scope. Saved reports explicitly aggregate
+  selected authorized records across one or many hierarchy branches.
+- Saved reports retain their own number, name, report date, fixed creator,
+  separately selected Team Leader, technicians, record links, and hierarchy/
+  customer snapshots. Customer access requires every linked Main Project to be
+  assigned to that Customer user.
+- Installation Reports provide an `.xlsx` template and preview/confirm import.
+  Confirmed device rows become Installed Assets; imported device data can be
+  included or omitted from the report PDF.
+- Before/after evidence accepts ordered descriptions shown on record pages and
+  in saved report PDFs.
+
 ### Pricing and quotations
 
 - Pricing Items are the shared item catalog for quotations and service entry.
@@ -109,6 +137,29 @@ Core locations:
   Pricing Items marked for service entry, not only previously installed units.
 - Every item selector uses the searchable image-card picker.
 - Grouped multi-item records retain per-item results, notes, and evidence.
+- All three entry workflows provide a direct-download eleven-column Excel
+  template, validated preview, and signed confirmation. The columns are Item /
+  Device Name, Model, Serial Number, IMEI, SIM Serial Number, Sim Type, Main
+  Project, Sub Project, Site, Remarks, and Status. Phone Number is not part of
+  the workbook. Status is calculated by Excel as `Valid` when columns A-J are
+  complete and `Invalid` when anything is missing;
+  it is not a service-result input and has no dashboard Validation column.
+  Valid/Invalid use green/red formatting. Location/Site text, IMEI, and SIM
+  Serial Number are accepted as entered without scope or format warnings.
+- Installation imports create Installed Assets. Maintenance imports update a
+  matched asset only after the approved conflict confirmation; unmatched rows
+  remain immutable record snapshots. Saved report PDFs can include these entry
+  snapshots.
+- All three entry pages support multiple Site sections across different Main/Sub
+  Projects under one parent record number. Every Site section contains its own
+  devices, before/after evidence, and Excel preview/import. Installation Site
+  sections additionally retain their Project-matched quotation snapshot;
+  Preventive Maintenance and Maintenance do not link to quotations.
+  Add another device operates inside a Site; Add another Site creates another
+  complete section. The atomic save produces one record/ID for the full visit.
+- Report Device Data tables contain only explicitly Excel-imported snapshots
+  and are separated per Main Project. The report record picker supports
+  inclusive From/To submission-time filtering down to seconds.
 - Completed records remain controlled snapshots with append-only revision audit
   behavior as documented in `CLAUDE.md`.
 
@@ -116,20 +167,31 @@ Core locations:
 
 - Login retains browser password-manager-compatible autocomplete attributes.
 - Login includes an accessible Show password / Hide password control.
+- The shared application shell provides Quick Create, icon-led accordion
+  navigation, a persistent desktop top bar, consistent controls, and mobile-safe
+  list tables. Field-service entry uses anchored four-step navigation with an
+  expanded Excel section and persistent submit actions. Quotation
+  Create/Edit uses anchored sections and a persistent Save action.
 - English and Arabic catalogs are maintained; user-entered Arabic is supported
   in PDFs.
 
 ## Database state
 
-Current single Alembic head:
+Current single Alembic head on the feature branch:
 
-`f3a8d7c52e14`
+`e7c2a91bd460`
 
 Recent migrations:
 
-1. `a6c1e9b42f70_allow_catalog_items_in_maintenance.py`
-2. `d2e7a4c91b63_add_quotation_line_alternatives.py`
-3. `f3a8d7c52e14_add_pricing_item_categories.py`
+1. `d2e7a4c91b63_add_quotation_line_alternatives.py`
+2. `f3a8d7c52e14_add_pricing_item_categories.py`
+3. `c4d8e2f71a90_add_project_hierarchy.py`
+4. `e9b4c7a21d36_add_saved_service_reports.py`
+5. `b7e5d8c41f20_add_entry_device_data_snapshots.py`
+6. `f2a6c9d14e73_mark_excel_imported_items.py`
+7. `a3f8d1c62b04_add_item_site_scope_snapshots.py`
+8. `d5b9e2a74c16_add_addressee_price_history_audit.py`
+9. `e7c2a91bd460_make_entry_identifiers_optional.py`
 
 Always run `alembic upgrade head` after pulling and before starting updated
 application code. Never run migrations against a development or deployed
@@ -138,14 +200,23 @@ objects.
 
 ## Latest verification
 
-- Full suite: `343 passed, 1 warning`
-- Focused category/login/pricing/migration/i18n suite: `102 passed, 1 warning`
+- Full suite: `356 passed, 1 warning`
+- Focused entry/report suite: `8 passed, 1 warning`
+- Entry/i18n/migration gate: `110 passed, 1 warning`
 - The warning is Starlette's existing TestClient/httpx deprecation warning.
 - `python -m compileall -q app alembic/versions` passed.
 - `node --check app/static/js/app.js` passed.
 - `git diff --check` passed before commit.
-- Local authenticated HTTP checks confirmed the category management form,
-  category assignment, grouped quotation picker, and password toggle markup.
+- After the approved local migration/restart, authenticated HTTP checks returned
+  200 for Projects, all three service-entry forms, and all three new saved-report
+  creation screens on port 8999.
+- The current focused quotation addressee, price-history, audit, and Alembic
+  gate is `9 passed, 1 warning`. The local database is migrated to
+  `d5b9e2a74c16`, and `/login` returns HTTP 200 on port 8999.
+- Source and local development database head `e7c2a91bd460` supports optional
+  serial/warranty/notes, collapsed Excel entry panels, and complete report-tree
+  expansion across a record's hierarchy scopes. Port 8999 was restarted and
+  returned HTTP 200 after the approved migration on 2026-08-10.
 
 ## Latest offline deployment artifact
 

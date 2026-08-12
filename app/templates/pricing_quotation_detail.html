@@ -13,6 +13,7 @@
     <div><dt>{{ t('ui.project') }}</dt><dd>{{ quotation.project_name }}</dd></div>
     <div><dt>{{ t('ui.address') }}</dt><dd>{{ quotation.project_address }}{% if quotation.project_city %}, {{ quotation.project_city }}{% endif %}</dd></div>
     <div><dt>{{ t('ui.contact') }}</dt><dd>{{ quotation.contact_person or '—' }}{% if quotation.contact_number %}<br>{{ quotation.contact_number }}{% endif %}</dd></div>
+    {% if quotation.addressee_name %}<div><dt>{{ t('ui.address.quotation.to') }}</dt><dd><strong>{{ quotation.addressee_name }}</strong>{% if quotation.addressee_title %}<br>{{ quotation.addressee_title }}{% endif %}{% if quotation.addressee_email %}<br>{{ quotation.addressee_email }}{% endif %}{% if quotation.addressee_phone %}<br>{{ quotation.addressee_phone }}{% endif %}</dd></div>{% endif %}
     <div><dt>{{ t('ui.quotation.date') }}</dt><dd>{{ quotation.quotation_date|date }}</dd></div>
     <div><dt>{{ t('ui.valid.until.label') }}</dt><dd>{{ quotation.valid_until|date }}</dd></div>
     <div><dt>{{ t('ui.created.by') }}</dt><dd>{{ quotation.created_by_name }}</dd></div>

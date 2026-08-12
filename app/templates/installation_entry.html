@@ -7,27 +7,28 @@
     <button type="button" class="btn btn-quiet btn-sm" data-remove-device {{ "hidden" if index == 0 }}>{{ t('ui.remove') }}</button>
   </div>
   <div class="card-body"><div class="grid cols-2">
+    <input type="hidden" name="item_scope_index" value="0" data-item-scope-index>
     <div class="field"><label>{{ t('ui.service.performed') }} <span class="req">*</span></label>
       <select name="service_type_id"><option value="">{{ t('ui.select.a.service') }}</option>{% for s in services %}<option value="{{ s.id }}" {{ "selected" if item.service_type_id == s.id|string }}>{{ s.name }}</option>{% endfor %}</select>
       <p class="error-text" data-error-kind="service_type_id" data-error-for="service_type_id_{{ index }}" style="{{ '' if errors["service_type_id_" ~ index] else 'display:none' }}">{{ errors["service_type_id_" ~ index] or '' }}</p></div>
     <div class="field"><label>{{ t('ui.item.title') }} <span class="req">*</span></label>
-      <select name="device_id" data-service-item-select="installation-item-picker"><option value="">{{ t('ui.choose.an.item') }}</option>{% for d in devices %}<option value="{{ d.id }}" {{ "selected" if item.device_id == d.id|string }}>{{ d.display_label }}</option>{% endfor %}</select><button type="button" class="btn btn-secondary item-picker-trigger" data-service-item-trigger hidden>{{ t('ui.choose.an.item') }}</button>
+      <select name="device_id" data-service-item-select="installation-item-picker"><option value="">{{ t('ui.choose.an.item') }}</option>{% for d in devices %}<option value="{{ d.id }}" data-item-name="{{ d.name }}" data-item-model="{{ d.model }}" {{ "selected" if item.device_id == d.id|string }}>{{ d.display_label }}</option>{% endfor %}</select><button type="button" class="btn btn-secondary item-picker-trigger" data-service-item-trigger hidden>{{ t('ui.choose.an.item') }}</button>
       <p class="error-text" data-error-kind="device_id" data-error-for="device_id_{{ index }}" style="{{ '' if errors["device_id_" ~ index] else 'display:none' }}">{{ errors["device_id_" ~ index] or '' }}</p></div>
-    <div class="field"><label>{{ t('ui.serial.number') }} <span class="req">*</span></label><input name="serial_number" value="{{ item.serial_number or '' }}" maxlength="160" dir="auto">
+    <div class="field"><label>{{ t('ui.serial.number') }}</label><input name="serial_number" value="{{ item.serial_number or '' }}" maxlength="160" dir="auto">
       <p class="error-text" data-error-kind="serial_number" data-error-for="serial_number_{{ index }}" style="{{ '' if errors["serial_number_" ~ index] else 'display:none' }}">{{ errors["serial_number_" ~ index] or '' }}</p></div>
-    <div class="field"><label>{{ t('ui.warranty.start') }} <span class="req">*</span></label><input name="warranty_start" type="date" value="{{ item.warranty_start or '' }}">
+    <div class="field"><label>{{ t('ui.warranty.start') }}</label><input name="warranty_start" type="date" value="{{ item.warranty_start or '' }}">
       <p class="error-text" data-error-kind="warranty_start" data-error-for="warranty_start_{{ index }}" style="{{ '' if errors["warranty_start_" ~ index] else 'display:none' }}">{{ errors["warranty_start_" ~ index] or '' }}</p></div>
   </div>
   <div class="field"><span class="field-label">{{ t('ui.installation.result') }} <span class="req">*</span></span><div class="choice-list">{% for r in results %}<label class="choice"><input type="radio" name="result_{{ index }}" data-name-kind="result" value="{{ r.value }}" {{ "checked" if item.result == r.value }}><span><span class="choice-title">{{ t('record.result.' ~ r.value) }}</span></span></label>{% endfor %}</div>
     <p class="error-text" data-error-kind="result" data-error-for="result_{{ index }}" style="{{ '' if errors["result_" ~ index] else 'display:none' }}">{{ errors["result_" ~ index] or '' }}</p></div>
-  <div class="field"><label>{{ t('ui.installation.notes') }} <span class="req">*</span></label><textarea name="notes" dir="auto">{{ item.notes or '' }}</textarea>
+  <div class="field"><label>{{ t('ui.installation.notes') }}</label><textarea name="notes" dir="auto">{{ item.notes or '' }}</textarea>
     <p class="error-text" data-error-kind="notes" data-error-for="notes_{{ index }}" style="{{ '' if errors["notes_" ~ index] else 'display:none' }}">{{ errors["notes_" ~ index] or '' }}</p></div>
   <div class="field"><label>{{ t('ui.handover.notes') }}</label><textarea name="handover_notes" dir="auto">{{ item.handover_notes or '' }}</textarea>
     <p class="error-text" data-error-kind="handover_notes" data-error-for="handover_notes_{{ index }}" style="{{ '' if errors["handover_notes_" ~ index] else 'display:none' }}">{{ errors["handover_notes_" ~ index] or '' }}</p></div>
   <div class="grid cols-2">
   <div class="field"><span class="field-label">{{ t('ui.before.photos') }}</span>
-    <div data-photos data-max-bytes="{{ (settings.max_upload_mb * 1048576)|int }}" data-max-files="{{ settings.max_photos_per_record }}">
-      <span data-photo-count>{{ t('ui.no.photos.yet') }}</span><div class="dropzone"><div class="file-actions"><button type="button" class="btn btn-primary" data-pick="installation-camera-{{ index }}">{{ t('ui.take.a.photo') }}</button><button type="button" class="btn btn-secondary" data-pick="installation-gallery-{{ index }}">{{ t('ui.choose.from.device') }}</button></div>
+    <div data-photos data-description-kind="before_photo_descriptions" data-description-name="before_photo_descriptions_{{ index }}" data-description-placeholder="{{ t('ui.photo.description') }}" data-description-label="{{ t('ui.description.for') }}" data-max-bytes="{{ (settings.max_upload_mb * 1048576)|int }}" data-max-files="{{ settings.max_photos_per_record }}">
+      <span data-photo-count>{{ t('ui.no.photos.yet') }}</span><div class="dropzone"><div class="file-actions"><button type="button" class="btn btn-primary" data-pick-kind="before-camera" data-pick="installation-before-camera-{{ index }}">{{ t('ui.take.a.photo') }}</button><button type="button" class="btn btn-secondary" data-pick-kind="before-gallery" data-pick="installation-before-gallery-{{ index }}">{{ t('ui.choose.from.device') }}</button></div>
         <input id="installation-before-camera-{{ index }}" data-photo-kind="before-camera" class="sr-only" type="file" name="before_photos_{{ index }}" data-name-kind="before_photos" accept="image/jpeg,image/png,image/webp" capture="environment" multiple>
         <input id="installation-before-gallery-{{ index }}" data-photo-kind="before-gallery" class="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple></div>
       <p class="error-text" data-photo-error style="display:none;"></p><div class="preview-grid"></div>
@@ -35,8 +36,8 @@
     </div>
   </div>
   <div class="field"><span class="field-label">{{ t('ui.after.photos') }}</span>
-    <div data-photos data-max-bytes="{{ (settings.max_upload_mb * 1048576)|int }}" data-max-files="{{ settings.max_photos_per_record }}">
-      <span data-photo-count>{{ t('ui.no.photos.yet') }}</span><div class="dropzone"><div class="file-actions"><button type="button" class="btn btn-primary" data-pick="installation-after-camera-{{ index }}">{{ t('ui.take.a.photo') }}</button><button type="button" class="btn btn-secondary" data-pick="installation-after-gallery-{{ index }}">{{ t('ui.choose.from.device') }}</button></div>
+    <div data-photos data-description-kind="after_photo_descriptions" data-description-name="after_photo_descriptions_{{ index }}" data-description-placeholder="{{ t('ui.photo.description') }}" data-description-label="{{ t('ui.description.for') }}" data-max-bytes="{{ (settings.max_upload_mb * 1048576)|int }}" data-max-files="{{ settings.max_photos_per_record }}">
+      <span data-photo-count>{{ t('ui.no.photos.yet') }}</span><div class="dropzone"><div class="file-actions"><button type="button" class="btn btn-primary" data-pick-kind="after-camera" data-pick="installation-after-camera-{{ index }}">{{ t('ui.take.a.photo') }}</button><button type="button" class="btn btn-secondary" data-pick-kind="after-gallery" data-pick="installation-after-gallery-{{ index }}">{{ t('ui.choose.from.device') }}</button></div>
         <input id="installation-after-camera-{{ index }}" data-photo-kind="after-camera" class="sr-only" type="file" name="after_photos_{{ index }}" data-name-kind="after_photos" accept="image/jpeg,image/png,image/webp" capture="environment" multiple>
         <input id="installation-after-gallery-{{ index }}" data-photo-kind="after-gallery" class="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple></div>
       <p class="error-text" data-photo-error style="display:none;"></p><div class="preview-grid"></div>
@@ -53,64 +54,30 @@
 {% block content %}
 <div class="page-head"><div><span class="eyebrow">{{ t('nav.installations') }}</span><h1>{{ t('ui.new.installation') }}</h1>
   <p class="lede">{{ t('ui.select.the.shared.location.then.add.every.item.installed.during.this.visit') }}</p></div></div>
-<form method="post" action="/installations/submit" enctype="multipart/form-data" novalidate data-async-form>
+<form method="post" action="/installations/submit" enctype="multipart/form-data" novalidate data-async-form data-project-hierarchy data-nested-entry-devices data-photo-prefix="installation" class="guided-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="form_token" value="{{ form_token }}">
   <div class="alert error" role="alert" data-form-error style="{{ '' if errors.form else 'display:none' }}">{{ errors.form or '' }}</div>
-  <div class="card"><div class="card-head"><h2>{{ t('ui.shared.location') }}</h2></div><div class="card-body"><div class="grid cols-2">
-    <div class="field"><label for="project_id">{{ t('ui.1.project.name') }} <span class="req">*</span></label><select id="project_id" name="project_id"><option value="">{{ t('ui.select.a.project') }}</option>{% for p in projects %}<option value="{{ p.id }}" {{ "selected" if form.project_id == p.id|string }}>{{ p.name }}</option>{% endfor %}</select>
+  <script type="application/json" data-project-hierarchy-data>{{ project_hierarchy|tojson }}</script>
+  <nav class="workflow-jumpbar no-print" aria-label="{{ t('ui.new.installation') }}">
+    <a href="#entry-scope"><span class="step-number">1</span>{{ t('ui.scope') }}</a><a href="#entry-items"><span class="step-number">2</span>{{ t('nav.pricing.items') }}</a><a href="#entry-team"><span class="step-number">3</span>{{ t('ui.people.on.site') }}</a><a href="#entry-submit"><span class="step-number">4</span>{{ t('ui.submit.installation.record') }}</a>
+  </nav>
+  {% set entry_kind = 'installation' %}<div data-site-scopes><div data-site-scope><div class="card workflow-section" id="entry-scope"><div class="card-head"><h2><span data-site-number>1</span>. {{ t('ui.shared.location') }}</h2><button type="button" class="btn btn-quiet btn-sm" data-remove-site hidden>{{ t('ui.remove') }}</button></div><div class="card-body"><div class="grid cols-3">
+    <div class="field"><label for="project_id">{{ t('ui.main.project') }} <span class="req">*</span></label><select id="project_id" name="project_id"><option value="">{{ t('ui.select.a.project') }}</option>{% for p in projects %}<option value="{{ p.id }}" {{ "selected" if form.project_id == p.id|string }}>{{ p.name }}</option>{% endfor %}</select>
       <p class="error-text" data-error-for="project_id" style="{{ '' if errors.project_id else 'display:none' }}">{{ errors.project_id or '' }}</p></div>
-    <div class="field"><label for="work_site_id">{{ t('ui.2.site') }} <span class="req">*</span></label><select id="work_site_id" name="work_site_id"><option value="">{{ t('ui.select.a.site') }}</option>{% for s in work_sites %}<option value="{{ s.id }}" {{ "selected" if form.work_site_id == s.id|string }}>{{ s.name }}</option>{% endfor %}</select>
+    <div class="field"><label for="sub_project_id">{{ t('ui.sub.project') }} <span class="req">*</span></label><select id="sub_project_id" name="sub_project_id"><option value="">{{ t('ui.select.a.sub.project') }}</option>{% for p in projects %}{% for sub in p.sub_projects if sub.is_active %}<option value="{{ sub.id }}" {{ "selected" if form.sub_project_id == sub.id|string }}>{{ sub.name }}</option>{% endfor %}{% endfor %}</select>
+      <p class="error-text" data-error-for="sub_project_id" style="{{ '' if errors.sub_project_id else 'display:none' }}">{{ errors.sub_project_id or '' }}</p></div>
+    <div class="field"><label for="work_site_id">{{ t('ui.site') }} <span class="req">*</span></label><select id="work_site_id" name="work_site_id"><option value="">{{ t('ui.select.a.site') }}</option>{% for s in work_sites %}<option value="{{ s.id }}" {{ "selected" if form.work_site_id == s.id|string }}>{{ s.name }}</option>{% endfor %}</select>
       <p class="error-text" data-error-for="work_site_id" style="{{ '' if errors.work_site_id else 'display:none' }}">{{ errors.work_site_id or '' }}</p></div>
     <div class="field" style="grid-column:1/-1;"><label for="quotation_number">{{ t('ui.3.quotation.id') }} <span class="req">*</span></label><input id="quotation_number" name="quotation_number" list="quotation-options" value="{{ form.quotation_number or '' }}" placeholder="QUO-2026-00001" required dir="auto"><datalist id="quotation-options">{% for q in quotations %}<option value="{{ q.quotation_number }}">{{ q.project_name }}</option>{% endfor %}</datalist>
       <p class="hint">{{ t('ui.select.the.quotation.created.for.this.project.prices.are.not.shown.here') }}</p><p class="error-text" data-error-for="quotation_number" style="{{ '' if errors.quotation_number else 'display:none' }}">{{ errors.quotation_number or '' }}</p></div>
-  </div></div></div>
+  </div></div></div>{% include "partials/entry_data_table.html" %}<div data-device-items id="entry-items" class="entry-items workflow-section">{% for item in form.devices %}{{ device_row(item, loop.index0) }}{% endfor %}</div><button type="button" class="btn btn-secondary" data-add-device>{{ t('ui.add.add.another.device') }}</button></div></div><button type="button" class="btn btn-secondary" data-add-site>{{ t('ui.add.another.site') }}</button>
 
-  <div data-device-items>{% for item in form.devices %}{{ device_row(item, loop.index0) }}{% endfor %}</div>
-  <button type="button" class="btn btn-secondary" data-add-device>{{ t('ui.add.add.another.installation') }}</button>
   <template data-device-template>{{ device_row({}, 0) }}</template>
 
-  <div class="card"><div class="card-head"><h2>{{ t('ui.people.on.site') }}</h2></div><div class="card-body">
+  <div class="card workflow-section" id="entry-team"><div class="card-head"><h2>{{ t('ui.people.on.site') }}</h2></div><div class="card-body">
     {% include "partials/technical_participant_picker.html" %}
   </div></div>
-  <div style="display:flex;gap:12px;margin-top:20px;"><button type="submit" class="btn btn-primary" data-submit data-label="{{ t('ui.submit.installation.record') }}" data-saving-label="{{ t('ui.saving.installation') }}">{{ t('ui.submit.installation.record') }}</button><a class="btn btn-secondary" href="/dashboard">{{ t('ui.cancel') }}</a></div>
+  <div class="sticky-form-actions no-print" id="entry-submit"><a class="btn btn-secondary" href="/dashboard">{{ t('ui.cancel') }}</a><button type="submit" class="btn btn-primary" data-submit data-label="{{ t('ui.submit.installation.record') }}" data-saving-label="{{ t('ui.saving.installation') }}">{{ t('ui.submit.installation.record') }}</button></div>
 </form>
 {{ service_item_picker('installation-item-picker', devices) }}
-{% endblock %}
-{% block scripts %}
-<script>
-document.addEventListener("DOMContentLoaded", function () {
-  var items = document.querySelector("[data-device-items]");
-  var template = document.querySelector("[data-device-template]");
-  function renumber() {
-    var rows = Array.from(items.querySelectorAll("[data-device-row]"));
-    rows.forEach(function (row, index) {
-      row.querySelector("[data-item-number]").textContent = index + 1;
-      row.querySelector("[data-remove-device]").hidden = rows.length === 1;
-      row.querySelectorAll("[data-name-kind]").forEach(function (field) {
-        field.name = field.dataset.nameKind + "_" + index;
-      });
-      row.querySelectorAll("[data-photo-kind]").forEach(function (input) {
-        input.id = "installation-" + input.dataset.photoKind + "-" + index;
-      });
-      row.querySelectorAll("[data-pick]").forEach(function (button) {
-        button.dataset.pick = "installation-" + button.closest("[data-photos]").querySelector("input[type=file]").dataset.photoKind.replace("-camera", "") + (button.textContent.indexOf("Take") !== -1 ? "-camera" : "-gallery") + "-" + index;
-      });
-      row.querySelectorAll("[data-error-kind]").forEach(function (error) {
-        error.dataset.errorFor = error.dataset.errorKind + "_" + index;
-      });
-      row.querySelectorAll("[data-photos]").forEach(window.initializePhotoPicker);
-      window.initializeServiceItemPickers(row);
-    });
-  }
-  document.querySelector("[data-add-device]").addEventListener("click", function () {
-    items.appendChild(template.content.cloneNode(true));
-    renumber();
-  });
-  items.addEventListener("click", function (event) {
-    var remove = event.target.closest("[data-remove-device]");
-    if (remove) { remove.closest("[data-device-row]").remove(); renumber(); }
-  });
-  renumber();
-});
-</script>
 {% endblock %}

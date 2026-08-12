@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block title %}{{ t('ui.create.report') }} {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('ui.new.named.report', report_type=t(report_config.singular_key)) }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><span class="eyebrow">{{ t(report_config.title_key) }}</span><h1>{{ t('ui.new.named.report', report_type=t(report_config.singular_key)) }}</h1><p class="lede">{{ t('ui.select.authorized.records.report.help') }}</p></div></div>
+
+{% if errors.form %}<div class="alert error" role="alert">{{ errors.form }}</div>{% endif %}
+<form method="get" action="/reports/{{ report_slug }}/new" class="card report-time-filter">
+  <div class="card-head"><div><h2>{{ t('ui.filter.by.submission.time') }}</h2><p class="hint">{{ t('ui.filter.by.submission.time.help') }}</p></div></div>
+  <div class="card-body"><div class="grid cols-3">
+    <div class="field"><label for="report-record-number">{{ t('ui.record.number') }}</label><input id="report-record-number" type="search" name="record_number" value="{{ time_filter.record_number }}" placeholder="{{ t('ui.record.number.example') }}" dir="auto"><p class="hint">{{ t('ui.search.by.full.or.partial.record.number') }}</p></div>
+    <div class="field"><label for="report-from-at">{{ t('ui.from') }}</label><input id="report-from-at" type="datetime-local" step="1" name="from_at" value="{{ time_filter.from_at }}">{% if time_filter_errors.from_at %}<p class="error-text">{{ time_filter_errors.from_at }}</p>{% endif %}</div>
+    <div class="field"><label for="report-to-at">{{ t('ui.to') }}</label><input id="report-to-at" type="datetime-local" step="1" name="to_at" value="{{ time_filter.to_at }}">{% if time_filter_errors.to_at %}<p class="error-text">{{ time_filter_errors.to_at }}</p>{% endif %}</div>
+  </div><div class="actions-row"><button class="btn btn-secondary" type="submit">{{ t('ui.apply.filters') }}</button><a class="btn btn-ghost" href="/reports/{{ report_slug }}/new">{{ t('ui.clear.filters') }}</a></div></div>
+</form>
+<form method="post" action="/reports/{{ report_slug }}" enctype="multipart/form-data" data-structured-report-form>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="structured-report-layout">
+    <section class="card report-scope-card">
+      <div class="card-head"><div><h2>{{ t('ui.select.projects.and.sites') }}</h2><p class="hint">{{ t('ui.select.records.tree.help') }}</p></div><span class="tag" data-selected-summary>0 {{ t('ui.records') }}</span></div>
+      <div class="card-body report-scope-tree">
+        {% if record_tree %}
+          {% for main in record_tree %}
+          <details class="report-main-node" open>
+            <summary><label class="report-tree-choice"><input type="checkbox" data-scope-toggle="main"><span class="hierarchy-level-badge hierarchy-level-main">{{ t('ui.hierarchy.main.badge') }}</span><strong>{{ main.name }}</strong><small>{{ main.record_count }} {{ t('ui.records') }}</small></label></summary>
+            {% if main.customer_names %}<p class="report-customer-line">{{ t('ui.customer.users') }}: {{ main.customer_names }}</p>{% endif %}
+            <div class="report-tree-children">
+              {% for sub in main.sub_projects %}
+              <details class="report-sub-node" open>
+                <summary><label class="report-tree-choice"><input type="checkbox" data-scope-toggle="sub"><span class="hierarchy-level-badge hierarchy-level-sub">{{ t('ui.hierarchy.sub.badge') }}</span><strong>{{ sub.name }}</strong><small>{{ sub.record_count }} {{ t('ui.records') }}</small></label></summary>
+                <div class="report-tree-sites">
+                  {% for site in sub.sites %}
+                  <details class="report-site-node">
+                    <summary><label class="report-tree-choice"><input type="checkbox" data-scope-toggle="site"><span class="hierarchy-site-icon" aria-hidden="true"></span><strong>{{ site.name }}</strong><small>{{ site.records|length }} {{ t('ui.records') }}</small></label></summary>
+                    <div class="report-record-choices">
+                      {% for record in site.records %}
+                      <label class="check-card report-record-choice"><input type="checkbox" name="record_ids" value="{{ record.id }}" {% if record.id|string in selected_record_ids %}checked{% endif %}><span><strong>{{ record.record_number }}</strong><small>{{ record.service_name }} · {{ record.submitted_at|datetime }} · {{ record.device_total }} {{ t('ui.items') }} · {{ record.site_count }} {{ t('ui.site.sections') }}</small></span></label>
+                      {% endfor %}
+                    </div>
+                  </details>
+                  {% endfor %}
+                </div>
+              </details>
+              {% endfor %}
+            </div>
+          </details>
+          {% endfor %}
+        {% else %}<p class="muted">{{ t('ui.no.authorized.records.for.report') }}</p>{% endif %}
+        {% if errors.record_ids %}<p class="error-text">{{ errors.record_ids }}</p>{% endif %}
+      </div>
+    </section>
+
+    <section class="report-form-stack">
+      <div class="card"><div class="card-head"><h2>{{ t('ui.report.information') }}</h2></div><div class="card-body">
+        <div class="grid cols-2">
+          <div class="field"><label for="report-name">{{ t('ui.report.name') }} <span class="req">*</span></label><input id="report-name" name="name" value="{{ form.name or '' }}" maxlength="200" required dir="auto">{% if errors.name %}<p class="error-text">{{ errors.name }}</p>{% endif %}</div>
+          <div class="field"><label>{{ t('ui.created.by') }}</label><input value="{{ user.full_name }}" disabled></div>
+          <div class="field"><label for="report-date">{{ t('ui.report.date') }} <span class="req">*</span></label><input id="report-date" type="date" name="report_date" value="{{ form.report_date }}" required>{% if errors.report_date %}<p class="error-text">{{ errors.report_date }}</p>{% endif %}</div>
+          <div class="field"><label for="team-leader">{{ t('ui.team.leader') }} <span class="req">*</span></label><select id="team-leader" name="team_leader_id" required><option value="">{{ t('ui.select.team.leader') }}</option>{% for leader in team_leaders %}<option value="{{ leader.id }}" {{ 'selected' if form.team_leader_id == leader.id|string }}>{{ leader.full_name }}</option>{% endfor %}</select>{% if errors.team_leader_id %}<p class="error-text">{{ errors.team_leader_id }}</p>{% endif %}</div>
+          <div class="field span-2"><label for="report-technicians">{{ t('ui.technicians') }}</label><select id="report-technicians" name="technician_ids" multiple size="{{ [technical_users|length, 5]|min }}">{% for technician in technical_users %}<option value="{{ technician.id }}" {{ 'selected' if technician.id|string in form.technician_ids }}>{{ technician.full_name }}</option>{% endfor %}</select><p class="hint">{{ t('ui.multiple.selection.help') }}</p>{% if errors.technician_ids %}<p class="error-text">{{ errors.technician_ids }}</p>{% endif %}</div>
+          <div class="field span-2"><label for="report-notes">{{ t('ui.notes.optional') }}</label><textarea id="report-notes" name="notes" maxlength="5000" rows="3" dir="auto">{{ form.notes or '' }}</textarea>{% if errors.notes %}<p class="error-text">{{ errors.notes }}</p>{% endif %}</div>
+        </div>
+      </div></div>
+
+      <div class="card"><div class="card-body"><label class="choice"><input type="checkbox" name="include_device_data" value="1" {{ 'checked' if form.include_device_data }}><span><strong>{{ t('ui.include.device.data.tables.in.pdf') }}</strong><small>{{ t('ui.include.device.data.tables.help') }}</small></span></label></div></div>
+
+      <div class="actions-row"><button class="btn btn-primary" type="submit">{{ t('ui.create.report') }}</button><a class="btn btn-secondary" href="/reports/{{ report_slug }}">{{ t('ui.cancel') }}</a></div>
+    </section>
+  </div>
+</form>
+{% endblock %}
+{% block scripts %}<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var form = document.querySelector("[data-structured-report-form]");
+  if (!form) return;
+  function leaves(root) { return Array.from(root.querySelectorAll('input[name="record_ids"]')); }
+  function syncToggle(toggle) {
+    var root = toggle.closest("details");
+    var boxes = leaves(root);
+    var checked = boxes.filter(function (box) { return box.checked; }).length;
+    toggle.checked = boxes.length > 0 && checked === boxes.length;
+    toggle.indeterminate = checked > 0 && checked < boxes.length;
+  }
+  function refresh() {
+    form.querySelectorAll("[data-scope-toggle]").forEach(syncToggle);
+    var count = new Set(Array.from(form.querySelectorAll('input[name="record_ids"]:checked')).map(function (box) { return box.value; })).size;
+    var summary = form.querySelector("[data-selected-summary]");
+    if (summary) summary.textContent = count + (count === 1 ? " record" : " records");
+  }
+  form.addEventListener("change", function (event) {
+    var toggle = event.target.closest("[data-scope-toggle]");
+    if (toggle) {
+      var affectedValues = new Set(leaves(toggle.closest("details")).map(function (box) { return box.value; }));
+      form.querySelectorAll('input[name="record_ids"]').forEach(function (box) { if (affectedValues.has(box.value)) box.checked = toggle.checked; });
+    }
+    if (event.target.matches('input[name="record_ids"]')) {
+      form.querySelectorAll('input[name="record_ids"][value="' + CSS.escape(event.target.value) + '"]').forEach(function (box) { box.checked = event.target.checked; });
+    }
+    if (toggle || event.target.matches('input[name="record_ids"]')) refresh();
+  });
+  form.addEventListener("click", function (event) {
+    if (event.target.closest(".report-tree-choice")) event.stopPropagation();
+  });
+  refresh();
+});
+</script>{% endblock %}

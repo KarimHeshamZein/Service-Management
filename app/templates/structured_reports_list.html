@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% import "partials/macros.html" as ui with context %}
+{% block title %}{{ t(report_config.title_key) }} {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t(report_config.title_key) }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><span class="eyebrow">{{ t('ui.customer.ready.reports') }}</span><h1>{{ t(report_config.title_key) }}</h1><p class="lede">{{ t('ui.saved.reports.description') }}</p></div>
+  <div class="actions-row no-print"><a class="btn btn-secondary" href="/records">{{ t('ui.open.service.records') }}</a>{% if user.can_submit_records %}<a class="btn btn-primary" href="/reports/{{ report_slug }}/new">{{ t('ui.create.report') }}</a>{% endif %}</div>
+</div>
+<div class="card">
+  <div class="card-head"><h2>{{ reports|length }} {{ t('ui.saved.reports') }}</h2></div>
+  <div class="card-body tight">
+    {% if reports %}
+    <div class="table-wrap"><table><thead><tr><th>{{ t('ui.report.number') }}</th><th>{{ t('ui.report.name') }}</th><th>{{ t('ui.report.date') }}</th><th>{{ t('ui.created.by') }}</th><th>{{ t('ui.team.leader') }}</th><th>{{ t('ui.scope') }}</th><th></th></tr></thead><tbody>
+      {% for report in reports %}<tr>
+        <td class="mono">{{ report.report_number }}</td><td>{{ report.name }}</td><td>{{ report.report_date|date }}</td><td>{{ report.created_by_name }}</td><td>{{ report.team_leader_name }}</td><td>{{ report.record_links|length }} {{ t('ui.records') }}</td>
+        <td><div class="actions-row"><a class="btn btn-secondary btn-sm" href="/reports/{{ report_slug }}/{{ report.id }}">{{ t('ui.view') }}</a>{% if user.is_admin %}<form method="post" action="/reports/{{ report_slug }}/{{ report.id }}/delete" onsubmit="return confirm('{{ t("ui.delete.report.only.confirm") }}');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-danger btn-sm" type="submit">{{ t('ui.delete.report') }}</button></form>{% endif %}</div></td>
+      </tr>{% endfor %}
+    </tbody></table></div>
+    {% else %}{{ ui.empty_state(t('ui.no.saved.reports'), t('ui.create.first.saved.report')) }}{% endif %}
+  </div>
+</div>
+{% endblock %}

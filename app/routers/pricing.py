@@ -17,10 +17,17 @@ from ..config import settings as app_settings
 from ..database import get_db
 from ..deps import require_admin, require_pricing_access
 from ..helpers import entity_id, flash, paginate, render
+from ..audit import set_audit_context
 from ..models import (
+    CustomerProjectAssignment,
     DeviceCatalog,
+    GeneralMaintenanceItem,
+    GeneralMaintenanceRecord,
+    MaintenanceRecord,
+    MaintenanceRecordItem,
     PricingItem,
     PricingItemCategory,
+    PricingItemPriceHistory,
     PricingQuotation,
     PricingQuotationCharge,
     PricingQuotationInvoiceImage,
@@ -291,6 +298,8 @@ def _catalogue(db: Session, *, include_inactive: bool = False) -> list[PricingIt
         select(PricingItem)
         .options(
             selectinload(PricingItem.related_items),
+            selectinload(PricingItem.price_history),
+            selectinload(PricingItem.related_items).selectinload(PricingRelatedItem.price_history),
             selectinload(PricingItem.category),
         )
         .order_by(PricingItem.name, PricingItem.model)
@@ -347,8 +356,11 @@ def _item_context(
     stmt = (
         select(PricingItem)
         .options(
-            selectinload(PricingItem.related_items),
+            selectinload(PricingItem.related_items).selectinload(
+                PricingRelatedItem.price_history
+            ),
             selectinload(PricingItem.category),
+            selectinload(PricingItem.price_history),
         )
         .order_by(PricingItem.is_active.desc(), PricingItem.name, PricingItem.model)
     )
@@ -361,9 +373,37 @@ def _item_context(
                 PricingItem.category.has(PricingItemCategory.name.ilike(like)),
             )
         )
+    items = list(db.scalars(stmt))
+    item_ids = [item.id for item in items]
+    related_ids = [related.id for item in items for related in item.related_items]
+    quoted_main: dict[int, list[dict]] = {item_id: [] for item_id in item_ids}
+    if item_ids:
+        for line, quotation in db.execute(
+            select(PricingQuotationLine, PricingQuotation)
+            .join(PricingQuotation, PricingQuotation.id == PricingQuotationLine.quotation_id)
+            .where(PricingQuotationLine.source_item_id.in_(item_ids))
+            .order_by(PricingQuotation.quotation_date, PricingQuotationLine.id)
+        ):
+            quoted_main[line.source_item_id].append(
+                {"price": line.unit_price, "currency": line.currency, "date": quotation.quotation_date, "label": quotation.quotation_number}
+            )
+    quoted_related: dict[int, list[dict]] = {related_id: [] for related_id in related_ids}
+    if related_ids:
+        for related_line, line, quotation in db.execute(
+            select(PricingQuotationRelatedLine, PricingQuotationLine, PricingQuotation)
+            .join(PricingQuotationLine, PricingQuotationLine.id == PricingQuotationRelatedLine.line_id)
+            .join(PricingQuotation, PricingQuotation.id == PricingQuotationLine.quotation_id)
+            .where(PricingQuotationRelatedLine.source_related_item_id.in_(related_ids))
+            .order_by(PricingQuotation.quotation_date, PricingQuotationRelatedLine.id)
+        ):
+            quoted_related[related_line.source_related_item_id].append(
+                {"price": related_line.unit_price, "currency": related_line.currency, "date": quotation.quotation_date, "label": quotation.quotation_number}
+            )
     return {
         "active_nav": "pricing_items",
-        "items": list(db.scalars(stmt)),
+        "items": items,
+        "quoted_main_history": quoted_main,
+        "quoted_related_history": quoted_related,
         "active_items": _catalogue(db),
         "categories": list(
             db.scalars(
@@ -547,8 +587,21 @@ async def create_item(
         item.image_original_filename = stored.original_filename
         item.image_content_type = stored.content_type
         item.image_file_size = stored.file_size
+    item.price_history.append(
+        PricingItemPriceHistory(
+            old_price=None,
+            new_price=unit_price,
+            old_currency=None,
+            new_currency=currency,
+            changed_by_id=user.id,
+            changed_by_name=user.full_name,
+            source="created",
+            changed_at=utcnow(),
+        )
+    )
     db.add(item)
     db.commit()
+    set_audit_context(request, action="create", entity_type="pricing_item", entity_id=item.id, entity_label=item.display_label, changes={"price": {"before": None, "after": f"{unit_price} {currency}"}})
     flash(request, f"Main item “{name}” created.")
     return _redirect("/pricing/items")
 
@@ -618,12 +671,26 @@ async def edit_item(
             flash(request, str(exc), "error")
             return _redirect("/pricing/items")
     old_keys = (item.image_storage_key, item.image_thumbnail_key)
+    old_price, old_currency = item.unit_price, item.currency
     item.name = name
     item.model = model
     item.unit_price = unit_price
     item.currency = currency
     item.service_enabled = service_enabled
     item.category = category
+    if old_price != unit_price or old_currency != currency:
+        item.price_history.append(
+            PricingItemPriceHistory(
+                old_price=old_price,
+                new_price=unit_price,
+                old_currency=old_currency,
+                new_currency=currency,
+                changed_by_id=user.id,
+                changed_by_name=user.full_name,
+                source="catalog_edit",
+                changed_at=utcnow(),
+            )
+        )
     if stored:
         item.image_storage_key = stored.storage_key
         item.image_thumbnail_key = stored.thumbnail_key
@@ -633,6 +700,10 @@ async def edit_item(
     item.updated_at = utcnow()
     _sync_legacy_device(db, item)
     db.commit()
+    changes = {}
+    if old_price != unit_price or old_currency != currency:
+        changes["price"] = {"before": f"{old_price} {old_currency}", "after": f"{unit_price} {currency}"}
+    set_audit_context(request, action="update", entity_type="pricing_item", entity_id=item.id, entity_label=item.display_label, changes=changes)
     if stored:
         delete_stored(*old_keys)
     flash(request, "Pricing item updated. Existing quotations keep their snapshots.")
@@ -771,15 +842,27 @@ async def create_related_item(
     if clash:
         flash(request, f"“{name}” is already related to this item.", "error")
         return _redirect("/pricing/items")
-    db.add(
-        PricingRelatedItem(
+    related = PricingRelatedItem(
             main_item_id=main_item.id,
             name=name,
             unit_price=unit_price,
             currency=currency,
         )
+    related.price_history.append(
+        PricingItemPriceHistory(
+            old_price=None,
+            new_price=unit_price,
+            old_currency=None,
+            new_currency=currency,
+            changed_by_id=user.id,
+            changed_by_name=user.full_name,
+            source="created",
+            changed_at=utcnow(),
+        )
     )
+    db.add(related)
     db.commit()
+    set_audit_context(request, action="create", entity_type="pricing_related_item", entity_id=related.id, entity_label=name, changes={"price": {"before": None, "after": f"{unit_price} {currency}"}})
     flash(request, f"Related item “{name}” added to “{main_item.display_label}”.")
     return _redirect("/pricing/items")
 
@@ -814,11 +897,29 @@ async def edit_related_item(
     if clash:
         flash(request, f"“{name}” is already related to this item.", "error")
         return _redirect("/pricing/items")
+    old_price, old_currency = related.unit_price, related.currency
     related.name = name
     related.unit_price = unit_price
     related.currency = currency
+    if old_price != unit_price or old_currency != currency:
+        related.price_history.append(
+            PricingItemPriceHistory(
+                old_price=old_price,
+                new_price=unit_price,
+                old_currency=old_currency,
+                new_currency=currency,
+                changed_by_id=user.id,
+                changed_by_name=user.full_name,
+                source="catalog_edit",
+                changed_at=utcnow(),
+            )
+        )
     related.updated_at = utcnow()
     db.commit()
+    changes = {}
+    if old_price != unit_price or old_currency != currency:
+        changes["price"] = {"before": f"{old_price} {old_currency}", "after": f"{unit_price} {currency}"}
+    set_audit_context(request, action="update", entity_type="pricing_related_item", entity_id=related.id, entity_label=related.name, changes=changes)
     flash(request, "Related item updated. Existing quotations keep their snapshots.")
     return _redirect("/pricing/items")
 
@@ -948,6 +1049,11 @@ def _default_quote_form(db: Session) -> dict:
     today = date.today()
     return {
         "project_id": "",
+        "addressee_source": "none",
+        "addressee_name": "",
+        "addressee_title": "",
+        "addressee_email": "",
+        "addressee_phone": "",
         "quotation_date": today.isoformat(),
         "valid_until": (
             today + timedelta(days=values["default_validity_days"])
@@ -987,6 +1093,14 @@ def _quotation_form_context(
     form_token: str | None = None,
 ) -> dict:
     items = _catalogue(db)
+    addressees = list(
+        db.execute(
+            select(User, CustomerProjectAssignment.project_id)
+            .join(CustomerProjectAssignment, CustomerProjectAssignment.user_id == User.id)
+            .where(User.is_active.is_(True))
+            .order_by(User.full_name, CustomerProjectAssignment.project_id)
+        )
+    )
     return {
         "active_nav": "pricing_quotations",
         "quotation": quotation,
@@ -995,6 +1109,7 @@ def _quotation_form_context(
                 select(Site).where(Site.is_active.is_(True)).order_by(Site.name)
             )
         ),
+        "quotation_addressees": addressees,
         "catalogue": _catalogue_payload(items),
         "form": form or _default_quote_form(db),
         "errors": errors or {},
@@ -1269,6 +1384,11 @@ def _snapshot_line_images(
 def _quote_form_values(form, submitted: list[dict]) -> dict:
     return {
         "project_id": str(form.get("project_id") or ""),
+        "addressee_source": str(form.get("addressee_source") or "none"),
+        "addressee_name": str(form.get("addressee_name") or ""),
+        "addressee_title": str(form.get("addressee_title") or ""),
+        "addressee_email": str(form.get("addressee_email") or ""),
+        "addressee_phone": str(form.get("addressee_phone") or ""),
         "quotation_date": str(form.get("quotation_date") or ""),
         "valid_until": str(form.get("valid_until") or ""),
         "discount_percent": str(form.get("discount_percent") or ""),
@@ -1366,6 +1486,12 @@ def _validate_quote_header(form, db: Session) -> tuple[dict, dict]:
     raw_project_id = str(form.get("project_id") or "")
     project_id = entity_id(raw_project_id)
     project = db.get(Site, project_id) if project_id is not None else None
+    addressee_source = str(form.get("addressee_source") or "none").strip()
+    addressee_user = None
+    addressee_name = str(form.get("addressee_name") or "").strip()
+    addressee_title = str(form.get("addressee_title") or "").strip()
+    addressee_email = str(form.get("addressee_email") or "").strip()
+    addressee_phone = str(form.get("addressee_phone") or "").strip()
     try:
         quotation_date = date.fromisoformat(str(form.get("quotation_date") or ""))
     except ValueError:
@@ -1376,6 +1502,35 @@ def _validate_quote_header(form, db: Session) -> tuple[dict, dict]:
         valid_until = None
     if project is None or not project.is_active:
         errors["project_id"] = "Choose an active Project."
+    if addressee_source == "project":
+        addressee_name = project.contact_person if project else ""
+        addressee_phone = project.contact_number if project else ""
+        addressee_title = ""
+        addressee_email = ""
+        if not addressee_name:
+            errors["addressee_source"] = "The selected Project has no contact person. Choose a Customer user or enter a custom person."
+    elif addressee_source.startswith("customer:"):
+        user_id = entity_id(addressee_source.split(":", 1)[1])
+        assignment = db.scalar(
+            select(CustomerProjectAssignment).where(
+                CustomerProjectAssignment.user_id == user_id,
+                CustomerProjectAssignment.project_id == project_id,
+            )
+        ) if user_id and project_id else None
+        addressee_user = db.get(User, user_id) if assignment else None
+        if addressee_user is None or not addressee_user.is_active or not addressee_user.is_customer:
+            errors["addressee_source"] = "Choose an active Customer assigned to this Project."
+        else:
+            addressee_name = addressee_user.full_name
+            addressee_email = addressee_user.username if "@" in addressee_user.username else ""
+            addressee_phone = addressee_user.phone or ""
+            addressee_title = ""
+    elif addressee_source == "custom":
+        if not addressee_name:
+            errors["addressee_name"] = "Enter the person’s name."
+    elif addressee_source != "none":
+        errors["addressee_source"] = "Choose a valid quotation addressee."
+        addressee_source = "none"
     if quotation_date is None:
         errors["quotation_date"] = "Enter a valid quotation date."
     if valid_until is None:
@@ -1384,6 +1539,12 @@ def _validate_quote_header(form, db: Session) -> tuple[dict, dict]:
         errors["valid_until"] = "The expiry date cannot be before the quotation date."
     return {
         "project": project,
+        "addressee_source": addressee_source,
+        "addressee_user": addressee_user,
+        "addressee_name": addressee_name[:120],
+        "addressee_title": addressee_title[:120],
+        "addressee_email": addressee_email[:254],
+        "addressee_phone": addressee_phone[:40],
         "quotation_date": quotation_date,
         "valid_until": valid_until,
         "discount_percent": Decimal("0.00"),
@@ -1405,6 +1566,12 @@ def _apply_quote_header(
     quotation.project_city = project.city or ""
     quotation.contact_person = project.contact_person or ""
     quotation.contact_number = project.contact_number or ""
+    quotation.addressee_source = values["addressee_source"]
+    quotation.addressee_user_id = values["addressee_user"].id if values["addressee_user"] else None
+    quotation.addressee_name = values["addressee_name"]
+    quotation.addressee_title = values["addressee_title"]
+    quotation.addressee_email = values["addressee_email"]
+    quotation.addressee_phone = values["addressee_phone"]
     quotation.quotation_date = values["quotation_date"]
     quotation.valid_until = values["valid_until"]
     quotation.currency = pricing_settings["currency"]
@@ -1617,6 +1784,18 @@ async def create_quotation(
             ),
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
+    set_audit_context(
+        request,
+        action="create",
+        entity_type="pricing_quotation",
+        entity_id=quotation.id,
+        entity_label=quotation.quotation_number,
+        changes={
+            "project": {"before": None, "after": quotation.project_name},
+            "addressee": {"before": None, "after": quotation.addressee_name},
+            "line_count": {"before": 0, "after": len(quotation.lines)},
+        },
+    )
     flash(request, f"Quotation {quotation.quotation_number} created.")
     if _wants_json(request):
         return JSONResponse({"redirect": f"/pricing/quotations/{quotation.id}"})
@@ -2027,6 +2206,11 @@ def _existing_quote_form(quotation: PricingQuotation) -> dict:
     line_indexes = {line.id: index for index, line in enumerate(quotation.lines)}
     return {
         "project_id": str(quotation.project_id),
+        "addressee_source": quotation.addressee_source,
+        "addressee_name": quotation.addressee_name,
+        "addressee_title": quotation.addressee_title,
+        "addressee_email": quotation.addressee_email,
+        "addressee_phone": quotation.addressee_phone,
         "quotation_date": quotation.quotation_date.isoformat(),
         "valid_until": quotation.valid_until.isoformat(),
         "discount_percent": str(quotation.discount_percent),
@@ -2089,6 +2273,11 @@ async def edit_quotation(
     db: Session = Depends(get_db),
 ):
     quotation = _quotation_or_404(db, quotation_id)
+    old_audit_values = {
+        "project": quotation.project_name,
+        "addressee": quotation.addressee_name,
+        "line_count": len(quotation.lines),
+    }
     form = await request.form()
     submitted = _submitted_lines(form)
     form_values = _quote_form_values(form, submitted)
@@ -2190,6 +2379,22 @@ async def edit_quotation(
         )
     delete_stored(*old_snapshot_keys)
     delete_stored(*old_plan_keys)
+    set_audit_context(
+        request,
+        action="update",
+        entity_type="pricing_quotation",
+        entity_id=quotation.id,
+        entity_label=quotation.quotation_number,
+        changes={
+            field: {"before": old_audit_values[field], "after": after}
+            for field, after in {
+                "project": quotation.project_name,
+                "addressee": quotation.addressee_name,
+                "line_count": len(quotation.lines),
+            }.items()
+            if old_audit_values[field] != after
+        },
+    )
     flash(request, f"Quotation {quotation.quotation_number} updated.")
     if _wants_json(request):
         return JSONResponse({"redirect": f"/pricing/quotations/{quotation.id}"})
@@ -2210,14 +2415,92 @@ async def delete_quotation(
         return _redirect("/pricing/quotations")
     quotation = _quotation_or_404(db, quotation_id)
     number = quotation.quotation_number
-    snapshot_keys = _line_image_keys(quotation.lines)
-    plan_keys = _stored_plan_keys(quotation)
-    invoice_keys = _invoice_image_keys(quotation)
-    site_survey_keys = _site_survey_image_keys(quotation)
-    db.delete(quotation)
+    stored_keys = _delete_quotations(db, [quotation])
     db.commit()
-    delete_stored(*snapshot_keys, *plan_keys, *invoice_keys, *site_survey_keys)
+    delete_stored(*stored_keys)
     flash(request, f"Quotation {number} deleted.")
+    return _redirect("/pricing/quotations")
+
+
+def _delete_quotations(
+    db: Session,
+    quotations: list[PricingQuotation],
+) -> list[str | None]:
+    """Stage quotation deletion while preserving every service record."""
+    quotation_ids = [quotation.id for quotation in quotations]
+    if not quotation_ids:
+        return []
+    stored_keys: list[str | None] = []
+    for quotation in quotations:
+        stored_keys.extend(_line_image_keys(quotation.lines))
+        stored_keys.extend(_stored_plan_keys(quotation))
+        stored_keys.extend(_invoice_image_keys(quotation))
+        stored_keys.extend(_site_survey_image_keys(quotation))
+    # Maintenance is intentionally independent from commercial quotations.
+    # Clear both the live link and the old snapshot for records created before
+    # that separation; the records and any saved reports remain untouched.
+    for model in (
+        MaintenanceRecordItem,
+        GeneralMaintenanceItem,
+        MaintenanceRecord,
+        GeneralMaintenanceRecord,
+    ):
+        db.query(model).filter(model.quotation_id.in_(quotation_ids)).update(
+            {model.quotation_id: None, model.quotation_number: None},
+            synchronize_session=False,
+        )
+    for quotation in quotations:
+        db.delete(quotation)
+    return stored_keys
+
+
+@router.post(
+    "/quotations/bulk-delete",
+    dependencies=[Depends(require_admin)],
+)
+async def bulk_delete_quotations(
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/quotations")
+    quotation_ids: list[int] = []
+    invalid_selection = False
+    for raw_value in form.getlist("quotation_ids"):
+        quotation_id = entity_id(raw_value)
+        if quotation_id is None:
+            invalid_selection = True
+        elif quotation_id not in quotation_ids:
+            quotation_ids.append(quotation_id)
+    if invalid_selection or len(quotation_ids) > 100:
+        flash(request, "The quotation selection is invalid. Select the quotations again.")
+        return _redirect("/pricing/quotations")
+    if not quotation_ids:
+        flash(request, "Select at least one quotation to delete.")
+        return _redirect("/pricing/quotations")
+
+    quotations = list(
+        db.scalars(
+            _quotation_query().where(PricingQuotation.id.in_(quotation_ids))
+        )
+    )
+    if len(quotations) != len(quotation_ids):
+        flash(request, "One or more selected quotations no longer exist. Refresh and try again.")
+        return _redirect("/pricing/quotations")
+
+    numbers = [quotation.quotation_number for quotation in quotations]
+    stored_keys = _delete_quotations(db, quotations)
+    set_audit_context(
+        request,
+        action="delete",
+        entity_type="pricing_quotation_bulk",
+        entity_label=f"{len(quotations)} quotations",
+        changes={"quotation_numbers": numbers},
+    )
+    db.commit()
+    delete_stored(*stored_keys)
+    flash(request, f"{len(quotations)} quotations deleted.")
     return _redirect("/pricing/quotations")
 
 

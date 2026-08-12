@@ -22,11 +22,15 @@ from ..helpers import (
     render,
     to_utc_from_display,
 )
+from ..entry_device_imports import apply_asset_metadata, load_entry_import, validate_current_import_rows
+from ..entry_data_tables import parse_entry_data_rows, row_model_values, rows_for_scope
+from ..entry_scopes import apply_scope_snapshot, EntryScope, item_scope_indexes, validate_entry_scopes
 from ..maintenance_items import active_catalog_items, resolve_maintenance_item
 from ..models import (
     DeviceCatalog,
     EvidencePhotoStage,
     MaintenanceParticipant,
+    MaintenanceDataRow,
     MaintenanceItemPhoto,
     MaintenancePhoto,
     MaintenanceRecord,
@@ -34,6 +38,7 @@ from ..models import (
     MaintenanceRecordDevice,
     MaintenanceRecordItem,
     PricingItem,
+    ServiceReportRecord,
     MaintenanceRecordSite,
     MaintenanceResult,
     NEEDS_ISSUE_DETAIL,
@@ -48,8 +53,14 @@ from ..participant_selection import (
     technical_user_choices,
     validate_participant_ids,
 )
-from ..quotation_references import quotation_choices, resolve_quotation_reference
+from ..project_hierarchy import active_project_hierarchy, hierarchy_json, resolve_entry_sub_project
 from ..record_mutations import add_revision, changed, revisions_for
+from ..record_photo_edits import (
+    existing_photo_descriptions,
+    grouped_photos,
+    new_photo_descriptions,
+)
+from ..saved_report_deletion import delete_linked_reports, linked_reports
 from ..security import (
     consume_form_token,
     csrf_valid,
@@ -94,13 +105,14 @@ def _form_context(
     errors: dict | None = None,
     form_token: str | None = None,
 ) -> dict:
+    projects = active_project_hierarchy(db)
     return {
         "active_nav": "maintenance",
-        "projects": _active_sites(db),
+        "projects": projects,
+        "project_hierarchy": hierarchy_json(projects),
         "work_sites": _active_work_sites(db),
         "services": _active_services(db),
         "catalog_items": active_catalog_items(db),
-        "quotations": quotation_choices(db),
         "form": form or {"participants": [], "devices": [{}]},
         "technical_users": technical_user_choices(db, request.state.user),
         "selected_participant_ids": [
@@ -134,6 +146,98 @@ def submit_form(
     return render(request, "preventive_maintenance_entry.html", _form_context(request, db))
 
 
+def _new_preventive_record(
+    db: Session,
+    *,
+    scope: EntryScope,
+    entries: list[dict],
+    imported_rows: list[dict],
+    stored_by_item: list[list],
+    user: User,
+    participant_ids: list[str],
+    participants: list[str],
+    now,
+    record_number: str | None = None,
+) -> MaintenanceRecord:
+    first = entries[0]
+    first_service: ServiceType = first["service"]
+    project, sub_project, work_site = scope.project, scope.sub_project, scope.site
+    record = MaintenanceRecord(
+        record_number=record_number or next_record_number(db, now),
+        site_id=project.id,
+        sub_project_id=sub_project.id if sub_project else None,
+        sub_project_name=sub_project.name if sub_project else "General",
+        service_type_id=first_service.id,
+        submitted_by_id=user.id,
+        quotation_id=None,
+        quotation_number=None,
+        site_name=work_site.name,
+        customer_name=project.name,
+        site_address=project.address,
+        service_name=first_service.name,
+        team_leader_name=user.full_name,
+        result=first["result_value"],
+        notes=first["notes"],
+        issue_description=first["issue_description"] or None,
+        recommendations=first["recommendations"] or None,
+        submitted_at=now,
+        created_at=now,
+    )
+    record.participants = [
+        MaintenanceParticipant(user_id=int(user_id), name=name)
+        for user_id, name in zip(participant_ids, participants)
+    ]
+    record.photos = [
+        MaintenancePhoto(
+            storage_key=stored.storage_key,
+            thumbnail_key=stored.thumbnail_key,
+            original_filename=stored.original_filename,
+            content_type=stored.content_type,
+            file_size=stored.file_size,
+            description=description or None,
+            position=position,
+            uploaded_at=now,
+        )
+        for _, stored, description, position in stored_by_item[0]
+    ]
+    record.work_site_evidence = MaintenanceRecordSite(site_id=work_site.id, site_name=work_site.name)
+    for index, entry in enumerate(entries):
+        service: ServiceType = entry["service"]
+        item = MaintenanceRecordItem(
+            installed_device_id=None,
+            service_type_id=service.id,
+            position=index,
+            service_name=service.name,
+            device_id=None,
+            device_name=service.name,
+            manufacturer=None,
+            device_model=None,
+            serial_number=None,
+            location_name=work_site.name,
+            imported_from_excel=False,
+            result=entry["result_value"],
+            notes=entry["notes"],
+            issue_description=entry["issue_description"] or None,
+            recommendations=entry["recommendations"] or None,
+        )
+        item.photos = [
+            MaintenanceItemPhoto(
+                storage_key=stored.storage_key,
+                thumbnail_key=stored.thumbnail_key,
+                original_filename=stored.original_filename,
+                content_type=stored.content_type,
+                file_size=stored.file_size,
+                stage=stage,
+                description=description or None,
+                position=position,
+                uploaded_at=now,
+            )
+            for stage, stored, description, position in stored_by_item[index]
+        ]
+        record.work_items.append(item)
+    return record
+
+
 @router.post("/maintenance/submit")
 async def submit_record(
     request: Request,
@@ -144,7 +248,9 @@ async def submit_record(
     errors: dict[str, str] = {}
 
     project_id_raw = (form.get("project_id") or form.get("site_id") or "").strip()
-    quotation_number_raw = str(form.get("quotation_number") or "").strip()
+    sub_project_id_raw = str(form.get("sub_project_id") or "").strip()
+    device_import_token = str(form.get("device_import_token") or "").strip()
+    confirm_asset_overwrites = str(form.get("confirm_asset_overwrites") or "") == "1"
     work_site_id_raw = (form.get("work_site_id") or "").strip()
     installed_device_ids = [
         str(value).strip() for value in form.getlist("installed_device_id")
@@ -170,39 +276,17 @@ async def submit_record(
     if not form_token_available(request, form.get("form_token")):
         errors["form"] = "This preventive maintenance record was already submitted. Check your records list."
 
-    project: Site | None = None
-    if not project_id_raw:
-        errors["project_id"] = "Select the project."
-    else:
-        project_id = entity_id(project_id_raw)
-        project = db.get(Site, project_id) if project_id is not None else None
-        if project is None:
-            errors["project_id"] = "That project no longer exists."
-        elif not project.is_active:
-            errors["project_id"] = "That project is deactivated and cannot receive new records."
-
-    quotation, quotation_error = resolve_quotation_reference(
-        db,
-        quotation_number_raw,
-        project.id if project else None,
+    scopes, scope_errors = validate_entry_scopes(form, db, require_quotation=False)
+    errors.update(scope_errors)
+    data_rows, data_row_errors = parse_entry_data_rows(
+        form, scopes, installation=False
     )
-    if quotation_error:
-        errors["quotation_number"] = quotation_error
+    errors.update(data_row_errors)
+    project = scopes[0].project if scopes else None
+    sub_project = scopes[0].sub_project if scopes else None
+    work_site = scopes[0].site if scopes else None
 
-    work_site: WorkSite | None = None
-    if not work_site_id_raw:
-        errors["work_site_id"] = "Select the site where the maintenance was performed."
-    else:
-        work_site_id = entity_id(work_site_id_raw)
-        work_site = (
-            db.get(WorkSite, work_site_id) if work_site_id is not None else None
-        )
-        if work_site is None:
-            errors["work_site_id"] = "That site no longer exists."
-        elif not work_site.is_active:
-            errors["work_site_id"] = "That site is deactivated and cannot receive new records."
-
-    item_count = max(len(installed_device_ids), len(service_ids), len(notes_values), 1)
+    item_count = max(len(service_ids), len(notes_values), 1)
     if item_count > MAX_DEVICES_PER_RECORD:
         errors["form"] = f"Add at most {MAX_DEVICES_PER_RECORD} devices to one record."
         item_count = MAX_DEVICES_PER_RECORD
@@ -214,11 +298,14 @@ async def submit_record(
         recommendation_values,
     ):
         values.extend([""] * (item_count - len(values)))
+    scope_count = max(len(form.getlist("project_id")), 1)
+    item_scopes, item_scope_errors = item_scope_indexes(form, item_count, scope_count)
+    errors.update(item_scope_errors)
 
     device_entries: list[dict] = []
     seen_items: set[tuple[str, int]] = set()
     for index in range(item_count):
-        installed_raw = installed_device_ids[index]
+        installed_raw = ""
         service_raw = service_ids[index]
         result_raw = (
             str(form.get(f"result_{index}") or form.get("result") or "").strip()
@@ -229,29 +316,9 @@ async def submit_record(
         issue_description = issue_values[index]
         recommendations = recommendation_values[index]
         suffix = f"_{index}"
+        assigned_scope = scopes[item_scopes[index]] if len(scopes) == scope_count else None
 
         selected_item = None
-        if not installed_raw:
-            errors[f"installed_device_id{suffix}"] = "Select the item you maintained."
-        else:
-            selected_item, item_error = resolve_maintenance_item(db, installed_raw)
-            if item_error:
-                errors[f"installed_device_id{suffix}"] = item_error
-        installed_device = selected_item.installed_device if selected_item else None
-        if selected_item and installed_device and project and installed_device.site_id != project.id:
-            errors[f"installed_device_id{suffix}"] = (
-                "Select a device installed for that project."
-            )
-        elif selected_item and installed_device and work_site and installed_device.effective_work_site_id != work_site.id:
-            errors[f"installed_device_id{suffix}"] = "Select a device installed at that site."
-        elif selected_item and selected_item.key in seen_items:
-            errors[f"installed_device_id{suffix}"] = (
-                "Each device can appear only once in this record."
-                if selected_item.installed_device_id is not None
-                else "Each item can appear only once in this record."
-            )
-        if selected_item:
-            seen_items.add(selected_item.key)
 
         service_id = entity_id(service_raw)
         service = db.get(ServiceType, service_id) if service_id is not None else None
@@ -272,9 +339,7 @@ async def submit_record(
                 "Describe the issue or observation for this result."
             )
 
-        if not notes:
-            errors[f"notes{suffix}"] = "Describe the maintenance you performed."
-        elif len(notes) > MAX_NOTE_LENGTH:
+        if len(notes) > MAX_NOTE_LENGTH:
             errors[f"notes{suffix}"] = f"Keep notes under {MAX_NOTE_LENGTH} characters."
 
         device_entries.append(
@@ -285,13 +350,51 @@ async def submit_record(
                 "notes": notes,
                 "issue_description": issue_description,
                 "recommendations": recommendations,
-                "selected_item": selected_item,
+                "selected_item": None,
                 "service": service,
                 "result_value": result,
+                "scope_index": item_scopes[index],
             }
         )
 
-    uploads_by_item: list[list[tuple[EvidencePhotoStage, UploadFile]]] = []
+    imported_by_item: list[dict] = [{} for _ in range(item_count)]
+    device_import_tokens = [str(value or "").strip() for value in form.getlist("device_import_token")]
+    device_import_tokens.extend([""] * (scope_count - len(device_import_tokens)))
+    for scope in scopes:
+        token = device_import_tokens[scope.index]
+        if not token:
+            continue
+        scope_rows, import_error = load_entry_import(
+            token,
+            entry_kind="preventive-maintenance",
+            project_id=scope.project.id,
+            sub_project_id=scope.sub_project.id if scope.sub_project else None,
+            site_id=scope.site.id,
+        )
+        error_key = "device_import_token" if scope.index == 0 else f"device_import_token_scope_{scope.index}"
+        current_error = "" if import_error else validate_current_import_rows(
+            db, scope_rows, entry_kind="preventive-maintenance", project_id=scope.project.id, site_id=scope.site.id
+        )
+        indexes = [index for index, entry in enumerate(device_entries) if entry["scope_index"] == scope.index]
+        if import_error:
+            errors[error_key] = import_error
+        elif current_error:
+            errors[error_key] = current_error
+        elif len(scope_rows) != len(indexes):
+            errors[error_key] = "The Excel preview and maintenance item count do not match. Preview the file again."
+        else:
+            for index, imported in zip(indexes, scope_rows):
+                entry = device_entries[index]
+                imported_by_item[index] = imported
+                if entry["selected_item"] is None or entry["selected_item"].device_id != imported.get("device_id"):
+                    errors[f"installed_device_id_{index}"] = "This item no longer matches the Excel preview. Preview the file again."
+            if any(row.get("asset_conflicts") for row in scope_rows) and not confirm_asset_overwrites:
+                errors[error_key] = "Confirm replacement of the existing Installed Asset values shown in the Excel preview."
+    device_import_token = device_import_tokens[0] if device_import_tokens else ""
+    if any(key.startswith("device_import_token_scope_") for key in errors):
+        errors.setdefault("form", "Review the Excel import in each Site section.")
+
+    uploads_by_item: list[list[tuple[EvidencePhotoStage, UploadFile, str, int]]] = []
     for index in range(item_count):
         before_uploads = [
             upload for upload in form.getlist(f"before_photos_{index}")
@@ -309,10 +412,16 @@ async def submit_record(
             )
             if isinstance(upload, UploadFile) and upload.filename
         ]
+        before_descriptions = [str(value).strip() for value in form.getlist(f"before_photo_descriptions_{index}")]
+        after_descriptions = [str(value).strip() for value in form.getlist(f"after_photo_descriptions_{index}")]
+        before_descriptions.extend([""] * (len(before_uploads) - len(before_descriptions)))
+        after_descriptions.extend([""] * (len(after_uploads) - len(after_descriptions)))
+        before_descriptions = before_descriptions[: len(before_uploads)]
+        after_descriptions = after_descriptions[: len(after_uploads)]
         uploads = [
-            *((EvidencePhotoStage.BEFORE, upload) for upload in before_uploads),
-            *((EvidencePhotoStage.AFTER, upload) for upload in after_uploads),
-            *((EvidencePhotoStage.LEGACY, upload) for upload in legacy_uploads),
+            *((EvidencePhotoStage.BEFORE, upload, before_descriptions[position], position) for position, upload in enumerate(before_uploads)),
+            *((EvidencePhotoStage.AFTER, upload, after_descriptions[position], position) for position, upload in enumerate(after_uploads)),
+            *((EvidencePhotoStage.LEGACY, upload, "", position) for position, upload in enumerate(legacy_uploads)),
         ]
         uploads_by_item.append(uploads)
         if not uploads:
@@ -323,15 +432,17 @@ async def submit_record(
             errors[f"after_photos_{index}"] = "Attach at most 10 after photos."
         elif len(legacy_uploads) > settings.max_photos_per_record:
             errors[f"photos_{index}"] = "Attach at most 10 photos."
+        elif any(len(description) > MAX_NOTE_LENGTH for description in before_descriptions + after_descriptions):
+            errors[f"photos_{index}"] = f"Keep each photo description under {MAX_NOTE_LENGTH} characters."
 
     stored_by_item: list[list] = [[] for _ in range(item_count)]
     if not errors:
         for index, uploads in enumerate(uploads_by_item):
-            for stage, upload in uploads:
+            for stage, upload, description, position in uploads:
                 data = await upload.read()
                 try:
                     stored_by_item[index].append(
-                        (stage, store_image(upload.filename, data))
+                        (stage, store_image(upload.filename, data), description, position)
                     )
                 except UploadError as exc:
                     errors[f"photos_{index}"] = str(exc)
@@ -341,12 +452,12 @@ async def submit_record(
                     *[
                         stored.storage_key
                         for item_stored in stored_by_item
-                        for _, stored in item_stored
+                        for _, stored, _, _ in item_stored
                     ],
                     *[
                         stored.thumbnail_key
                         for item_stored in stored_by_item
-                        for _, stored in item_stored
+                        for _, stored, _, _ in item_stored
                     ],
                 )
                 stored_by_item = [[] for _ in range(item_count)]
@@ -354,8 +465,9 @@ async def submit_record(
 
     if errors:
         payload = {
-            "project_id": project_id_raw,
-            "quotation_number": quotation_number_raw,
+        "project_id": project_id_raw,
+        "sub_project_id": sub_project_id_raw,
+        "device_import_token": device_import_token,
             "work_site_id": work_site_id_raw,
             "devices": [
                 {
@@ -385,8 +497,8 @@ async def submit_record(
 
     if not consume_form_token(request, form.get("form_token")):
         delete_stored(
-            *[s.storage_key for group in stored_by_item for _, s in group],
-            *[s.thumbnail_key for group in stored_by_item for _, s in group],
+            *[s.storage_key for group in stored_by_item for _, s, _, _ in group],
+            *[s.thumbnail_key for group in stored_by_item for _, s, _, _ in group],
         )
         message = (
             "This preventive maintenance record was already submitted. "
@@ -410,22 +522,27 @@ async def submit_record(
         )
 
     assert project and work_site
-    assert quotation
-    assert all(
-        entry["service"] and entry["selected_item"] and entry["result_value"]
-        for entry in device_entries
-    )
+    assert all(entry["service"] and entry["result_value"] for entry in device_entries)
+    all_device_entries = device_entries
+    all_stored_by_item = stored_by_item
+    first_indexes = [index for index, entry in enumerate(all_device_entries) if entry["scope_index"] == 0]
+    device_entries = [all_device_entries[index] for index in first_indexes]
+    stored_by_item = [all_stored_by_item[index] for index in first_indexes]
+    imported_rows = [imported_by_item[index] for index in first_indexes] if device_import_token else []
     first = device_entries[0]
     first_service: ServiceType = first["service"]
-    first_device = first["selected_item"]
+    for imported in (row for row in imported_by_item if row):
+        apply_asset_metadata(db, imported, allow_overwrite=confirm_asset_overwrites)
     now = utcnow()
     record = MaintenanceRecord(
         record_number=next_record_number(db, now),
         site_id=project.id,
+        sub_project_id=sub_project.id if sub_project else None,
+        sub_project_name=sub_project.name if sub_project else "General",
         service_type_id=first_service.id,
         submitted_by_id=user.id,
-        quotation_id=quotation.id,
-        quotation_number=quotation.quotation_number,
+        quotation_id=None,
+        quotation_number=None,
         site_name=work_site.name,
         customer_name=project.name,
         site_address=project.address,
@@ -449,50 +566,30 @@ async def submit_record(
             original_filename=s.original_filename,
             content_type=s.content_type,
             file_size=s.file_size,
+            description=description or None,
+            position=position,
             uploaded_at=now,
         )
-        for _, s in stored_by_item[0]
+        for _, s, description, position in stored_by_item[0]
     ]
-    record.device_evidence = MaintenanceRecordDevice(
-        installed_device_id=first_device.installed_device_id,
-        device_id=first_device.device_id,
-        device_name=first_device.device_name,
-        manufacturer=first_device.manufacturer,
-        device_model=first_device.device_model,
-        serial_number=first_device.serial_number,
-    )
     record.work_site_evidence = MaintenanceRecordSite(
         site_id=work_site.id,
         site_name=work_site.name,
     )
-    for entry in device_entries[1:]:
-        item_device = entry["selected_item"]
-        item_service: ServiceType = entry["service"]
-        record.additional_device_evidence.append(
-            MaintenanceRecordAdditionalDevice(
-                installed_device_id=item_device.installed_device_id,
-                service_type_id=item_service.id,
-                service_name=item_service.name,
-                device_id=item_device.device_id,
-                device_name=item_device.device_name,
-                manufacturer=item_device.manufacturer,
-                device_model=item_device.device_model,
-                serial_number=item_device.serial_number,
-            )
-        )
     for index, entry in enumerate(device_entries):
-        item_device = entry["selected_item"]
         item_service: ServiceType = entry["service"]
         item = MaintenanceRecordItem(
-            installed_device_id=item_device.installed_device_id,
+            installed_device_id=None,
             service_type_id=item_service.id,
             position=index,
             service_name=item_service.name,
-            device_id=item_device.device_id,
-            device_name=item_device.device_name,
-            manufacturer=item_device.manufacturer,
-            device_model=item_device.device_model,
-            serial_number=item_device.serial_number,
+            device_id=None,
+            device_name=item_service.name,
+            manufacturer=None,
+            device_model=None,
+            serial_number=None,
+            location_name=work_site.name,
+            imported_from_excel=False,
             result=entry["result_value"],
             notes=entry["notes"],
             issue_description=entry["issue_description"] or None,
@@ -506,13 +603,45 @@ async def submit_record(
                 content_type=stored.content_type,
                 file_size=stored.file_size,
                 stage=stage,
+                description=description or None,
+                position=position,
                 uploaded_at=now,
             )
-            for stage, stored in stored_by_item[index]
+            for stage, stored, description, position in stored_by_item[index]
         ]
         record.work_items.append(item)
 
+    for item in record.work_items:
+        apply_scope_snapshot(item, scopes[0])
     db.add(record)
+    for scope in scopes[1:]:
+        indexes = [index for index, entry in enumerate(all_device_entries) if entry["scope_index"] == scope.index]
+        additional = _new_preventive_record(
+            db,
+            scope=scope,
+            entries=[all_device_entries[index] for index in indexes],
+            imported_rows=(
+                [imported_by_item[index] for index in indexes]
+                if device_import_tokens[scope.index]
+                else []
+            ),
+            stored_by_item=[all_stored_by_item[index] for index in indexes],
+            user=user,
+            participant_ids=participant_ids,
+            participants=participants,
+            now=now,
+            record_number=record.record_number,
+        )
+        scoped_items = list(additional.work_items)
+        additional.work_items = []
+        for scoped_item in scoped_items:
+            scoped_item.position = len(record.work_items)
+            apply_scope_snapshot(scoped_item, scope)
+            record.work_items.append(scoped_item)
+    record.device_data_rows = [
+        MaintenanceDataRow(**row_model_values(row, scopes[row["scope_index"]]))
+        for row in data_rows
+    ]
     try:
         db.commit()
     except Exception:
@@ -520,13 +649,13 @@ async def submit_record(
         delete_stored(
             *[
                 stored.storage_key
-                for item_stored in stored_by_item
-                for _, stored in item_stored
+                for item_stored in all_stored_by_item
+                for _, stored, _, _ in item_stored
             ],
             *[
                 stored.thumbnail_key
-                for item_stored in stored_by_item
-                for _, stored in item_stored
+                for item_stored in all_stored_by_item
+                for _, stored, _, _ in item_stored
             ],
         )
         message = "The record could not be saved. Try again."
@@ -547,11 +676,12 @@ async def submit_record(
         )
 
     db.refresh(record)
+    record_numbers = [record.record_number]
     flash(request, f"Preventive maintenance record {record.record_number} saved.")
     target = f"/maintenance/records/{record.id}"
     if _is_ajax(request):
         return localized_json(request,
-            {"ok": True, "redirect": target, "record_number": record.record_number}, status_code=201
+            {"ok": True, "redirect": target, "record_number": record.record_number, "record_numbers": record_numbers}, status_code=201
         )
     return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
 
@@ -787,7 +917,8 @@ def _load_record(db: Session, record_id: int, user: User) -> MaintenanceRecord:
     )
     if record is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Preventive maintenance record not found")
-    if not user.can_access_project(record.site_id):
+    project_ids = {item.project_id or record.site_id for item in record.work_items} or {record.site_id}
+    if not all(user.can_access_project(project_id) for project_id in project_ids):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "This record is outside your assigned Projects",
@@ -810,6 +941,9 @@ def record_details(
             "active_nav": "records",
             "record": record,
             "revisions": revisions_for(db, "preventive_maintenance", record.id),
+            "linked_reports": linked_reports(
+                db, ServiceReportRecord.preventive_record_id, record.id
+            ),
         },
     )
 
@@ -820,6 +954,8 @@ def _edit_items(record: MaintenanceRecord) -> list[dict]:
             {
                 "data": item,
                 "photos": item.photos,
+                "photo_groups": grouped_photos(item.photos),
+                "photo_media_path": "/media/maintenance-item-photo",
                 "device_label": f"{item.device_name} — {item.device_model}",
                 "service_label": item.service_name,
                 "serial_number": item.serial_number,
@@ -831,6 +967,8 @@ def _edit_items(record: MaintenanceRecord) -> list[dict]:
         {
             "data": record,
             "photos": record.photos,
+            "photo_groups": grouped_photos(record.photos),
+            "photo_media_path": "/media/photo",
             "device_label": (
                 f"{device.device_name} — {device.device_model}"
                 if device
@@ -930,7 +1068,8 @@ async def edit_record(
     wrappers = _edit_items(record)
     parsed: list[tuple[MaintenanceResult, str, str, str]] = []
     removals: list[set[int]] = []
-    uploads_by_item: list[list[tuple[EvidencePhotoStage, UploadFile]]] = []
+    uploads_by_item: list[list[tuple[EvidencePhotoStage, UploadFile, str]]] = []
+    description_updates_by_item: list[dict[int, str]] = []
     error = ""
     for index, wrapper in enumerate(wrappers):
         try:
@@ -959,6 +1098,12 @@ async def edit_record(
         if not remove_ids.issubset(current_ids):
             error = f"One selected photo for item {index + 1} no longer exists."
             break
+        description_updates, description_error = existing_photo_descriptions(
+            form, wrapper["photos"], maximum=MAX_NOTE_LENGTH
+        )
+        if description_error:
+            error = f"Item {index + 1}: {description_error}"
+            break
         before_uploads = [
             upload for upload in form.getlist(f"add_before_photos_{index}")
             if isinstance(upload, UploadFile) and upload.filename
@@ -971,10 +1116,25 @@ async def edit_record(
             upload for upload in form.getlist(f"add_photos_{index}")
             if isinstance(upload, UploadFile) and upload.filename
         ]
+        before_descriptions, description_error = new_photo_descriptions(
+            form,
+            f"add_before_photo_descriptions_{index}",
+            len(before_uploads),
+            maximum=MAX_NOTE_LENGTH,
+        )
+        after_descriptions, description_error = new_photo_descriptions(
+            form,
+            f"add_after_photo_descriptions_{index}",
+            len(after_uploads),
+            maximum=MAX_NOTE_LENGTH,
+        ) if description_error is None else ([], description_error)
+        if description_error:
+            error = f"Item {index + 1}: {description_error}"
+            break
         uploads = [
-            *((EvidencePhotoStage.BEFORE, upload) for upload in before_uploads),
-            *((EvidencePhotoStage.AFTER, upload) for upload in after_uploads),
-            *((EvidencePhotoStage.LEGACY, upload) for upload in legacy_uploads),
+            *((EvidencePhotoStage.BEFORE, upload, before_descriptions[position]) for position, upload in enumerate(before_uploads)),
+            *((EvidencePhotoStage.AFTER, upload, after_descriptions[position]) for position, upload in enumerate(after_uploads)),
+            *((EvidencePhotoStage.LEGACY, upload, "") for upload in legacy_uploads),
         ]
         kept = [photo for photo in wrapper["photos"] if photo.id not in remove_ids]
         before_count = sum(
@@ -997,6 +1157,7 @@ async def edit_record(
         parsed.append((result, notes, issue, recommendations))
         removals.append(remove_ids)
         uploads_by_item.append(uploads)
+        description_updates_by_item.append(description_updates)
 
     if error:
         return render(
@@ -1009,14 +1170,14 @@ async def edit_record(
     stored_by_item: list[list] = [[] for _ in wrappers]
     try:
         for index, uploads in enumerate(uploads_by_item):
-            for stage, upload in uploads:
+            for stage, upload, description in uploads:
                 stored_by_item[index].append(
-                    (stage, store_image(upload.filename, await upload.read()))
+                    (stage, store_image(upload.filename, await upload.read()), description)
                 )
     except UploadError as exc:
         delete_stored(
-            *[stored.storage_key for group in stored_by_item for _, stored in group],
-            *[stored.thumbnail_key for group in stored_by_item for _, stored in group],
+            *[stored.storage_key for group in stored_by_item for _, stored, _ in group],
+            *[stored.thumbnail_key for group in stored_by_item for _, stored, _ in group],
         )
         return render(
             request,
@@ -1050,6 +1211,19 @@ async def edit_record(
         removed = [
             photo for photo in list(wrapper["photos"]) if photo.id in removals[index]
         ]
+        photo_note_changes = []
+        for photo in wrapper["photos"]:
+            if photo.id in removals[index]:
+                continue
+            value = description_updates_by_item[index][photo.id] or None
+            delta = changed(photo.description, value)
+            if delta:
+                photo_note_changes.append({"photo_id": photo.id, **delta})
+                photo.description = value
+                if record.work_items and index == 0:
+                    for legacy in record.photos:
+                        if legacy.storage_key == photo.storage_key:
+                            legacy.description = value
         for photo in removed:
             removed_keys.update(
                 key for key in (photo.storage_key, photo.thumbnail_key) if key
@@ -1059,7 +1233,11 @@ async def edit_record(
                 for legacy in list(record.photos):
                     if legacy.storage_key == photo.storage_key:
                         record.photos.remove(legacy)
-        for stage, stored in stored_by_item[index]:
+        for stage, stored, description in stored_by_item[index]:
+            position = sum(
+                getattr(photo, "stage", EvidencePhotoStage.LEGACY) == stage
+                for photo in wrapper["photos"]
+            )
             if record.work_items:
                 item.photos.append(
                     MaintenanceItemPhoto(
@@ -1069,6 +1247,8 @@ async def edit_record(
                         content_type=stored.content_type,
                         file_size=stored.file_size,
                         stage=stage,
+                        description=description or None,
+                        position=position,
                         uploaded_at=now,
                     )
                 )
@@ -1080,6 +1260,8 @@ async def edit_record(
                             original_filename=stored.original_filename,
                             content_type=stored.content_type,
                             file_size=stored.file_size,
+                            description=description or None,
+                            position=position,
                             uploaded_at=now,
                         )
                     )
@@ -1091,16 +1273,19 @@ async def edit_record(
                         original_filename=stored.original_filename,
                         content_type=stored.content_type,
                         file_size=stored.file_size,
+                        description=description or None,
+                        position=position,
                         uploaded_at=now,
                     )
                 )
-        if removed or stored_by_item[index]:
+        if removed or stored_by_item[index] or photo_note_changes:
             changes[f"item_{index + 1}_photos"] = {
                 "removed": [photo.original_filename for photo in removed],
                 "added": [
                     f"{stage.value}: {stored.original_filename}"
-                    for stage, stored in stored_by_item[index]
+                    for stage, stored, _ in stored_by_item[index]
                 ],
+                "notes_edited": photo_note_changes,
             }
 
     if record.work_items:
@@ -1122,8 +1307,8 @@ async def edit_record(
 
     if not changes:
         delete_stored(
-            *[stored.storage_key for group in stored_by_item for _, stored in group],
-            *[stored.thumbnail_key for group in stored_by_item for _, stored in group],
+            *[stored.storage_key for group in stored_by_item for _, stored, _ in group],
+            *[stored.thumbnail_key for group in stored_by_item for _, stored, _ in group],
         )
         flash(request, "No changes were made.")
         return RedirectResponse(
@@ -1145,8 +1330,8 @@ async def edit_record(
     except Exception:
         db.rollback()
         delete_stored(
-            *[stored.storage_key for group in stored_by_item for _, stored in group],
-            *[stored.thumbnail_key for group in stored_by_item for _, stored in group],
+            *[stored.storage_key for group in stored_by_item for _, stored, _ in group],
+            *[stored.thumbnail_key for group in stored_by_item for _, stored, _ in group],
         )
         return render(
             request,
@@ -1189,6 +1374,9 @@ async def delete_record(
         if key
     }
     record_number = record.record_number
+    deleted_reports = delete_linked_reports(
+        db, ServiceReportRecord.preventive_record_id, record.id
+    )
     add_revision(
         db,
         record_type="preventive_maintenance",
@@ -1201,7 +1389,12 @@ async def delete_record(
     db.delete(record)
     db.commit()
     delete_stored(*keys)
-    flash(request, f"{record_number} permanently deleted.")
+    report_note = (
+        f" {len(deleted_reports)} linked generated report(s) were also deleted."
+        if deleted_reports
+        else ""
+    )
+    flash(request, f"{record_number} permanently deleted.{report_note}")
     return RedirectResponse(
         "/maintenance/records", status_code=status.HTTP_303_SEE_OTHER
     )

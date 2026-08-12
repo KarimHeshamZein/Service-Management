@@ -5,11 +5,13 @@ the dependency is the actual control.
 """
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, Form, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..account_recovery import (
     VERIFY_LIFETIME,
@@ -27,11 +29,15 @@ from ..models import (
     CustomerProjectAssignment,
     AdminRecoveryContact,
     DeviceCatalog,
+    GeneralMaintenanceRecord,
     InstalledDevice,
+    InstallationRecord,
     InstallationRecordSite,
     MaintenanceRecord,
     ServiceType,
     Site,
+    SubProject,
+    SubProjectSite,
     User,
     UserRole,
     WorkSite,
@@ -42,6 +48,7 @@ from ..security import csrf_valid, hash_password
 router = APIRouter(dependencies=[Depends(require_catalog_manager)])
 
 MIN_PASSWORD_LENGTH = 8
+MAX_DESCRIPTION_LENGTH = 5000
 
 
 def _guard(request: Request, csrf: str, back: str) -> RedirectResponse | None:
@@ -81,6 +88,30 @@ def _delete_or_deactivate(db: Session, model, row_id: int) -> str:
         return "deactivated"
 
 
+def _optional_date_range(
+    start_raw: str,
+    end_raw: str,
+) -> tuple[date | None, date | None, str | None]:
+    try:
+        start = date.fromisoformat(start_raw) if start_raw.strip() else None
+        end = date.fromisoformat(end_raw) if end_raw.strip() else None
+    except ValueError:
+        return None, None, "Enter valid project dates."
+    if start and end and end < start:
+        return None, None, "End date must be on or after start date."
+    return start, end, None
+
+
+def _project_record_usage(db: Session) -> dict[int, int]:
+    usage: dict[int, int] = {}
+    for model in (MaintenanceRecord, InstallationRecord, GeneralMaintenanceRecord):
+        for project_id, count in db.execute(
+            select(model.site_id, func.count()).group_by(model.site_id)
+        ).all():
+            usage[project_id] = usage.get(project_id, 0) + int(count)
+    return usage
+
+
 # ------------------------------------------------------------------ sites
 
 
@@ -93,37 +124,72 @@ def sites_page(request: Request, q: str = "", db: Session = Depends(get_db)):
 
 
 @router.get("/projects")
-def projects_page(request: Request, q: str = "", db: Session = Depends(get_db)):
-    stmt = select(Site).order_by(Site.is_active.desc(), Site.name)
-    term = q.strip()
-    if term:
-        like = f"%{term}%"
-        stmt = stmt.where(
-            or_(
-                Site.name.ilike(like),
-                Site.city.ilike(like),
-                Site.address.ilike(like),
-                Site.contact_person.ilike(like),
-                Site.contact_number.ilike(like),
-            )
+def projects_page(
+    request: Request,
+    q: str = "",
+    project_id: str = "",
+    db: Session = Depends(get_db),
+):
+    stmt = (
+        select(Site)
+        .options(
+            selectinload(Site.customer_assignments).selectinload(
+                CustomerProjectAssignment.user
+            ),
+            selectinload(Site.sub_projects)
+            .selectinload(SubProject.site_assignments)
+            .selectinload(SubProjectSite.site),
         )
+        .order_by(Site.is_active.desc(), Site.name)
+    )
+    term = q.strip()
     projects = list(db.scalars(stmt))
-    usage = {
-        row[0]: int(row[1])
-        for row in db.execute(
-            select(MaintenanceRecord.site_id, func.count()).group_by(
-                MaintenanceRecord.site_id
-            )
-        ).all()
-    }
+    if term:
+        needle = term.casefold()
+        projects = [
+            project
+            for project in projects
+            if needle
+            in " ".join(
+                filter(
+                    None,
+                    (
+                        project.name,
+                        project.city,
+                        project.address,
+                        project.contact_person,
+                        project.contact_number,
+                        project.description,
+                        *(assignment.user.full_name for assignment in project.customer_assignments),
+                        *(sub_project.name for sub_project in project.sub_projects),
+                        *(
+                            assignment.site.name
+                            for sub_project in project.sub_projects
+                            for assignment in sub_project.site_assignments
+                        ),
+                    ),
+                )
+            ).casefold()
+        ]
+    selected_id = entity_id(project_id)
+    selected_project = next(
+        (project for project in projects if project.id == selected_id),
+        projects[0] if projects else None,
+    )
     return render(
         request,
         "projects.html",
         {
             "active_nav": "projects",
             "projects": projects,
+            "selected_project": selected_project,
+            "available_sites": list(
+                db.scalars(
+                    select(WorkSite).order_by(WorkSite.is_active.desc(), WorkSite.name)
+                )
+            ),
             "q": term,
-            "usage": usage,
+            "usage": _project_record_usage(db),
         },
     )
 
@@ -136,6 +202,9 @@ def create_project(
     city: str = Form(""),
     contact_person: str = Form(""),
     contact_number: str = Form(""),
+    description: str = Form(""),
+    start_date: str = Form(""),
+    end_date: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
@@ -145,19 +214,35 @@ def create_project(
     if not name or not address:
         flash(request, "Project name and address or location are required.", "error")
         return _redirect("/projects")
+    description = description.strip()
+    if len(description) > MAX_DESCRIPTION_LENGTH:
+        flash(request, f"Keep the project description under {MAX_DESCRIPTION_LENGTH} characters.", "error")
+        return _redirect("/projects")
+    starts_on, ends_on, date_error = _optional_date_range(start_date, end_date)
+    if date_error:
+        flash(request, date_error, "error")
+        return _redirect("/projects")
     if db.scalar(select(Site).where(func.lower(Site.name) == name.lower())):
         flash(request, f"“{name}” already exists.", "error")
         return _redirect("/projects")
-    db.add(
-        Site(
-            name=name,
-            customer_name=name,
-            address=address,
-            city=city.strip() or None,
-            contact_person=contact_person.strip() or None,
-            contact_number=contact_number.strip() or None,
-        )
+    project = Site(
+        name=name,
+        customer_name=name,
+        address=address,
+        city=city.strip() or None,
+        contact_person=contact_person.strip() or None,
+        contact_number=contact_number.strip() or None,
+        description=description or None,
+        start_date=starts_on,
+        end_date=ends_on,
     )
+    general = SubProject(name="General")
+    general.site_assignments = [
+        SubProjectSite(site_id=site.id)
+        for site in db.scalars(select(WorkSite).order_by(WorkSite.id))
+    ]
+    project.sub_projects.append(general)
+    db.add(project)
     db.commit()
     flash(request, f"Project “{name}” added.")
     return _redirect("/projects")
@@ -172,6 +257,9 @@ def edit_project(
     city: str = Form(""),
     contact_person: str = Form(""),
     contact_number: str = Form(""),
+    description: str = Form(""),
+    start_date: str = Form(""),
+    end_date: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
 ):
@@ -185,6 +273,14 @@ def edit_project(
     if not name or not address:
         flash(request, "Project name and address or location are required.", "error")
         return _redirect("/projects")
+    description = description.strip()
+    if len(description) > MAX_DESCRIPTION_LENGTH:
+        flash(request, f"Keep the project description under {MAX_DESCRIPTION_LENGTH} characters.", "error")
+        return _redirect(f"/projects?project_id={project.id}")
+    starts_on, ends_on, date_error = _optional_date_range(start_date, end_date)
+    if date_error:
+        flash(request, date_error, "error")
+        return _redirect(f"/projects?project_id={project.id}")
     duplicate = db.scalar(
         select(Site).where(
             Site.id != project.id,
@@ -200,10 +296,171 @@ def edit_project(
     project.city = city.strip() or None
     project.contact_person = contact_person.strip() or None
     project.contact_number = contact_number.strip() or None
+    project.description = description or None
+    project.start_date = starts_on
+    project.end_date = ends_on
     project.updated_at = utcnow()
     db.commit()
     flash(request, f"Project “{project.name}” updated. Existing records keep their original details.")
     return _redirect("/projects")
+
+
+@router.post("/projects/{project_id}/sub-projects")
+def create_sub_project(
+    project_id: int,
+    request: Request,
+    name: str = Form(""),
+    description: str = Form(""),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    back = f"/projects?project_id={project_id}"
+    if (bad := _guard(request, csrf_token, back)):
+        return bad
+    project = db.get(Site, project_id)
+    name, description = name.strip(), description.strip()
+    if project is None:
+        flash(request, "That Main Project no longer exists.", "error")
+        return _redirect("/projects")
+    if not name:
+        flash(request, "Enter a Sub Project name.", "error")
+        return _redirect(back)
+    if len(name) > 160 or len(description) > MAX_DESCRIPTION_LENGTH:
+        flash(request, "Keep the Sub Project name and description within their limits.", "error")
+        return _redirect(back)
+    duplicate = db.scalar(
+        select(SubProject).where(
+            SubProject.project_id == project.id,
+            func.lower(SubProject.name) == name.lower(),
+        )
+    )
+    if duplicate:
+        flash(request, f"Sub Project “{name}” already exists under this Main Project.", "error")
+        return _redirect(back)
+    db.add(SubProject(project_id=project.id, name=name, description=description or None))
+    db.commit()
+    flash(request, f"Sub Project “{name}” added.")
+    return _redirect(back)
+
+
+@router.post("/sub-projects/{sub_project_id}/edit")
+def edit_sub_project(
+    sub_project_id: int,
+    request: Request,
+    name: str = Form(""),
+    description: str = Form(""),
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    sub_project = db.get(SubProject, sub_project_id)
+    back = f"/projects?project_id={sub_project.project_id}" if sub_project else "/projects"
+    if (bad := _guard(request, csrf_token, back)):
+        return bad
+    name, description = name.strip(), description.strip()
+    if sub_project is None:
+        flash(request, "That Sub Project no longer exists.", "error")
+        return _redirect("/projects")
+    if not name or len(name) > 160 or len(description) > MAX_DESCRIPTION_LENGTH:
+        flash(request, "Enter a valid Sub Project name and description.", "error")
+        return _redirect(back)
+    duplicate = db.scalar(
+        select(SubProject).where(
+            SubProject.project_id == sub_project.project_id,
+            SubProject.id != sub_project.id,
+            func.lower(SubProject.name) == name.lower(),
+        )
+    )
+    if duplicate:
+        flash(request, f"Sub Project “{name}” already exists under this Main Project.", "error")
+        return _redirect(back)
+    sub_project.name = name
+    sub_project.description = description or None
+    sub_project.updated_at = utcnow()
+    db.commit()
+    flash(request, f"Sub Project “{name}” updated.")
+    return _redirect(back)
+
+
+@router.post(
+    "/sub-projects/{sub_project_id}/toggle",
+    dependencies=[Depends(require_admin)],
+)
+def toggle_sub_project(
+    sub_project_id: int,
+    request: Request,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    sub_project = db.get(SubProject, sub_project_id)
+    back = f"/projects?project_id={sub_project.project_id}" if sub_project else "/projects"
+    if (bad := _guard(request, csrf_token, back)):
+        return bad
+    if sub_project is None:
+        flash(request, "That Sub Project no longer exists.", "error")
+        return _redirect("/projects")
+    sub_project.is_active = not sub_project.is_active
+    sub_project.updated_at = utcnow()
+    db.commit()
+    flash(request, f"Sub Project “{sub_project.name}” {'activated' if sub_project.is_active else 'deactivated'}.")
+    return _redirect(back)
+
+
+@router.post(
+    "/sub-projects/{sub_project_id}/delete",
+    dependencies=[Depends(require_admin)],
+)
+def delete_sub_project(
+    sub_project_id: int,
+    request: Request,
+    csrf_token: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    sub_project = db.get(SubProject, sub_project_id)
+    back = f"/projects?project_id={sub_project.project_id}" if sub_project else "/projects"
+    if (bad := _guard(request, csrf_token, back)):
+        return bad
+    if sub_project is None:
+        flash(request, "That Sub Project no longer exists.", "error")
+        return _redirect("/projects")
+    name = sub_project.name
+    outcome = _delete_or_deactivate(db, SubProject, sub_project_id)
+    flash(
+        request,
+        f"Sub Project “{name}” {'permanently deleted' if outcome == 'deleted' else 'deactivated because it is referenced by history'}.",
+    )
+    return _redirect(back)
+
+
+@router.post("/sub-projects/{sub_project_id}/sites")
+async def assign_sub_project_sites(
+    sub_project_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    sub_project = db.get(SubProject, sub_project_id)
+    back = f"/projects?project_id={sub_project.project_id}" if sub_project else "/projects"
+    form = await request.form()
+    if (bad := _guard(request, str(form.get("csrf_token") or ""), back)):
+        return bad
+    if sub_project is None:
+        flash(request, "That Sub Project no longer exists.", "error")
+        return _redirect("/projects")
+    submitted_ids = {entity_id(value) for value in form.getlist("site_ids")}
+    if None in submitted_ids:
+        flash(request, "Choose valid Sites.", "error")
+        return _redirect(back)
+    site_ids = {int(value) for value in submitted_ids}
+    valid_ids = set(db.scalars(select(WorkSite.id).where(WorkSite.id.in_(site_ids)))) if site_ids else set()
+    if valid_ids != site_ids:
+        flash(request, "One or more selected Sites no longer exist.", "error")
+        return _redirect(back)
+    sub_project.site_assignments = [
+        SubProjectSite(site_id=site_id) for site_id in sorted(site_ids)
+    ]
+    sub_project.updated_at = utcnow()
+    db.commit()
+    flash(request, f"Sites assigned to Sub Project “{sub_project.name}”.")
+    return _redirect(back)
 
 
 @router.post(

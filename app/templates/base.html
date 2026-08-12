@@ -24,10 +24,10 @@
 
     <nav class="nav" aria-label="{{ t('nav.main') }}">
       {% if user and not user.is_customer %}
-      <a href="/dashboard" class="{{ 'active' if active_nav == 'dashboard' }}">{{ t('nav.dashboard') }}</a>
+      <a href="/dashboard" class="nav-home {{ 'active' if active_nav == 'dashboard' }}"><span class="nav-item-icon" aria-hidden="true">⌂</span>{{ t('nav.dashboard') }}</a>
       <div class="nav-section" data-nav-section="data-entry" data-active="{{ 'true' if active_nav in ['installation_submit', 'maintenance', 'general_maintenance'] else 'false' }}">
         <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-data-entry">
-          <span>{{ t('nav.group.data_entry') }}</span><span class="nav-chevron" aria-hidden="true"></span>
+          <span class="nav-group-label"><span class="nav-item-icon" aria-hidden="true">＋</span>{{ t('nav.group.data_entry') }}</span><span class="nav-chevron" aria-hidden="true"></span>
         </button>
         <div class="nav-group-panel" id="nav-data-entry">
           <a href="/installations" class="sub {{ 'active' if active_nav == 'installation_submit' }}">{{ t('nav.installations') }}</a>
@@ -39,7 +39,7 @@
 
       <div class="nav-section" data-nav-section="records" data-active="{{ 'true' if active_nav in ['all_records', 'installation_records', 'records', 'general_maintenance_records'] else 'false' }}">
         <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-records">
-          <span>{{ t('nav.group.records') }}</span><span class="nav-chevron" aria-hidden="true"></span>
+          <span class="nav-group-label"><span class="nav-item-icon" aria-hidden="true">▤</span>{{ t('nav.group.records') }}</span><span class="nav-chevron" aria-hidden="true"></span>
         </button>
         <div class="nav-group-panel" id="nav-records">
           <a href="/records" class="sub {{ 'active' if active_nav == 'all_records' }}">{{ t('nav.records.all') }}</a>
@@ -49,12 +49,14 @@
         </div>
       </div>
 
-      <div class="nav-section" data-nav-section="reports" data-active="{{ 'true' if active_nav in ['reports', 'technician_audit'] else 'false' }}">
+      <div class="nav-section" data-nav-section="reports" data-active="{{ 'true' if active_nav in ['installation_reports', 'maintenance_reports', 'preventive_maintenance_reports', 'technician_audit'] else 'false' }}">
         <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-reports">
-          <span>{{ t('nav.group.reports') }}</span><span class="nav-chevron" aria-hidden="true"></span>
+          <span class="nav-group-label"><span class="nav-item-icon" aria-hidden="true">▣</span>{{ t('nav.group.reports') }}</span><span class="nav-chevron" aria-hidden="true"></span>
         </button>
         <div class="nav-group-panel" id="nav-reports">
-          <a href="/reports" class="sub {{ 'active' if active_nav == 'reports' }}">{{ t('nav.reports.service') }}</a>
+          <a href="/reports/installation" class="sub {{ 'active' if active_nav == 'installation_reports' }}">{{ t('nav.reports.installation') }}</a>
+          <a href="/reports/preventive-maintenance" class="sub {{ 'active' if active_nav == 'preventive_maintenance_reports' }}">{{ t('nav.reports.preventive_maintenance') }}</a>
+          <a href="/reports/maintenance" class="sub {{ 'active' if active_nav == 'maintenance_reports' }}">{{ t('nav.reports.maintenance') }}</a>
           {% if user and user.is_admin %}
           <a href="/reports/technician-audit" class="sub {{ 'active' if active_nav == 'technician_audit' }}">{{ t('nav.reports.technician_activity') }}</a>
           {% endif %}
@@ -64,7 +66,7 @@
       {% if user and user.can_access_pricing %}
       <div class="nav-section" data-nav-section="pricing" data-active="{{ 'true' if active_nav in ['pricing_quotations', 'pricing_items', 'pricing_settings'] else 'false' }}">
         <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-pricing">
-          <span>{{ t('nav.group.pricing') }}</span><span class="nav-chevron" aria-hidden="true"></span>
+          <span class="nav-group-label"><span class="nav-item-icon" aria-hidden="true">¤</span>{{ t('nav.group.pricing') }}</span><span class="nav-chevron" aria-hidden="true"></span>
         </button>
         <div class="nav-group-panel" id="nav-pricing">
           <a href="/pricing/quotations" class="sub {{ 'active' if active_nav == 'pricing_quotations' }}">{{ t('nav.pricing.quotations') }}</a>
@@ -77,9 +79,9 @@
       {% endif %}
 
       {% if user and user.can_manage_catalogs %}
-      <div class="nav-section" data-nav-section="management" data-active="{{ 'true' if active_nav in ['projects', 'sites', 'services', 'users', 'settings'] else 'false' }}">
+      <div class="nav-section" data-nav-section="management" data-active="{{ 'true' if active_nav in ['projects', 'sites', 'services', 'users', 'settings', 'audit_log'] else 'false' }}">
         <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-management">
-          <span>{{ t('nav.group.management') }}</span><span class="nav-chevron" aria-hidden="true"></span>
+          <span class="nav-group-label"><span class="nav-item-icon" aria-hidden="true">⚙</span>{{ t('nav.group.management') }}</span><span class="nav-chevron" aria-hidden="true"></span>
         </button>
         <div class="nav-group-panel" id="nav-management">
           <a href="/projects" class="sub {{ 'active' if active_nav == 'projects' }}">{{ t('nav.management.projects') }}</a>
@@ -88,6 +90,7 @@
           {% if user.is_admin %}
           <a href="/users" class="sub {{ 'active' if active_nav == 'users' }}">{{ t('nav.management.users') }}</a>
           <a href="/settings" class="sub {{ 'active' if active_nav == 'settings' }}">{{ t('nav.management.settings') }}</a>
+          <a href="/admin/audit-log" class="sub {{ 'active' if active_nav == 'audit_log' }}">{{ t('ui.audit.log') }}</a>
           {% endif %}
         </div>
       </div>
@@ -124,7 +127,24 @@
       <button class="burger" data-nav-toggle aria-label="{{ t('nav.open') }}" aria-controls="sidebar">
         <span></span>
       </button>
-      <strong>{% block topbar_title %}{{ settings.app_name }}{% endblock %}</strong>
+      <div class="topbar-title">
+        <a class="topbar-dashboard-link" href="/dashboard" aria-label="{{ t('nav.dashboard') }}" title="{{ t('nav.dashboard') }}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.8 12 3l9 7.8v9.7a.5.5 0 0 1-.5.5H15v-6H9v6H3.5a.5.5 0 0 1-.5-.5z"/></svg>
+          <span>{{ t('nav.dashboard') }}</span>
+        </a>
+        <strong>{% block topbar_title %}{{ settings.app_name }}{% endblock %}</strong>
+      </div>
+      {% if user and user.can_submit_records %}
+      <details class="quick-create no-print">
+        <summary class="btn btn-primary">{{ t('ui.quick.create') }}</summary>
+        <div class="quick-create-menu">
+          <a href="/installations">{{ t('ui.new.installation') }}</a>
+          <a href="/maintenance">{{ t('ui.new.preventive.maintenance') }}</a>
+          <a href="/general-maintenance">{{ t('ui.new.maintenance') }}</a>
+          {% if user.can_access_pricing %}<a href="/pricing/quotations/new">{{ t('ui.create.quotation') }}</a>{% endif %}
+        </div>
+      </details>
+      {% endif %}
     </header>
 
     <main class="content">

@@ -13,8 +13,10 @@ from .config import BASE_DIR, settings
 from .database import init_db
 from .deps import RedirectToLogin, login_redirect
 from .helpers import localized_json, render
+from .audit import write_request_audit
 from .routers import (
     admin,
+    audit_log,
     auth,
     dashboard,
     general_maintenance,
@@ -23,8 +25,10 @@ from .routers import (
     pricing,
     records,
     reports,
+    structured_reports,
     settings as settings_router,
 )
+from . import entry_device_imports
 
 
 @asynccontextmanager
@@ -65,9 +69,12 @@ def create_app() -> FastAPI:
     app.include_router(installations.router)
     app.include_router(records.router)
     app.include_router(reports.router)
+    app.include_router(structured_reports.router)
+    app.include_router(entry_device_imports.router)
     app.include_router(pricing.router)
     app.include_router(settings_router.router)
     app.include_router(admin.router)
+    app.include_router(audit_log.router)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -75,6 +82,7 @@ def create_app() -> FastAPI:
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("X-Frame-Options", "DENY")
         response.headers.setdefault("Referrer-Policy", "same-origin")
+        write_request_audit(request, response.status_code)
         return response
 
     @app.exception_handler(RedirectToLogin)

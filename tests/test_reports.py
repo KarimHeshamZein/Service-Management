@@ -30,16 +30,38 @@ def test_reports_and_records_share_search_and_type_filters(client, db):
     client.get("/dashboard")  # consume the record-submission flash
 
     records_page = client.get("/records?type=installation&q=REPORT-SERIAL-100")
-    reports_page = client.get("/reports?type=installation&q=REPORT-SERIAL-100")
+    legacy_reports_page = client.get("/reports?type=installation&q=REPORT-SERIAL-100")
+    reports_by_record_number = client.get(f"/reports?q={installation_number}")
 
-    assert records_page.status_code == reports_page.status_code == 200
+    assert records_page.status_code == 200
+    assert legacy_reports_page.status_code == 200
+    assert installation_number in legacy_reports_page.text
+    assert installation_number in reports_by_record_number.text
     assert installation_number in records_page.text
-    assert installation_number in reports_page.text
     assert maintenance_number not in records_page.text
-    assert maintenance_number not in reports_page.text
-    assert 'action="/reports/pdf"' in reports_page.text
-    assert 'name="q" value="REPORT-SERIAL-100"' in reports_page.text
-    assert 'name="type" value="installation"' in reports_page.text
+    assert 'action="/reports/pdf"' in records_page.text
+    assert 'name="q" value="REPORT-SERIAL-100"' in records_page.text
+    assert 'name="type" value="installation"' in records_page.text
+    assert 'action="/reports"' in legacy_reports_page.text
+
+
+def test_records_and_reports_explain_the_saved_report_workflow(client):
+    login(client, *LEADER_A)
+
+    records_page = client.get("/records")
+    old_quick_export = client.get("/reports")
+    saved_reports = client.get("/reports/installation")
+
+    assert records_page.status_code == saved_reports.status_code == 200
+    assert old_quick_export.status_code == 200
+    assert "All service records" in old_quick_export.text
+    assert "All service records" in records_page.text
+    assert "Individual completed work entries" in records_page.text
+    assert "Formal saved reports" in records_page.text
+    assert 'href="/reports/installation"' in records_page.text
+    assert "Export filtered records to PDF" in records_page.text
+    assert "View service records" in saved_reports.text
+    assert 'href="/records"' in saved_reports.text
 
 
 def test_filtered_pdf_contains_record_details_and_photo(client, db):

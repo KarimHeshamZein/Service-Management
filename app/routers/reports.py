@@ -56,13 +56,14 @@ def reports_page(
     )
     return render(
         request,
-        "reports.html",
+        "records.html",
         {
-            "active_nav": "reports",
+            "active_nav": "all_records",
             "records": records,
             "page_info": page_info,
             "filters": filters,
             "has_filters": any(filters.values()),
+            "search_action": "/reports",
         },
     )
 
@@ -91,13 +92,14 @@ def reports_pdf(
         )
         return render(
             request,
-            "reports.html",
+            "records.html",
             {
-                "active_nav": "reports",
+                "active_nav": "all_records",
                 "records": records,
                 "page_info": page_info,
                 "filters": filters,
                 "has_filters": any(filters.values()),
+                "search_action": "/reports",
                 "export_error": (
                     f"The report matches {total} records, which exceeds the "
                     f"{settings.max_pdf_records}-record export limit. "
