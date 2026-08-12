@@ -81,6 +81,24 @@ Safety requirements:
 - Use PowerShell path-safe commands and verify exact targets before moving or
   deleting anything.
 
+Git branch requirements for all development after setup:
+
+- Treat `main` as an integration-only branch. Never edit application source,
+  implement a feature or fix, or create development commits directly on
+  `main`.
+- Before every new task, switch to `main`, fetch origin, and fast-forward with
+  `git pull --ff-only origin main`. If that is unsafe because of local changes,
+  stop and report them instead of overwriting them.
+- Create a new descriptive branch from the updated `main` before making any
+  task changes, for example `feature/<short-name>`, `fix/<short-name>`, or
+  `docs/<short-name>`.
+- Commit and push only that task branch. Merge it into `main` through a GitHub
+  pull request after I approve the work and the required tests pass.
+- Never force-push `main`, bypass its protection, or delete a branch unless I
+  explicitly request it.
+- If I ask for a change while the current branch is `main`, create the task
+  branch before editing any tracked file.
+
 Setup procedure:
 
 1. Inspect the PC for Git, 64-bit Python 3.11, PostgreSQL, and the PostgreSQL
@@ -139,6 +157,9 @@ Setup procedure:
 15. Run git status --short --branch again. Confirm only expected ignored/local
     setup files and the preserved untracked root index.html remain; no secret or
     generated file may be staged.
+16. Leave the clean repository on `main` after setup. When I provide the first
+    development task, update `main` safely and create a new task branch before
+    editing any tracked file.
 
 If I later ask for a deployment ZIP:
 

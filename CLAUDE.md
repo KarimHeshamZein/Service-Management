@@ -4,7 +4,14 @@ Service Management System — a maintenance evidence portal. Read `README.md` fo
 full architecture, entities and known limitations. This file is the short version
 plus the rules that aren't inferable from the code.
 
-## Current handoff — 2026-08-11
+## Current handoff — 2026-08-12
+
+- `main` is now an integration-only branch. Never implement, edit tracked
+  files, or create development commits directly on it. Before each approved
+  task, safely fast-forward `main`, create a new descriptive `feature/*`,
+  `fix/*`, or `docs/*` branch, commit and push only that branch, and merge it
+  through a GitHub pull request after approval and testing. Never force-push
+  `main` or bypass its protection.
 
 - Browser-entered per-Site service data
   tables are implemented for Installation, Preventive Maintenance, and
@@ -250,11 +257,13 @@ plus the rules that aren't inferable from the code.
 1. Read this file and `README.md`, then run `git status --short --branch` and
    `git log -3 --oneline --decorate`.
 2. Confirm the requested work and report the proposed change before editing.
-3. Preserve ignored deployment bundles, local `.env`, databases, uploads, and
+3. If the current branch is `main`, safely update it and create a new task
+   branch before editing any tracked file. Never develop directly on `main`.
+4. Preserve ignored deployment bundles, local `.env`, databases, uploads, and
    the external Windows installation.
-4. Use Alembic for every schema change; never run migrations against the
+5. Use Alembic for every schema change; never run migrations against the
    development or deployed database without explicit permission.
-5. For installer work, add or update a repeatable repair/install regression and
+6. For installer work, add or update a repeatable repair/install regression and
    test the exact packaged payload before asking the user to try another RC.
 
 ## Working agreement
@@ -263,8 +272,10 @@ plus the rules that aren't inferable from the code.
    files during a review or research phase.
 2. **Wait for explicit approval** before making changes. State what you intend to
    change and why, then stop.
-3. **Ask before adding any dependency.** The dependency list is deliberately small.
-4. **Run `python -m pytest` before and after every change.**
+3. **Never develop on `main`.** Create a fresh task branch from the latest
+   safely fast-forwarded `main`; merge it through a pull request.
+4. **Ask before adding any dependency.** The dependency list is deliberately small.
+5. **Run `python -m pytest` before and after every change.**
 
 ## Stack — do not change
 
