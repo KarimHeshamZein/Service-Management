@@ -94,6 +94,22 @@ git pull --ff-only origin main
 If Git reports local changes other than the expected untracked `index.html`,
 stop and inspect them before pulling.
 
+`main` is integration-only. Do not develop or commit directly on it. For each
+approved feature, fix, or documentation task, first update `main`, then create
+a descriptive task branch:
+
+```powershell
+git switch main
+git fetch origin
+git pull --ff-only origin main
+git switch -c feature/short-description
+```
+
+Use `fix/short-description` for a bug fix or `docs/short-description` for a
+documentation-only change. Commit and push that branch with
+`git push -u origin <branch-name>`, then merge it through a GitHub pull request
+after review and testing. Never force-push or develop directly on `main`.
+
 ## 4. Recreate the Python virtual environment
 
 A copied `.venv` is tied to paths and software on the old PC. Do not use it.
@@ -297,8 +313,12 @@ Open Codex in the repository folder and give it this prompt:
 > `git log -5 --oneline --decorate`, `alembic current`, and `alembic heads`.
 > Treat the Current handoff in CLAUDE.md and PROJECT_HANDOFF.md as authoritative.
 > Preserve .env, databases, uploads, dist artifacts, D:\ServiceManagement, and
-> the unrelated root index.html. Report the project state and wait for my next
-> task before editing.
+> the unrelated root index.html. Treat main as integration-only: never develop,
+> edit tracked files, or commit directly on main. For every task, first update
+> main with a safe fast-forward, create a new descriptive feature/fix/docs branch
+> from it, commit and push only that branch, and merge through a pull request
+> after my approval and the required tests. Report the project state and wait
+> for my next task before editing.
 
 The different Codex account will not have the old conversation history, but the
 committed handoff files provide the necessary project context and safety rules.

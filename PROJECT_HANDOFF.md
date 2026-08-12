@@ -18,13 +18,19 @@ Give the next Codex session this instruction:
 > `git status --short --branch`, `git log -5 --oneline --decorate`, and
 > `alembic heads`. Treat the Current handoff in CLAUDE.md and PROJECT_HANDOFF.md
 > as authoritative. Preserve .env, databases, uploads, dist artifacts,
-> D:\ServiceManagement, and the unrelated root index.html. Report the state and
-> propose a plan before editing.
+> D:\ServiceManagement, and the unrelated root index.html. Treat main as
+> integration-only: never develop or commit directly on it. Before any approved
+> change, update main safely and create a new descriptive feature/fix/docs
+> branch from it; push that branch and merge only through a pull request after
+> approval and testing. Report the state and propose a plan before editing.
 
 ## Repository and branch
 
 - GitHub: `https://github.com/KarimHeshamZein/Service-Management.git`
-- Primary branch: `main`
+- Primary integration branch: `main`; never develop or commit directly on it.
+- Every task must use a new descriptive `feature/*`, `fix/*`, or `docs/*` branch
+  created from the latest safely fast-forwarded `main`, then merge through a
+  GitHub pull request after approval and testing.
 - Hierarchical reporting was merged to `main` in `d80aba9`; the commit
   containing this refreshed file may be newer and is the latest handoff state.
 - The root `index.html` is an unrelated original Camera Installation Planner
@@ -302,6 +308,10 @@ approval for each phase.
 ## Non-negotiable working rules
 
 - Read first, report a concrete plan, then edit after authorization.
+- Keep `main` integration-only. Never implement, edit tracked files, or create
+  development commits directly on it. Create a fresh task branch from the
+  latest `main`, push that branch, and merge through a reviewed pull request.
+- Never force-push `main` or bypass its GitHub protection.
 - Preserve the user's dirty worktree and unrelated files.
 - Use `apply_patch` for source edits.
 - Use Alembic for every schema change.
