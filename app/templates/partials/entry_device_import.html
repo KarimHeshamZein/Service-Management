@@ -1,0 +1,21 @@
+<details class="card workflow-section entry-import-disclosure" id="entry-import" data-entry-device-import data-entry-kind="{{ entry_kind }}" data-file-required="{{ t('ui.choose.completed.excel') }}" data-preview-failed="{{ t('ui.excel.preview.failed') }}" {{ 'open' if errors.device_import_token or form.device_import_token }}>
+  <summary class="card-head"><div><h2>{{ t('ui.device.data.import.excel') }}</h2><p class="hint">{{ t('ui.entry.device.import.help') }}</p></div></summary>
+  <div class="card-body">
+    <input type="hidden" name="device_import_token" value="{{ form.device_import_token or '' }}" data-device-import-token>
+    <div class="device-import-actions">
+      <a class="btn btn-secondary" href="/data-entry/{{ entry_kind }}/device-template" download>{{ t('ui.download.excel.template') }}</a>
+      <div class="field"><label for="device-file-{{ entry_kind }}">{{ t('ui.upload.completed.excel') }}</label><input id="device-file-{{ entry_kind }}" type="file" data-device-import-file accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></div>
+      <button class="btn btn-secondary" type="button" data-device-import-preview>{{ t('ui.preview.device.import') }}</button>
+    </div>
+    <div class="alert error" data-device-import-errors {{ 'hidden' if not errors.device_import_token }}>{{ errors.device_import_token or '' }}</div>
+    <div class="alert warning" data-device-import-conflicts hidden>
+      <label class="choice"><input type="checkbox" name="confirm_asset_overwrites" value="1"><span><strong>{{ t('ui.confirm.asset.metadata.replacement') }}</strong><small>{{ t('ui.confirm.asset.metadata.replacement.help') }}</small></span></label>
+    </div>
+    <div data-device-import-results hidden>
+      <div class="import-summary"><span>{{ t('ui.imported.devices') }} <strong data-device-import-count>0</strong></span></div>
+      <div class="table-wrap import-preview-table"><table><thead><tr>
+        <th>{{ t('ui.item.title') }}</th><th>{{ t('ui.model') }}</th><th>{{ t('ui.serial.number') }}</th><th>{{ t('ui.imei') }}</th><th>{{ t('ui.sim.serial.number') }}</th><th>{{ t('ui.sim.type') }}</th><th>{{ t('ui.main.project') }}</th><th>{{ t('ui.sub.project') }}</th><th>{{ t('ui.site') }}</th><th>{{ t('ui.remarks') }}</th><th>{{ t('ui.status') }}</th>
+      </tr></thead><tbody data-device-import-body></tbody></table></div>
+    </div>
+  </div>
+</details>

@@ -1,6 +1,8 @@
 """New Installations: submit immutable evidence, list it, and review it."""
 from __future__ import annotations
 
+import logging
+
 from datetime import datetime as dt, time as dt_time, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -22,10 +24,14 @@ from ..helpers import (
     render,
     to_utc_from_display,
 )
+from ..entry_device_imports import load_entry_import, validate_current_import_rows
+from ..entry_data_tables import parse_entry_data_rows, row_model_values, rows_for_scope
+from ..entry_scopes import apply_scope_snapshot, EntryScope, item_scope_indexes, validate_entry_scopes
 from ..models import (
     DeviceCatalog,
     EvidencePhotoStage,
     InstallationParticipant,
+    InstallationDataRow,
     InstallationItemPhoto,
     InstallationPhoto,
     InstallationRecord,
@@ -40,8 +46,10 @@ from ..models import (
     MaintenanceRecordDevice,
     MaintenanceRecordItem,
     PricingItem,
+    ServiceReportRecord,
     ServiceType,
     Site,
+    SubProject,
     User,
     UserRole,
     WorkSite,
@@ -52,8 +60,15 @@ from ..participant_selection import (
     technical_user_choices,
     validate_participant_ids,
 )
+from ..project_hierarchy import active_project_hierarchy, hierarchy_json, resolve_entry_sub_project
 from ..quotation_references import quotation_choices, resolve_quotation_reference
 from ..record_mutations import add_revision, changed, revisions_for
+from ..record_photo_edits import (
+    existing_photo_descriptions,
+    grouped_photos,
+    new_photo_descriptions,
+)
+from ..saved_report_deletion import delete_linked_reports, linked_reports
 from ..security import (
     consume_form_token,
     csrf_valid,
@@ -63,6 +78,7 @@ from ..security import (
 from ..uploads import UploadError, delete_stored, resolve_storage_path, store_image
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 MAX_TEXT_LENGTH = 5000
 MAX_EQUIPMENT_LENGTH = 160
@@ -123,9 +139,11 @@ def _form_context(
     errors: dict | None = None,
     form_token: str | None = None,
 ) -> dict:
+    projects = active_project_hierarchy(db)
     return {
         "active_nav": "installation_submit",
-        "projects": _active_sites(db),
+        "projects": projects,
+        "project_hierarchy": hierarchy_json(projects),
         "work_sites": _active_work_sites(db),
         "services": _active_services(db),
         "devices": _active_devices(db),
@@ -195,6 +213,148 @@ def service_item_image(
     )
 
 
+def _new_installation_record(
+    db: Session,
+    *,
+    scope: EntryScope,
+    entries: list[dict],
+    imported_rows: list[dict],
+    stored_by_item: list[list],
+    user: User,
+    participant_ids: list[str],
+    participants: list[str],
+    now: dt,
+    record_number: str | None = None,
+) -> InstallationRecord:
+    first = entries[0]
+    first_import = imported_rows[0] if imported_rows else {}
+    first_service: ServiceType = first["service"]
+    first_device: DeviceCatalog = first["device"]
+    project, sub_project, work_site, quotation = (
+        scope.project,
+        scope.sub_project,
+        scope.site,
+        scope.quotation,
+    )
+    record = InstallationRecord(
+        record_number=record_number or next_installation_record_number(db, now),
+        site_id=project.id,
+        sub_project_id=sub_project.id if sub_project else None,
+        sub_project_name=sub_project.name if sub_project else "General",
+        service_type_id=first_service.id,
+        submitted_by_id=user.id,
+        quotation_id=quotation.id,
+        quotation_number=quotation.quotation_number,
+        site_name=work_site.name,
+        customer_name=project.name,
+        site_address=project.address,
+        service_name=first_service.name,
+        team_leader_name=user.full_name,
+        equipment_model=first_device.display_label,
+        serial_number=first["serial_number"],
+        warranty_start=first["warranty_date"],
+        result=first["result_value"],
+        notes=first["notes"],
+        handover_notes=first["handover_notes"] or None,
+        submitted_at=now,
+        created_at=now,
+    )
+    record.participants = [
+        InstallationParticipant(user_id=int(user_id), name=name)
+        for user_id, name in zip(participant_ids, participants)
+    ]
+    record.photos = [
+        InstallationPhoto(
+            storage_key=stored.storage_key,
+            thumbnail_key=stored.thumbnail_key,
+            original_filename=stored.original_filename,
+            content_type=stored.content_type,
+            file_size=stored.file_size,
+            description=description or None,
+            position=position,
+            uploaded_at=now,
+        )
+        for _, stored, description, position in stored_by_item[0]
+    ]
+    installed_devices: list[InstalledDevice] = []
+    for index, entry in enumerate(entries):
+        item_device: DeviceCatalog = entry["device"]
+        imported = imported_rows[index] if imported_rows else {}
+        installed = InstalledDevice(
+            site_id=project.id,
+            sub_project_id=sub_project.id if sub_project else None,
+            sub_project_name=sub_project.name if sub_project else "General",
+            device_id=item_device.id,
+            customer_name=project.name,
+            site_name=work_site.name,
+            device_name=item_device.name,
+            manufacturer=item_device.manufacturer,
+            device_model=item_device.model,
+            serial_number=entry["serial_number"],
+            imei=imported.get("imei"),
+            iccid=imported.get("iccid"),
+            sim_type=imported.get("sim_type"),
+            phone_number=imported.get("phone_number"),
+            remarks=imported.get("remarks"),
+            warranty_start=entry["warranty_date"],
+            installed_at=now,
+        )
+        installed.work_site_evidence = InstalledDeviceSite(site_id=work_site.id, site_name=work_site.name)
+        installed_devices.append(installed)
+    record.installed_device = installed_devices[0]
+    record.work_site_evidence = InstallationRecordSite(site_id=work_site.id, site_name=work_site.name)
+    for index, installed in enumerate(installed_devices[1:], 1):
+        service: ServiceType = entries[index]["service"]
+        record.additional_devices.append(
+            InstallationRecordAdditionalDevice(
+                installed_device=installed,
+                service_type_id=service.id,
+                service_name=service.name,
+            )
+        )
+    for index, (entry, installed) in enumerate(zip(entries, installed_devices)):
+        item_device: DeviceCatalog = entry["device"]
+        service: ServiceType = entry["service"]
+        imported = imported_rows[index] if imported_rows else {}
+        item = InstallationRecordItem(
+            installed_device=installed,
+            service_type_id=service.id,
+            position=index,
+            service_name=service.name,
+            device_name=item_device.name,
+            manufacturer=item_device.manufacturer,
+            device_model=item_device.model,
+            serial_number=entry["serial_number"],
+            imei=imported.get("imei"),
+            iccid=imported.get("iccid"),
+            sim_type=imported.get("sim_type"),
+            phone_number=imported.get("phone_number"),
+            location_name=imported.get("site") or work_site.name,
+            remarks=imported.get("remarks"),
+            imported_from_excel=bool(imported_rows),
+            warranty_start=entry["warranty_date"],
+            result=entry["result_value"],
+            notes=entry["notes"],
+            handover_notes=entry["handover_notes"] or None,
+        )
+        item.photos = [
+            InstallationItemPhoto(
+                storage_key=stored.storage_key,
+                thumbnail_key=stored.thumbnail_key,
+                original_filename=stored.original_filename,
+                content_type=stored.content_type,
+                file_size=stored.file_size,
+                stage=stage,
+                description=description or None,
+                position=position,
+                uploaded_at=now,
+            )
+            for stage, stored, description, position in stored_by_item[index]
+        ]
+        record.work_items.append(item)
+    return record
+
+
 @router.post("/installations/submit")
 async def submit_record(
     request: Request,
@@ -204,9 +364,11 @@ async def submit_record(
     form = await request.form()
     errors: dict[str, str] = {}
 
-    project_id_raw = (form.get("project_id") or form.get("site_id") or "").strip()
+    project_id_raw = str(form.get("project_id") or form.get("site_id") or "").strip()
+    sub_project_id_raw = str(form.get("sub_project_id") or "").strip()
+    device_import_token = str(form.get("device_import_token") or "").strip()
     quotation_number_raw = str(form.get("quotation_number") or "").strip()
-    work_site_id_raw = (form.get("work_site_id") or "").strip()
+    work_site_id_raw = str(form.get("work_site_id") or "").strip()
     service_ids = [str(value).strip() for value in form.getlist("service_type_id")]
     device_ids = [str(value).strip() for value in form.getlist("device_id")]
     serial_numbers = [str(value).strip() for value in form.getlist("serial_number")]
@@ -227,37 +389,16 @@ async def submit_record(
     if not form_token_available(request, form.get("form_token")):
         errors["form"] = "This installation record was already submitted. Check your records list."
 
-    project: Site | None = None
-    if not project_id_raw:
-        errors["project_id"] = "Select the project."
-    else:
-        project_id = entity_id(project_id_raw)
-        project = db.get(Site, project_id) if project_id is not None else None
-        if project is None:
-            errors["project_id"] = "That project no longer exists."
-        elif not project.is_active:
-            errors["project_id"] = "That project is deactivated."
-
-    quotation, quotation_error = resolve_quotation_reference(
-        db,
-        quotation_number_raw,
-        project.id if project else None,
+    scopes, scope_errors = validate_entry_scopes(form, db)
+    errors.update(scope_errors)
+    data_rows, data_row_errors = parse_entry_data_rows(
+        form, scopes, installation=True
     )
-    if quotation_error:
-        errors["quotation_number"] = quotation_error
-
-    work_site: WorkSite | None = None
-    if not work_site_id_raw:
-        errors["work_site_id"] = "Select the site."
-    else:
-        work_site_id = entity_id(work_site_id_raw)
-        work_site = (
-            db.get(WorkSite, work_site_id) if work_site_id is not None else None
-        )
-        if work_site is None:
-            errors["work_site_id"] = "That site no longer exists."
-        elif not work_site.is_active:
-            errors["work_site_id"] = "That site is deactivated."
+    errors.update(data_row_errors)
+    project = scopes[0].project if scopes else None
+    sub_project = scopes[0].sub_project if scopes else None
+    work_site = scopes[0].site if scopes else None
+    quotation = scopes[0].quotation if scopes else None
 
     item_count = max(
         len(service_ids),
@@ -279,6 +420,9 @@ async def submit_record(
         handover_values,
     ):
         values.extend([""] * (item_count - len(values)))
+    scope_count = max(len(form.getlist("project_id")), 1)
+    item_scopes, item_scope_errors = item_scope_indexes(form, item_count, scope_count)
+    errors.update(item_scope_errors)
 
     device_entries: list[dict] = []
     seen_serials: set[str] = set()
@@ -316,26 +460,23 @@ async def submit_record(
             errors[f"device_id{suffix}"] = "That item is unavailable for service records."
 
         serial_key = serial_number.lower()
-        if not serial_number:
-            errors[f"serial_number{suffix}"] = "Enter the equipment serial number."
-        elif len(serial_number) > MAX_EQUIPMENT_LENGTH:
+        if serial_number and len(serial_number) > MAX_EQUIPMENT_LENGTH:
             errors[f"serial_number{suffix}"] = (
                 f"Keep the serial number under {MAX_EQUIPMENT_LENGTH} characters."
             )
-        elif serial_key in seen_serials:
+        elif serial_number and serial_key in seen_serials:
             errors[f"serial_number{suffix}"] = "Serial numbers must be unique in this record."
-        elif db.scalar(
+        elif serial_number and db.scalar(
             select(InstalledDevice).where(
                 func.lower(InstalledDevice.serial_number) == serial_key
             )
         ):
             errors[f"serial_number{suffix}"] = "That serial number is already registered."
-        seen_serials.add(serial_key)
+        if serial_number:
+            seen_serials.add(serial_key)
 
         warranty_start = parse_date(warranty_raw)
-        if not warranty_raw:
-            errors[f"warranty_start{suffix}"] = "Select the warranty start date."
-        elif warranty_start is None:
+        if warranty_raw and warranty_start is None:
             errors[f"warranty_start{suffix}"] = "Enter a valid warranty start date."
 
         result: MaintenanceResult | None = None
@@ -344,9 +485,7 @@ async def submit_record(
         except ValueError:
             errors[f"result{suffix}"] = "Select the installation result."
 
-        if not notes:
-            errors[f"notes{suffix}"] = "Describe the installation you completed."
-        elif len(notes) > MAX_TEXT_LENGTH:
+        if len(notes) > MAX_TEXT_LENGTH:
             errors[f"notes{suffix}"] = f"Keep notes under {MAX_TEXT_LENGTH} characters."
         if len(handover_notes) > MAX_TEXT_LENGTH:
             errors[f"handover_notes{suffix}"] = (
@@ -357,7 +496,7 @@ async def submit_record(
             {
                 "service_type_id": service_raw,
                 "device_id": device_raw,
-                "serial_number": serial_number,
+                "serial_number": serial_number or None,
                 "warranty_start": warranty_raw,
                 "result": result_raw,
                 "notes": notes,
@@ -367,10 +506,57 @@ async def submit_record(
                 "pricing_item": item,
                 "warranty_date": warranty_start,
                 "result_value": result,
+                "scope_index": item_scopes[index],
             }
         )
 
-    uploads_by_item: list[list[tuple[EvidencePhotoStage, UploadFile]]] = []
+    imported_by_item: list[dict] = [{} for _ in range(item_count)]
+    device_import_tokens = [str(value or "").strip() for value in form.getlist("device_import_token")]
+    device_import_tokens.extend([""] * (scope_count - len(device_import_tokens)))
+    for scope in scopes:
+        token = device_import_tokens[scope.index]
+        if not token:
+            continue
+        scope_rows, import_error = load_entry_import(
+            token,
+            entry_kind="installation",
+            project_id=scope.project.id,
+            sub_project_id=scope.sub_project.id if scope.sub_project else None,
+            site_id=scope.site.id,
+        )
+        error_key = "device_import_token" if scope.index == 0 else f"device_import_token_scope_{scope.index}"
+        if import_error:
+            errors[error_key] = import_error
+            continue
+        current_error = validate_current_import_rows(
+            db, scope_rows, entry_kind="installation", project_id=scope.project.id, site_id=scope.site.id
+        )
+        indexes = [index for index, entry in enumerate(device_entries) if entry["scope_index"] == scope.index]
+        if current_error:
+            errors[error_key] = current_error
+        elif len(scope_rows) != len(indexes):
+            errors[error_key] = "The Excel preview and installation item count do not match. Preview the file again."
+        else:
+            for index, imported in zip(indexes, scope_rows):
+                entry = device_entries[index]
+                imported_by_item[index] = imported
+                if (
+                    entry["pricing_item"] is None
+                    or entry["pricing_item"].id != imported.get("pricing_item_id")
+                    or (
+                        entry["serial_number"]
+                        and entry["serial_number"].casefold()
+                        != str(imported.get("serial_number") or "").casefold()
+                    )
+                ):
+                    errors[f"device_id_{index}"] = "This item no longer matches the Excel preview. Preview the file again."
+                elif not entry["serial_number"]:
+                    entry["serial_number"] = str(imported.get("serial_number") or "").strip()
+    device_import_token = device_import_tokens[0] if device_import_tokens else ""
+    if any(key.startswith("device_import_token_scope_") for key in errors):
+        errors.setdefault("form", "Review the Excel import in each Site section.")
+
+    uploads_by_item: list[list[tuple[EvidencePhotoStage, UploadFile, str, int]]] = []
     for index in range(item_count):
         before_uploads = [
             upload for upload in form.getlist(f"before_photos_{index}")
@@ -388,10 +574,22 @@ async def submit_record(
             )
             if isinstance(upload, UploadFile) and upload.filename
         ]
+        before_descriptions = [
+            str(value).strip()
+            for value in form.getlist(f"before_photo_descriptions_{index}")
+        ]
+        after_descriptions = [
+            str(value).strip()
+            for value in form.getlist(f"after_photo_descriptions_{index}")
+        ]
+        before_descriptions.extend([""] * (len(before_uploads) - len(before_descriptions)))
+        after_descriptions.extend([""] * (len(after_uploads) - len(after_descriptions)))
+        before_descriptions = before_descriptions[: len(before_uploads)]
+        after_descriptions = after_descriptions[: len(after_uploads)]
         uploads = [
-            *((EvidencePhotoStage.BEFORE, upload) for upload in before_uploads),
-            *((EvidencePhotoStage.AFTER, upload) for upload in after_uploads),
-            *((EvidencePhotoStage.LEGACY, upload) for upload in legacy_uploads),
+            *((EvidencePhotoStage.BEFORE, upload, before_descriptions[position], position) for position, upload in enumerate(before_uploads)),
+            *((EvidencePhotoStage.AFTER, upload, after_descriptions[position], position) for position, upload in enumerate(after_uploads)),
+            *((EvidencePhotoStage.LEGACY, upload, "", position) for position, upload in enumerate(legacy_uploads)),
         ]
         uploads_by_item.append(uploads)
         if not uploads:
@@ -402,15 +600,17 @@ async def submit_record(
             errors[f"after_photos_{index}"] = "Attach at most 10 after photos."
         elif len(legacy_uploads) > settings.max_photos_per_record:
             errors[f"photos_{index}"] = "Attach at most 10 photos."
+        elif any(len(description) > MAX_TEXT_LENGTH for description in before_descriptions + after_descriptions):
+            errors[f"photos_{index}"] = f"Keep each photo description under {MAX_TEXT_LENGTH} characters."
 
     stored_by_item: list[list] = [[] for _ in range(item_count)]
     if not errors:
         for index, uploads in enumerate(uploads_by_item):
-            for stage, upload in uploads:
+            for stage, upload, description, position in uploads:
                 data = await upload.read()
                 try:
                     stored_by_item[index].append(
-                        (stage, store_image(upload.filename, data))
+                        (stage, store_image(upload.filename, data), description, position)
                     )
                 except UploadError as exc:
                     errors[f"photos_{index}"] = str(exc)
@@ -420,12 +620,12 @@ async def submit_record(
                     *[
                         stored.storage_key
                         for item_stored in stored_by_item
-                        for _, stored in item_stored
+                        for _, stored, _, _ in item_stored
                     ],
                     *[
                         stored.thumbnail_key
                         for item_stored in stored_by_item
-                        for _, stored in item_stored
+                        for _, stored, _, _ in item_stored
                     ],
                 )
                 stored_by_item = [[] for _ in range(item_count)]
@@ -433,6 +633,8 @@ async def submit_record(
 
     payload = {
         "project_id": project_id_raw,
+        "sub_project_id": sub_project_id_raw,
+        "device_import_token": device_import_token,
         "quotation_number": quotation_number_raw,
         "work_site_id": work_site_id_raw,
         "devices": [
@@ -469,8 +671,8 @@ async def submit_record(
 
     if not consume_form_token(request, form.get("form_token")):
         delete_stored(
-            *[s.storage_key for group in stored_by_item for _, s in group],
-            *[s.thumbnail_key for group in stored_by_item for _, s in group],
+            *[s.storage_key for group in stored_by_item for _, s, _, _ in group],
+            *[s.thumbnail_key for group in stored_by_item for _, s, _, _ in group],
         )
         message = "This installation record was already submitted. Check your records list."
         fresh_token = issue_form_token(request)
@@ -493,19 +695,32 @@ async def submit_record(
     assert project and work_site
     assert quotation
     assert all(
-        entry["service"]
-        and entry["device"]
-        and entry["warranty_date"]
-        and entry["result_value"]
+        entry["service"] and entry["device"] and entry["result_value"]
         for entry in device_entries
     )
+    all_device_entries = device_entries
+    all_stored_by_item = stored_by_item
+    first_indexes = [
+        index for index, entry in enumerate(all_device_entries)
+        if entry["scope_index"] == 0
+    ]
+    device_entries = [all_device_entries[index] for index in first_indexes]
+    stored_by_item = [all_stored_by_item[index] for index in first_indexes]
+    imported_rows = (
+        [imported_by_item[index] for index in first_indexes]
+        if device_import_token
+        else []
+    )
     first = device_entries[0]
+    first_import = imported_rows[0] if imported_rows else {}
     first_service: ServiceType = first["service"]
     first_device: DeviceCatalog = first["device"]
     now = utcnow()
     record = InstallationRecord(
         record_number=next_installation_record_number(db, now),
         site_id=project.id,
+        sub_project_id=sub_project.id if sub_project else None,
+        sub_project_name=sub_project.name if sub_project else "General",
         service_type_id=first_service.id,
         submitted_by_id=user.id,
         quotation_id=quotation.id,
@@ -535,12 +750,16 @@ async def submit_record(
             original_filename=s.original_filename,
             content_type=s.content_type,
             file_size=s.file_size,
+            description=description or None,
+            position=position,
             uploaded_at=now,
         )
-        for _, s in stored_by_item[0]
+        for _, s, description, position in stored_by_item[0]
     ]
     record.installed_device = InstalledDevice(
         site_id=project.id,
+        sub_project_id=sub_project.id if sub_project else None,
+        sub_project_name=sub_project.name if sub_project else "General",
         device_id=first_device.id,
         customer_name=project.name,
         site_name=work_site.name,
@@ -548,6 +767,11 @@ async def submit_record(
         manufacturer=first_device.manufacturer,
         device_model=first_device.model,
         serial_number=first["serial_number"],
+        imei=first_import.get("imei"),
+        iccid=first_import.get("iccid"),
+        sim_type=first_import.get("sim_type"),
+        phone_number=first_import.get("phone_number"),
+        remarks=first_import.get("remarks"),
         warranty_start=first["warranty_date"],
         installed_at=now,
     )
@@ -560,11 +784,13 @@ async def submit_record(
         site_name=work_site.name,
     )
     installed_devices_for_items = [record.installed_device]
-    for entry in device_entries[1:]:
+    for item_index, entry in enumerate(device_entries[1:], 1):
         item_device: DeviceCatalog = entry["device"]
         item_service: ServiceType = entry["service"]
         installed = InstalledDevice(
             site_id=project.id,
+            sub_project_id=sub_project.id if sub_project else None,
+            sub_project_name=sub_project.name if sub_project else "General",
             device_id=item_device.id,
             customer_name=project.name,
             site_name=work_site.name,
@@ -572,6 +798,11 @@ async def submit_record(
             manufacturer=item_device.manufacturer,
             device_model=item_device.model,
             serial_number=entry["serial_number"],
+            imei=(imported_rows[item_index].get("imei") if imported_rows else None),
+            iccid=(imported_rows[item_index].get("iccid") if imported_rows else None),
+            sim_type=(imported_rows[item_index].get("sim_type") if imported_rows else None),
+            phone_number=(imported_rows[item_index].get("phone_number") if imported_rows else None),
+            remarks=(imported_rows[item_index].get("remarks") if imported_rows else None),
             warranty_start=entry["warranty_date"],
             installed_at=now,
         )
@@ -602,6 +833,13 @@ async def submit_record(
             manufacturer=item_device.manufacturer,
             device_model=item_device.model,
             serial_number=entry["serial_number"],
+            imei=(imported_rows[index].get("imei") if imported_rows else None),
+            iccid=(imported_rows[index].get("iccid") if imported_rows else None),
+            sim_type=(imported_rows[index].get("sim_type") if imported_rows else None),
+            phone_number=(imported_rows[index].get("phone_number") if imported_rows else None),
+            location_name=(imported_rows[index].get("site") if imported_rows else work_site.name),
+            remarks=(imported_rows[index].get("remarks") if imported_rows else None),
+            imported_from_excel=bool(imported_rows),
             warranty_start=entry["warranty_date"],
             result=entry["result_value"],
             notes=entry["notes"],
@@ -615,27 +853,100 @@ async def submit_record(
                 content_type=stored.content_type,
                 file_size=stored.file_size,
                 stage=stage,
+                description=description or None,
+                position=position,
                 uploaded_at=now,
             )
-            for stage, stored in stored_by_item[index]
+            for stage, stored, description, position in stored_by_item[index]
         ]
         record.work_items.append(item)
 
+    for item in record.work_items:
+        apply_scope_snapshot(item, scopes[0])
     db.add(record)
+    for scope in scopes[1:]:
+        indexes = [
+            index for index, entry in enumerate(all_device_entries)
+            if entry["scope_index"] == scope.index
+        ]
+        additional = _new_installation_record(
+            db,
+            scope=scope,
+            entries=[all_device_entries[index] for index in indexes],
+            imported_rows=(
+                [imported_by_item[index] for index in indexes]
+                if device_import_tokens[scope.index]
+                else []
+            ),
+            stored_by_item=[all_stored_by_item[index] for index in indexes],
+            user=user,
+            participant_ids=participant_ids,
+            participants=participants,
+            now=now,
+            record_number=record.record_number,
+        )
+        scoped_items = list(additional.work_items)
+        primary_installed = additional.installed_device
+        extra_device_links = list(additional.additional_devices)
+        additional.work_items = []
+        additional.additional_devices = []
+        additional.installed_device = None
+        if primary_installed is not None:
+            record.additional_devices.append(
+                InstallationRecordAdditionalDevice(
+                    installed_device=primary_installed,
+                    service_type_id=scoped_items[0].service_type_id,
+                    service_name=scoped_items[0].service_name,
+                )
+            )
+        record.additional_devices.extend(extra_device_links)
+        for scoped_item in scoped_items:
+            scoped_item.position = len(record.work_items)
+            apply_scope_snapshot(scoped_item, scope)
+            record.work_items.append(scoped_item)
+    record.device_data_rows = [
+        InstallationDataRow(**row_model_values(row, scopes[row["scope_index"]]))
+        for row in data_rows
+    ]
+    row_lookup = {
+        (row.scope_position, row.position): row for row in record.device_data_rows
+    }
+    local_positions: dict[int, int] = {}
+    for item in record.work_items:
+        scope_position = item.scope_position or 0
+        local_position = local_positions.get(scope_position, 0)
+        local_positions[scope_position] = local_position + 1
+        data_row = row_lookup.get((scope_position, local_position))
+        if data_row is None:
+            continue
+        item.serial_number = item.serial_number or data_row.serial_number
+        item.imei = data_row.imei
+        item.iccid = data_row.iccid
+        item.sim_type = data_row.sim_type
+        item.location_name = data_row.work_site_name
+        item.remarks = data_row.remarks
+        installed = item.installed_device
+        if installed is not None:
+            installed.serial_number = installed.serial_number or data_row.serial_number
+            installed.imei = data_row.imei
+            installed.iccid = data_row.iccid
+            installed.sim_type = data_row.sim_type.casefold() if data_row.sim_type else None
+            installed.remarks = data_row.remarks
     try:
         db.commit()
     except Exception:
+        logger.exception("Could not save installation record")
         db.rollback()
         delete_stored(
             *[
                 stored.storage_key
-                for item_stored in stored_by_item
-                for _, stored in item_stored
+                for item_stored in all_stored_by_item
+                for _, stored, _, _ in item_stored
             ],
             *[
                 stored.thumbnail_key
-                for item_stored in stored_by_item
-                for _, stored in item_stored
+                for item_stored in all_stored_by_item
+                for _, stored, _, _ in item_stored
             ],
         )
         message = "The installation record could not be saved. Try again."
@@ -656,11 +967,12 @@ async def submit_record(
         )
 
     db.refresh(record)
+    record_numbers = [record.record_number]
     flash(request, f"Installation record {record.record_number} saved.")
     target = f"/installations/records/{record.id}"
     if _is_ajax(request):
         return localized_json(request,
-            {"ok": True, "redirect": target, "record_number": record.record_number},
+            {"ok": True, "redirect": target, "record_number": record.record_number, "record_numbers": record_numbers},
             status_code=201,
         )
     return RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
@@ -900,7 +1212,8 @@ def _load_record(db: Session, record_id: int, user: User) -> InstallationRecord:
     )
     if record is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Installation record not found")
-    if not user.can_access_project(record.site_id):
+    project_ids = {item.project_id or record.site_id for item in record.work_items} or {record.site_id}
+    if not all(user.can_access_project(project_id) for project_id in project_ids):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "This record is outside your assigned Projects",
@@ -923,6 +1236,9 @@ def record_details(
             "active_nav": "installation_records",
             "record": record,
             "revisions": revisions_for(db, "installation", record.id),
+            "linked_reports": linked_reports(
+                db, ServiceReportRecord.installation_record_id, record.id
+            ),
         },
     )
 
@@ -933,6 +1249,8 @@ def _edit_items(record: InstallationRecord) -> list[dict]:
             {
                 "data": item,
                 "photos": item.photos,
+                "photo_groups": grouped_photos(item.photos),
+                "photo_media_path": "/media/installation-item-photo",
                 "device_label": f"{item.device_name} — {item.device_model}",
                 "service_label": item.service_name,
                 "serial_number": item.serial_number,
@@ -944,6 +1262,8 @@ def _edit_items(record: InstallationRecord) -> list[dict]:
         {
             "data": record,
             "photos": record.photos,
+            "photo_groups": grouped_photos(record.photos),
+            "photo_media_path": "/media/installation-photo",
             "device_label": (
                 f"{device.device_name} — {device.device_model}"
                 if device
@@ -1043,7 +1363,8 @@ async def edit_record(
     wrappers = _edit_items(record)
     parsed: list[tuple[MaintenanceResult, str, str]] = []
     removals: list[set[int]] = []
-    uploads_by_item: list[list[tuple[EvidencePhotoStage, UploadFile]]] = []
+    uploads_by_item: list[list[tuple[EvidencePhotoStage, UploadFile, str]]] = []
+    description_updates_by_item: list[dict[int, str]] = []
     error = ""
     for index, wrapper in enumerate(wrappers):
         try:
@@ -1068,6 +1389,12 @@ async def edit_record(
         if not remove_ids.issubset(current_ids):
             error = f"One selected photo for item {index + 1} no longer exists."
             break
+        description_updates, description_error = existing_photo_descriptions(
+            form, wrapper["photos"], maximum=MAX_TEXT_LENGTH
+        )
+        if description_error:
+            error = f"Item {index + 1}: {description_error}"
+            break
         before_uploads = [
             upload for upload in form.getlist(f"add_before_photos_{index}")
             if isinstance(upload, UploadFile) and upload.filename
@@ -1080,10 +1407,25 @@ async def edit_record(
             upload for upload in form.getlist(f"add_photos_{index}")
             if isinstance(upload, UploadFile) and upload.filename
         ]
+        before_descriptions, description_error = new_photo_descriptions(
+            form,
+            f"add_before_photo_descriptions_{index}",
+            len(before_uploads),
+            maximum=MAX_TEXT_LENGTH,
+        )
+        after_descriptions, description_error = new_photo_descriptions(
+            form,
+            f"add_after_photo_descriptions_{index}",
+            len(after_uploads),
+            maximum=MAX_TEXT_LENGTH,
+        ) if description_error is None else ([], description_error)
+        if description_error:
+            error = f"Item {index + 1}: {description_error}"
+            break
         uploads = [
-            *((EvidencePhotoStage.BEFORE, upload) for upload in before_uploads),
-            *((EvidencePhotoStage.AFTER, upload) for upload in after_uploads),
-            *((EvidencePhotoStage.LEGACY, upload) for upload in legacy_uploads),
+            *((EvidencePhotoStage.BEFORE, upload, before_descriptions[position]) for position, upload in enumerate(before_uploads)),
+            *((EvidencePhotoStage.AFTER, upload, after_descriptions[position]) for position, upload in enumerate(after_uploads)),
+            *((EvidencePhotoStage.LEGACY, upload, "") for upload in legacy_uploads),
         ]
         kept = [photo for photo in wrapper["photos"] if photo.id not in remove_ids]
         before_count = sum(
@@ -1106,6 +1448,7 @@ async def edit_record(
         parsed.append((result, notes, handover))
         removals.append(remove_ids)
         uploads_by_item.append(uploads)
+        description_updates_by_item.append(description_updates)
     if error:
         return render(
             request,
@@ -1117,14 +1460,14 @@ async def edit_record(
     stored_by_item: list[list] = [[] for _ in wrappers]
     try:
         for index, uploads in enumerate(uploads_by_item):
-            for stage, upload in uploads:
+            for stage, upload, description in uploads:
                 stored_by_item[index].append(
-                    (stage, store_image(upload.filename, await upload.read()))
+                    (stage, store_image(upload.filename, await upload.read()), description)
                 )
     except UploadError as exc:
         delete_stored(
-            *[stored.storage_key for group in stored_by_item for _, stored in group],
-            *[stored.thumbnail_key for group in stored_by_item for _, stored in group],
+            *[stored.storage_key for group in stored_by_item for _, stored, _ in group],
+            *[stored.thumbnail_key for group in stored_by_item for _, stored, _ in group],
         )
         return render(
             request,
@@ -1157,6 +1500,19 @@ async def edit_record(
         removed = [
             photo for photo in list(wrapper["photos"]) if photo.id in removals[index]
         ]
+        photo_note_changes = []
+        for photo in wrapper["photos"]:
+            if photo.id in removals[index]:
+                continue
+            value = description_updates_by_item[index][photo.id] or None
+            delta = changed(photo.description, value)
+            if delta:
+                photo_note_changes.append({"photo_id": photo.id, **delta})
+                photo.description = value
+                if record.work_items and index == 0:
+                    for legacy in record.photos:
+                        if legacy.storage_key == photo.storage_key:
+                            legacy.description = value
         for photo in removed:
             removed_keys.update(
                 key for key in (photo.storage_key, photo.thumbnail_key) if key
@@ -1166,7 +1522,11 @@ async def edit_record(
                 for legacy in list(record.photos):
                     if legacy.storage_key == photo.storage_key:
                         record.photos.remove(legacy)
-        for stage, stored in stored_by_item[index]:
+        for stage, stored, description in stored_by_item[index]:
+            position = sum(
+                getattr(photo, "stage", EvidencePhotoStage.LEGACY) == stage
+                for photo in wrapper["photos"]
+            )
             if record.work_items:
                 item.photos.append(
                     InstallationItemPhoto(
@@ -1176,6 +1536,8 @@ async def edit_record(
                         content_type=stored.content_type,
                         file_size=stored.file_size,
                         stage=stage,
+                        description=description or None,
+                        position=position,
                         uploaded_at=now,
                     )
                 )
@@ -1187,6 +1549,8 @@ async def edit_record(
                             original_filename=stored.original_filename,
                             content_type=stored.content_type,
                             file_size=stored.file_size,
+                            description=description or None,
+                            position=position,
                             uploaded_at=now,
                         )
                     )
@@ -1198,16 +1562,19 @@ async def edit_record(
                         original_filename=stored.original_filename,
                         content_type=stored.content_type,
                         file_size=stored.file_size,
+                        description=description or None,
+                        position=position,
                         uploaded_at=now,
                     )
                 )
-        if removed or stored_by_item[index]:
+        if removed or stored_by_item[index] or photo_note_changes:
             changes[f"item_{index + 1}_photos"] = {
                 "removed": [photo.original_filename for photo in removed],
                 "added": [
                     f"{stage.value}: {stored.original_filename}"
-                    for stage, stored in stored_by_item[index]
+                    for stage, stored, _ in stored_by_item[index]
                 ],
+                "notes_edited": photo_note_changes,
             }
 
     if record.work_items:
@@ -1228,8 +1595,8 @@ async def edit_record(
 
     if not changes:
         delete_stored(
-            *[stored.storage_key for group in stored_by_item for _, stored in group],
-            *[stored.thumbnail_key for group in stored_by_item for _, stored in group],
+            *[stored.storage_key for group in stored_by_item for _, stored, _ in group],
+            *[stored.thumbnail_key for group in stored_by_item for _, stored, _ in group],
         )
         flash(request, "No changes were made.")
         return RedirectResponse(
@@ -1250,8 +1617,8 @@ async def edit_record(
     except Exception:
         db.rollback()
         delete_stored(
-            *[stored.storage_key for group in stored_by_item for _, stored in group],
-            *[stored.thumbnail_key for group in stored_by_item for _, stored in group],
+            *[stored.storage_key for group in stored_by_item for _, stored, _ in group],
+            *[stored.thumbnail_key for group in stored_by_item for _, stored, _ in group],
         )
         return render(
             request,
@@ -1337,6 +1704,9 @@ async def delete_record(
         link.installed_device for link in record.additional_devices if link.installed_device
     ]
     record_number = record.record_number
+    deleted_reports = delete_linked_reports(
+        db, ServiceReportRecord.installation_record_id, record.id
+    )
     add_revision(
         db,
         record_type="installation",
@@ -1352,7 +1722,12 @@ async def delete_record(
         db.delete(device)
     db.commit()
     delete_stored(*keys)
-    flash(request, f"{record_number} permanently deleted.")
+    report_note = (
+        f" {len(deleted_reports)} linked generated report(s) were also deleted."
+        if deleted_reports
+        else ""
+    )
+    flash(request, f"{record_number} permanently deleted.{report_note}")
     return RedirectResponse(
         "/installations/records", status_code=status.HTTP_303_SEE_OTHER
     )

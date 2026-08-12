@@ -28,6 +28,8 @@ from app.models import (
     PricingItem,
     ServiceType,
     Site,
+    SubProject,
+    SubProjectSite,
     User,
     UserRole,
     WorkSite,
@@ -196,6 +198,16 @@ def seed() -> None:
         work_sites = [WorkSite(name=f"Gate {number}") for number in range(1, 4)]
         db.add_all(sites + services + devices + work_sites)
         db.flush()
+        for project in sites:
+            project.sub_projects.append(
+                SubProject(
+                    name="General",
+                    site_assignments=[
+                        SubProjectSite(site_id=work_site.id)
+                        for work_site in work_sites
+                    ],
+                )
+            )
         db.add_all(
             [
                 PricingItem(

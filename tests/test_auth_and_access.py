@@ -1,6 +1,8 @@
 """Login, session and role enforcement."""
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from tests.conftest import (
@@ -128,11 +130,34 @@ def test_data_entry_modules_open_their_forms(client):
     assert installations.status_code == 200
     assert 'action="/installations/submit"' in installations.text
     assert "Submit installation" in installations.text
+    assert 'class="workflow-jumpbar no-print"' in installations.text
+    assert 'class="card workflow-section entry-import-disclosure"' in installations.text
+    assert not re.search(
+        r'<details class="card workflow-section entry-import-disclosure"[^>]*\sopen>',
+        installations.text,
+    )
+    assert 'class="sticky-form-actions no-print"' in installations.text
 
     maintenance = client.get("/maintenance")
     assert maintenance.status_code == 200
     assert 'action="/maintenance/submit"' in maintenance.text
     assert "Submit preventive maintenance" in maintenance.text
+    assert not re.search(
+        r'<details class="card workflow-section entry-import-disclosure"[^>]*\sopen>',
+        maintenance.text,
+    )
+
+    general = client.get("/general-maintenance")
+    assert not re.search(
+        r'<details class="card workflow-section entry-import-disclosure"[^>]*\sopen>',
+        general.text,
+    )
+    assert general.status_code == 200
+    for page in (maintenance.text, general.text):
+        assert 'href="#entry-scope"' in page
+        assert 'href="#entry-items"' in page
+        assert 'href="#entry-team"' in page
+        assert 'class="sticky-form-actions no-print"' in page
 
 
 def test_navigation_separates_data_entry_from_records(client):
@@ -158,6 +183,8 @@ def test_administrator_navigation_has_all_collapsible_groups(client):
     assert 'href="/reports/technician-audit"' in page
     assert 'href="/users"' in page
     assert 'href="/settings"' in page
+    assert 'class="quick-create no-print"' in page
+    assert 'href="/pricing/quotations/new"' in page
 
 
 def test_collapsible_navigation_preserves_role_visibility(client):
@@ -189,7 +216,7 @@ def test_active_navigation_group_is_marked_for_automatic_opening(client):
     records_page = client.get("/installations/records").text
     assert 'data-nav-section="records" data-active="true"' in records_page
 
-    reports_page = client.get("/reports").text
+    reports_page = client.get("/reports/installation").text
     assert 'data-nav-section="reports" data-active="true"' in reports_page
 
     settings_page = client.get("/settings").text

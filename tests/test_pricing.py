@@ -13,8 +13,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models import (
+    AuditEvent,
+    GeneralMaintenanceRecord,
+    InstallationRecord,
+    MaintenanceRecord,
     PricingItem,
     PricingItemCategory,
+    PricingItemPriceHistory,
     PricingQuotation,
     PricingQuotationInvoiceImage,
     PricingQuotationSiteSurveyImage,
@@ -34,6 +39,8 @@ from tests.conftest import (
     login,
     logout,
     make_image,
+    submit_installation,
+    submit_record,
 )
 
 
@@ -255,6 +262,12 @@ def test_quotation_add_item_control_opens_catalogue_picker_at_end(client, db):
     assert 'data-choose-pricing-item' in page.text
     assert f'data-item-id="{camera.id}"' in page.text
     assert f'data-item-id="{recorder.id}"' in page.text
+    assert 'class="workflow-jumpbar no-print"' in page.text
+    assert 'id="quotation-details"' in page.text
+    assert 'id="quotation-items"' in page.text
+    assert 'id="quotation-planner"' in page.text
+    assert 'id="quotation-review"' in page.text
+    assert 'class="sticky-form-actions no-print"' in page.text
     assert page.text.index('data-pricing-lines') < page.text.index(
         'class="pricing-add-line-footer"'
     )
@@ -1460,6 +1473,120 @@ def test_quotation_search_edit_pdf_and_admin_delete(client, db):
     assert db.get(PricingQuotation, quotation_id) is None
 
 
+def test_admin_deleting_quotation_preserves_all_service_records(client, db):
+    camera, _ = _create_catalogue(db)
+    login(client, *ADMIN)
+    _submit_quote(client, camera)
+    quotation = db.query(PricingQuotation).one()
+    quotation_id = quotation.id
+    quotation_number = quotation.quotation_number
+
+    logout(client)
+    login(client, *LEADER_A)
+    assert submit_installation(client, serial_number="QUOTE-DELETE-INSTALL").status_code == 303
+    assert submit_record(client, notes="Old preventive quotation link.").status_code == 303
+    page = client.get("/general-maintenance")
+    general = client.post(
+        "/general-maintenance/submit",
+        data={
+            "csrf_token": re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1),
+            "form_token": re.search(r'name="form_token" value="([^"]+)"', page.text).group(1),
+            "project_id": "1",
+            "work_site_id": "1",
+            "service_type_id": "1",
+            "installed_device_id": "1",
+            "result_0": "completed_successfully",
+            "notes": "Old maintenance quotation link.",
+        },
+        files={"photos_0": ("proof.jpg", make_image(), "image/jpeg")},
+    )
+    assert general.status_code == 303
+
+    installation = db.query(InstallationRecord).one()
+    preventive = db.query(MaintenanceRecord).one()
+    maintenance = db.query(GeneralMaintenanceRecord).one()
+    for record in (installation, preventive, maintenance):
+        record.quotation_id = quotation_id
+        record.quotation_number = quotation_number
+        for item in record.work_items:
+            item.quotation_id = quotation_id
+            item.quotation_number = quotation_number
+    db.commit()
+    record_ids = (installation.id, preventive.id, maintenance.id)
+
+    logout(client)
+    login(client, *ADMIN)
+    token = csrf_of(client, f"/pricing/quotations/{quotation_id}")
+    deleted = client.post(
+        f"/pricing/quotations/{quotation_id}/delete",
+        data={"csrf_token": token},
+    )
+
+    assert deleted.status_code == 303
+    db.expire_all()
+    assert db.get(PricingQuotation, quotation_id) is None
+    installation = db.get(InstallationRecord, record_ids[0])
+    preventive = db.get(MaintenanceRecord, record_ids[1])
+    maintenance = db.get(GeneralMaintenanceRecord, record_ids[2])
+    assert installation is not None
+    assert preventive is not None
+    assert maintenance is not None
+    assert installation.quotation_id is None
+    assert installation.quotation_number == quotation_number
+    assert installation.work_items[0].quotation_id is None
+    assert installation.work_items[0].quotation_number == quotation_number
+    for record in (preventive, maintenance):
+        assert record.quotation_id is None
+        assert record.quotation_number is None
+        assert record.work_items[0].quotation_id is None
+        assert record.work_items[0].quotation_number is None
+
+
+def test_admin_can_delete_quotations_from_list_and_in_bulk(client, db):
+    camera, _ = _create_catalogue(db)
+    login(client, *ADMIN)
+    assert _submit_quote(client, camera).status_code == 303
+    assert _submit_quote(client, camera).status_code == 303
+    quotations = db.query(PricingQuotation).order_by(PricingQuotation.id).all()
+    quotation_ids = [quotation.id for quotation in quotations]
+
+    page = client.get("/pricing/quotations")
+    assert page.status_code == 200
+    assert 'action="/pricing/quotations/bulk-delete"' in page.text
+    assert page.text.count('name="quotation_ids"') == 2
+    for quotation in quotations:
+        assert f'formaction="/pricing/quotations/{quotation.id}/delete"' in page.text
+
+    _grant_pricing(db)
+    logout(client)
+    login(client, *LEADER_A)
+    technical_page = client.get("/pricing/quotations")
+    assert technical_page.status_code == 200
+    assert 'name="quotation_ids"' not in technical_page.text
+    assert 'data-quotation-bulk-delete' not in technical_page.text
+    denied = client.post(
+        "/pricing/quotations/bulk-delete",
+        data={
+            "csrf_token": csrf_of(client, "/pricing/quotations"),
+            "quotation_ids": quotation_ids,
+        },
+    )
+    assert denied.status_code == 403
+
+    logout(client)
+    login(client, *ADMIN)
+    deleted = client.post(
+        "/pricing/quotations/bulk-delete",
+        data={
+            "csrf_token": csrf_of(client, "/pricing/quotations"),
+            "quotation_ids": quotation_ids,
+        },
+    )
+    assert deleted.status_code == 303
+    db.expire_all()
+    assert db.query(PricingQuotation).count() == 0
+
+
 def test_mixed_currency_lines_and_derived_required_charges(client, db):
     camera, _recorder = _create_catalogue(db)
     camera.currency = "USD"
@@ -1551,3 +1678,91 @@ def test_quotation_pdf_embeds_an_arabic_font_for_catalogue_text(client, db):
     response = client.get(f"/pricing/quotations/{quotation.id}/pdf")
     assert response.status_code == 200
     assert b"NotoSansArabic" in response.content
+
+
+def test_quotation_custom_addressee_is_snapshotted_and_printed(client, db):
+    camera, _recorder = _create_catalogue(db)
+    login(client, *ADMIN)
+
+    created = _submit_quote(
+        client,
+        camera,
+        addressee_source="custom",
+        addressee_name="Noura Al Saud",
+        addressee_title="Procurement Manager",
+        addressee_email="noura@example.com",
+        addressee_phone="+966500000000",
+    )
+
+    assert created.status_code == 303
+    quotation = db.query(PricingQuotation).one()
+    assert quotation.addressee_source == "custom"
+    assert quotation.addressee_name == "Noura Al Saud"
+    assert quotation.addressee_title == "Procurement Manager"
+    detail = client.get(f"/pricing/quotations/{quotation.id}")
+    assert detail.status_code == 200
+    assert "Noura Al Saud" in detail.text
+    items_page = client.get("/pricing/items")
+    assert items_page.status_code == 200
+    assert f'data-context="{quotation.quotation_number}"' in items_page.text
+    assert 'data-price="100.00 SAR"' in items_page.text
+    pdf = client.get(f"/pricing/quotations/{quotation.id}/pdf")
+    assert pdf.status_code == 200
+    text = "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(pdf.content)).pages)
+    assert "Noura Al Saud" in text
+
+
+def test_quotation_can_target_customer_assigned_to_selected_project(client, db):
+    camera, _recorder = _create_catalogue(db)
+    login(client, *ADMIN)
+    form = client.get("/pricing/quotations/new")
+    assert 'value="customer:5"' in form.text
+
+    created = _submit_quote(client, camera, addressee_source="customer:5")
+
+    assert created.status_code == 303
+    quotation = db.query(PricingQuotation).one()
+    assert quotation.addressee_user_id == 5
+    assert quotation.addressee_name == "Customer A"
+
+
+def test_catalogue_price_edit_creates_history_and_audit_event(client, db):
+    login(client, *ADMIN)
+    item = db.query(PricingItem).filter_by(name="IP Camera").one()
+    token = csrf_of(client, "/pricing/items")
+
+    response = client.post(
+        f"/pricing/items/{item.id}/edit",
+        data={
+            "csrf_token": token,
+            "name": item.name,
+            "model": item.model,
+            "unit_price": "125.50",
+            "currency": "SAR",
+            "service_enabled": "1",
+        },
+    )
+
+    assert response.status_code == 303
+    db.expire_all()
+    history = db.query(PricingItemPriceHistory).filter_by(pricing_item_id=item.id).one()
+    assert history.old_price == Decimal("100.00")
+    assert history.new_price == Decimal("125.50")
+    assert history.changed_by_name == "Test Admin"
+    price_page = client.get("/pricing/items")
+    assert price_page.status_code == 200
+    assert 'data-value="125.50"' in price_page.text
+    assert 'data-price="125.50 SAR"' in price_page.text
+    event = (
+        db.query(AuditEvent)
+        .filter_by(entity_type="pricing_item", entity_id=str(item.id), action="update")
+        .one()
+    )
+    assert event.changes["price"] == {
+        "before": "100.00 SAR",
+        "after": "125.50 SAR",
+    }
+    page = client.get("/admin/audit-log")
+    assert page.status_code == 200
+    assert "Test Admin" in page.text
+    assert "125.50 SAR" in page.text

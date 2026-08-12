@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}{{ t('ui.audit.log') }} · {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('ui.audit.log') }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><span class="eyebrow">{{ t('nav.group.management') }}</span><h1>{{ t('ui.audit.log') }}</h1><p class="lede">{{ t('ui.audit.log.help') }}</p></div></div>
+<form method="get" class="card"><div class="card-body"><div class="grid cols-3">
+  <div class="field"><label for="audit-q">{{ t('ui.search') }}</label><input id="audit-q" name="q" value="{{ filters.q }}" placeholder="{{ t('ui.audit.search.placeholder') }}"></div>
+  <div class="field"><label for="audit-actor">{{ t('ui.user') }}</label><select id="audit-actor" name="actor"><option value="">{{ t('ui.all') }}</option>{% for value in actors %}<option value="{{ value }}" {{ 'selected' if filters.actor == value }}>{{ value }}</option>{% endfor %}</select></div>
+  <div class="field"><label for="audit-module">{{ t('ui.module') }}</label><select id="audit-module" name="module"><option value="">{{ t('ui.all') }}</option>{% for value in modules %}<option value="{{ value }}" {{ 'selected' if filters.module == value }}>{{ value|replace('_', ' ')|title }}</option>{% endfor %}</select></div>
+  <div class="field"><label for="audit-action">{{ t('ui.action') }}</label><select id="audit-action" name="action"><option value="">{{ t('ui.all') }}</option>{% for value in actions %}<option value="{{ value }}" {{ 'selected' if filters.action == value }}>{{ value|replace('_', ' ')|title }}</option>{% endfor %}</select></div>
+  <div class="field"><label for="audit-from">{{ t('ui.from') }}</label><input id="audit-from" name="from_at" type="datetime-local" step="1" value="{{ filters.from_at }}"></div>
+  <div class="field"><label for="audit-to">{{ t('ui.to') }}</label><input id="audit-to" name="to_at" type="datetime-local" step="1" value="{{ filters.to_at }}"></div>
+</div><div style="display:flex;gap:8px;"><button class="btn btn-primary" type="submit">{{ t('ui.apply.filters') }}</button><a class="btn btn-secondary" href="/admin/audit-log">{{ t('ui.clear') }}</a></div></div></form>
+<div class="card"><div class="card-head"><h2>{{ t('ui.activity') }}</h2><span class="tag">{{ page.total }}</span></div><div class="card-body tight">
+{% if events %}<div class="table-wrap"><table><thead><tr><th>{{ t('ui.date.and.time') }}</th><th>{{ t('ui.user') }}</th><th>{{ t('ui.action') }}</th><th>{{ t('ui.module') }}</th><th>{{ t('ui.record') }}</th><th>{{ t('ui.request') }}</th><th>{{ t('ui.details') }}</th></tr></thead><tbody>
+{% for event in events %}<tr><td class="mono">{{ event.created_at|datetime }}</td><td><strong>{{ event.actor_name }}</strong><br><small>{{ event.actor_role or '—' }} · {{ event.ip_address or '—' }}</small></td><td><span class="tag">{{ event.action|replace('_', ' ') }}</span></td><td>{{ event.module|replace('_', ' ')|title }}</td><td>{{ event.entity_label or event.entity_type or '—' }}{% if event.entity_id %}<br><small class="mono">#{{ event.entity_id }}</small>{% endif %}</td><td><span class="mono">{{ event.method }} {{ event.status_code }}</span><br><small>{{ event.path }}</small></td><td>{% if event.changes %}<details><summary>{{ t('ui.view.changes') }}</summary><dl class="kv">{% for key, value in event.changes.items() %}<dt>{{ key|replace('_', ' ')|title }}</dt><dd>{% if value is mapping and 'before' in value %}{{ value.before if value.before not in [none, ''] else '—' }} → {{ value.after if value.after not in [none, ''] else '—' }}{% else %}{{ value }}{% endif %}</dd>{% endfor %}</dl></details>{% else %}—{% endif %}</td></tr>{% endfor %}
+</tbody></table></div>{% else %}<p class="empty">{{ t('ui.no.audit.events') }}</p>{% endif %}
+</div></div>
+{% endblock %}

@@ -1,0 +1,35 @@
+<section class="card entry-data-table" data-entry-data-table data-table-kind="{{ 'installation' if entry_kind == 'installation' else 'maintenance' }}">
+  <div class="card-head"><div><h2>{{ t('ui.device.data') }}</h2><p class="hint">{{ t('ui.enter.device.data.directly.for.this.site') }}</p></div></div>
+  <div class="card-body">
+    <div class="table-wrap">
+      {% if entry_kind == 'installation' %}
+      <table class="data-table browser-entry-table">
+        <thead><tr><th>{{ t('ui.no') }}</th><th>{{ t('ui.item.title') }}</th><th>{{ t('ui.model') }}</th><th>{{ t('ui.serial.number') }}</th><th>IMEI</th><th>{{ t('ui.sim.serial.number') }}</th><th>{{ t('ui.sim.type') }}</th><th>Main Project</th><th>Sub Project</th><th>{{ t('ui.site') }}</th><th>{{ t('ui.remarks') }}</th><th><span class="sr-only">{{ t('ui.actions') }}</span></th></tr></thead>
+        <tbody data-entry-data-rows>
+          <tr data-entry-data-row>
+            <td data-entry-data-number>1</td><td><input type="hidden" name="data_scope_index" value="0" data-entry-data-scope><input name="data_item_name" maxlength="160" aria-label="{{ t('ui.item.title') }}"></td>
+            <td><input name="data_model" maxlength="160" aria-label="{{ t('ui.model') }}"></td><td><input name="data_serial_number" maxlength="160" aria-label="{{ t('ui.serial.number') }}"></td>
+            <td><input name="data_imei" maxlength="160" inputmode="numeric" aria-label="IMEI"></td><td><input name="data_iccid" maxlength="160" inputmode="numeric" aria-label="{{ t('ui.sim.serial.number') }}"></td>
+            <td><select name="data_sim_type" aria-label="{{ t('ui.sim.type') }}"><option value="">-</option><option>Zain</option><option>Mobily</option><option>STC</option></select></td>
+            <td><span data-entry-main-project>-</span></td><td><span data-entry-sub-project>-</span></td><td><span data-entry-site>-</span></td>
+            <td><input name="data_remarks" maxlength="5000" aria-label="{{ t('ui.remarks') }}"></td><td><button type="button" class="btn btn-quiet btn-sm" data-remove-data-row>{{ t('ui.remove') }}</button></td>
+          </tr>
+        </tbody>
+      </table>
+      {% else %}
+      <table class="data-table browser-entry-table">
+        <thead><tr><th>{{ t('ui.no') }}</th><th>{{ t('ui.item.title') }}</th><th>{{ t('ui.quantity') }}</th><th>{{ t('ui.notes') }}</th><th><span class="sr-only">{{ t('ui.actions') }}</span></th></tr></thead>
+        <tbody data-entry-data-rows>
+          <tr data-entry-data-row>
+            <td data-entry-data-number>1</td><td><input type="hidden" name="data_scope_index" value="0" data-entry-data-scope><input name="data_item_name" maxlength="160" aria-label="{{ t('ui.item.title') }}"></td>
+            <td><input name="data_quantity" type="number" min="1" max="999999" step="1" value="1" aria-label="{{ t('ui.quantity') }}"></td>
+            <td><input name="data_notes" maxlength="5000" aria-label="{{ t('ui.notes') }}"></td><td><button type="button" class="btn btn-quiet btn-sm" data-remove-data-row>{{ t('ui.remove') }}</button></td>
+          </tr>
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+    <button type="button" class="btn btn-secondary" data-add-data-row>{{ t('ui.add.row') }}</button>
+    <p class="hint">{{ t('ui.blank.rows.are.ignored') }}</p>
+  </div>
+</section>

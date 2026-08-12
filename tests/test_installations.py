@@ -56,6 +56,30 @@ def test_team_leader_can_submit_installation(client, db):
     assert record.submitted_at.year != 1900
 
 
+def test_installation_stores_browser_device_data(client, db):
+    login(client, *LEADER_A)
+    response = submit_installation(
+        client,
+        serial_number="",
+        data_scope_index="0",
+        data_item_name="IP Camera",
+        data_model="Axis P3265-LV",
+        data_serial_number="BROWSER-SN-1",
+        data_imei="123456789012345",
+        data_iccid="123456789012345678",
+        data_sim_type="STC",
+        data_remarks="Mounted at entrance",
+    )
+    assert response.status_code == 303
+    record = db.query(InstallationRecord).one()
+    assert len(record.device_data_rows) == 1
+    row = record.device_data_rows[0]
+    assert (row.item_name, row.model, row.work_site_name) == (
+        "IP Camera", "Axis P3265-LV", "Gate 1"
+    )
+    assert record.work_items[0].serial_number == "BROWSER-SN-1"
+
+
 def test_data_entry_item_selectors_use_shared_image_picker(client, db):
     item = db.get(PricingItem, 1)
     stored = store_image("service-item.jpg", make_image())
@@ -67,12 +91,16 @@ def test_data_entry_item_selectors_use_shared_image_picker(client, db):
     db.commit()
 
     login(client, *LEADER_A)
-    for path in ("/installations/submit", "/maintenance", "/general-maintenance"):
+    installation_page = client.get("/installations/submit")
+    assert installation_page.status_code == 200
+    assert "data-service-item-picker" in installation_page.text
+    assert "data-service-item-trigger" in installation_page.text
+    assert "/service-items/1/image?size=thumb" in installation_page.text
+    for path in ("/maintenance", "/general-maintenance"):
         page = client.get(path)
         assert page.status_code == 200
-        assert "data-service-item-picker" in page.text
-        assert "data-service-item-trigger" in page.text
-        assert "/service-items/1/image?size=thumb" in page.text
+        assert "data-service-item-picker" not in page.text
+        assert 'data-table-kind="maintenance"' in page.text
     image = client.get("/service-items/1/image?size=thumb")
     assert image.status_code == 200
     assert image.headers["content-type"] == "image/jpeg"
@@ -166,11 +194,8 @@ def test_quotation_id_is_hidden_without_pricing_access_but_visible_to_admin(
         ({"work_site_id": ""}, "Select the site"),
         ({"service_id": None}, "Select the installation type"),
         ({"device_id": ""}, "Select the device being installed"),
-        ({"serial_number": ""}, "Enter the equipment serial number"),
-        ({"warranty_start": ""}, "Select the warranty start date"),
         ({"warranty_start": "not-a-date"}, "valid warranty start date"),
         ({"result": ""}, "Select the installation result"),
-        ({"notes": ""}, "Describe the installation"),
         ({"photos": []}, "Attach at least one installation photo"),
     ],
 )
@@ -179,6 +204,24 @@ def test_installation_validation(client, overrides, message):
     response = submit_installation(client, **overrides)
     assert response.status_code == 422
     assert message in response.text
+
+
+def test_installation_allows_blank_serial_warranty_and_notes(client, db):
+    login(client, *LEADER_A)
+    response = submit_installation(
+        client,
+        serial_number="",
+        warranty_start="",
+        notes="",
+    )
+
+    assert response.status_code == 303
+    record = db.query(InstallationRecord).one()
+    assert record.serial_number is None
+    assert record.warranty_start is None
+    assert record.notes == ""
+    assert record.installed_device.serial_number is None
+    assert record.work_items[0].serial_number is None
 
 
 def test_inactive_master_data_cannot_be_used(client):
@@ -232,6 +275,65 @@ def test_installation_edit_is_saved_and_audited(client, db):
     assert "item_1_notes" in revision.changes
 
 
+def test_installation_photo_editor_previews_edits_adds_and_removes_notes(client, db):
+    login(client, *LEADER_A)
+    assert submit_installation(client, serial_number="PHOTO-EDITOR-001").status_code == 303
+    record = db.query(InstallationRecord).one()
+    original = record.work_items[0].photos[0]
+    edit_page = client.get(f"/installations/records/{record.id}/edit")
+    assert edit_page.status_code == 200
+    assert f'/media/installation-item-photo/{original.id}?size=thumb' in edit_page.text
+    assert f'name="photo_description_{original.id}"' in edit_page.text
+
+    token = csrf_of(client, f"/installations/records/{record.id}/edit")
+    updated = client.post(
+        f"/installations/records/{record.id}/edit",
+        data={
+            "csrf_token": token,
+            "result_0": "completed_successfully",
+            "notes_0": record.notes,
+            "handover_notes_0": "",
+            f"photo_description_{original.id}": "Existing photo note updated.",
+            "add_before_photo_descriptions_0": "New foundation photo.",
+        },
+        files=[
+            ("add_before_photos_0", ("new-before.jpg", make_image(), "image/jpeg"))
+        ],
+    )
+    assert updated.status_code == 303
+    db.expire_all()
+    record = db.get(InstallationRecord, record.id)
+    photos = record.work_items[0].photos
+    assert len(photos) == 2
+    assert next(photo for photo in photos if photo.id == original.id).description == (
+        "Existing photo note updated."
+    )
+    added = next(photo for photo in photos if photo.id != original.id)
+    assert added.stage == EvidencePhotoStage.BEFORE
+    assert added.description == "New foundation photo."
+    assert db.query(RecordRevision).order_by(RecordRevision.id.desc()).first().changes[
+        "item_1_photos"
+    ]["notes_edited"]
+
+    token = csrf_of(client, f"/installations/records/{record.id}/edit")
+    removed = client.post(
+        f"/installations/records/{record.id}/edit",
+        data={
+            "csrf_token": token,
+            "result_0": "completed_successfully",
+            "notes_0": record.notes,
+            "handover_notes_0": "",
+            "remove_photo_0": str(original.id),
+            f"photo_description_{added.id}": added.description,
+        },
+    )
+    assert removed.status_code == 303
+    db.expire_all()
+    assert [photo.id for photo in db.get(InstallationRecord, record.id).work_items[0].photos] == [
+        added.id
+    ]
+
+
 def test_customer_cannot_edit_or_delete_assigned_installation(client, db):
     login(client, *LEADER_A)
     submit_installation(client)
@@ -271,7 +373,7 @@ def test_admin_can_delete_unreferenced_installation(client, db):
     assert revision.action == "deleted"
 
 
-def test_admin_cannot_delete_installation_used_by_maintenance(client, db):
+def test_new_maintenance_record_does_not_link_installed_asset(client, db):
     login(client, *LEADER_A)
     submit_installation(client, serial_number="REFERENCED-INSTALLATION")
     record = db.query(InstallationRecord).one()
@@ -289,9 +391,9 @@ def test_admin_cannot_delete_installation_used_by_maintenance(client, db):
 
     assert response.status_code == 303
     db.expire_all()
-    assert db.get(InstallationRecord, record_id) is not None
+    assert db.get(InstallationRecord, record_id) is None
     detail = client.get(response.headers["location"])
-    assert "referenced by a maintenance record" in detail.text
+    assert "Installation record deleted" in detail.text
 
 
 def test_customer_can_only_view_assigned_project_installations_and_photos(client, db):

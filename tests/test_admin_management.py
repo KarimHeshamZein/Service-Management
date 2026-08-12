@@ -1,7 +1,17 @@
 """Administrator management of projects, service types, devices and users."""
 from __future__ import annotations
 
-from app.models import DeviceCatalog, ServiceType, Site, User, WorkSite
+from datetime import date
+
+from app.models import (
+    DeviceCatalog,
+    ServiceType,
+    Site,
+    SubProject,
+    SubProjectSite,
+    User,
+    WorkSite,
+)
 from tests.conftest import ADMIN, LEADER_A, csrf_of, login, logout
 
 
@@ -38,6 +48,148 @@ def test_admin_can_add_and_edit_a_project(client, db):
     db.expire_all()
     assert db.get(Site, site.id).name == "Nakheel Retail North"
     assert db.get(Site, site.id).customer_name == "Nakheel Retail North"
+
+
+def test_new_main_project_gets_metadata_and_general_site_hierarchy(client, db):
+    login(client, *ADMIN)
+    token = csrf_of(client, "/projects")
+
+    response = client.post(
+        "/projects",
+        data={
+            "name": "Qiddiya",
+            "address": "Riyadh",
+            "description": "City infrastructure and security systems.",
+            "start_date": "2026-01-10",
+            "end_date": "2026-12-31",
+            "csrf_token": token,
+        },
+    )
+
+    assert response.status_code == 303
+    project = db.query(Site).filter(Site.name == "Qiddiya").one()
+    assert project.description == "City infrastructure and security systems."
+    assert project.start_date == date(2026, 1, 10)
+    assert project.end_date == date(2026, 12, 31)
+    assert [sub_project.name for sub_project in project.sub_projects] == ["General"]
+    assert {
+        assignment.site_id
+        for assignment in project.sub_projects[0].site_assignments
+    } == {1, 2, 3}
+
+    page = client.get(f"/projects?project_id={project.id}")
+    assert page.status_code == 200
+    assert 'hierarchy-level-main">Main<' in page.text
+    assert 'hierarchy-level-sub">Sub<' in page.text
+    assert "Project type" in page.text
+    assert "Created at" in page.text
+    assert f'id="sub-project-{project.sub_projects[0].id}"' in page.text
+
+
+def test_main_project_rejects_invalid_date_range(client, db):
+    login(client, *ADMIN)
+    token = csrf_of(client, "/projects")
+
+    response = client.post(
+        "/projects",
+        data={
+            "name": "Invalid Timeline",
+            "address": "Riyadh",
+            "start_date": "2026-12-31",
+            "end_date": "2026-01-01",
+            "csrf_token": token,
+        },
+    )
+
+    assert response.status_code == 303
+    assert db.query(Site).filter(Site.name == "Invalid Timeline").count() == 0
+
+
+def test_sub_project_crud_and_site_assignment_preserve_role_boundaries(client, db):
+    login(client, *LEADER_A)
+    token = csrf_of(client, "/projects?project_id=1")
+
+    created = client.post(
+        "/projects/1/sub-projects",
+        data={
+            "name": "Direction Signboards",
+            "description": "Gate signage",
+            "csrf_token": token,
+        },
+    )
+    assert created.status_code == 303
+    sub_project = db.query(SubProject).filter(
+        SubProject.project_id == 1,
+        SubProject.name == "Direction Signboards",
+    ).one()
+    duplicate = client.post(
+        "/projects/1/sub-projects",
+        data={"name": "direction signboards", "csrf_token": token},
+    )
+    assert duplicate.status_code == 303
+    assert db.query(SubProject).filter(SubProject.project_id == 1).count() == 1
+
+    assigned = client.post(
+        f"/sub-projects/{sub_project.id}/sites",
+        data={"site_ids": ["1", "3"], "csrf_token": token},
+    )
+    assert assigned.status_code == 303
+    db.expire_all()
+    assert {
+        assignment.site_id for assignment in db.get(SubProject, sub_project.id).site_assignments
+    } == {1, 3}
+    rejected = client.post(
+        f"/sub-projects/{sub_project.id}/sites",
+        data={"site_ids": ["2", "999999"], "csrf_token": token},
+    )
+    assert rejected.status_code == 303
+    db.expire_all()
+    assert {
+        assignment.site_id for assignment in db.get(SubProject, sub_project.id).site_assignments
+    } == {1, 3}
+
+    edited = client.post(
+        f"/sub-projects/{sub_project.id}/edit",
+        data={"name": "Signboards", "description": "Updated", "csrf_token": token},
+    )
+    assert edited.status_code == 303
+    db.expire_all()
+    assert db.get(SubProject, sub_project.id).name == "Signboards"
+
+    assert client.post(
+        f"/sub-projects/{sub_project.id}/toggle", data={"csrf_token": token}
+    ).status_code == 403
+    assert client.post(
+        f"/sub-projects/{sub_project.id}/delete", data={"csrf_token": token}
+    ).status_code == 403
+
+    logout(client)
+    login(client, *ADMIN)
+    token = csrf_of(client, "/projects?project_id=1")
+    assert client.post(
+        f"/sub-projects/{sub_project.id}/toggle", data={"csrf_token": token}
+    ).status_code == 303
+    db.expire_all()
+    assert db.get(SubProject, sub_project.id).is_active is False
+    sub_project_id = sub_project.id
+    assert client.post(
+        f"/sub-projects/{sub_project_id}/delete", data={"csrf_token": token}
+    ).status_code == 303
+    db.expire_all()
+    assert db.get(SubProject, sub_project_id) is None
+
+
+def test_project_hierarchy_searches_sub_projects_sites_and_customers(client, db):
+    project = db.get(Site, 1)
+    sub_project = SubProject(project=project, name="Uptown")
+    sub_project.site_assignments = [SubProjectSite(site_id=2)]
+    db.add(sub_project)
+    db.commit()
+
+    login(client, *ADMIN)
+    assert "Tower A" in client.get("/projects?q=Uptown").text
+    assert "Tower A" in client.get("/projects?q=Gate+2").text
+    assert "Tower A" in client.get("/projects?q=Customer+A").text
 
 
 def test_legacy_site_write_endpoint_is_removed_for_technical_users(client, db):

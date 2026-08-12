@@ -9,8 +9,10 @@ from app.config import settings
 from app.models import (
     EvidencePhotoStage,
     DeviceCatalog,
+    GeneralMaintenanceRecord,
     InstalledDevice,
     InstalledDeviceSite,
+    InstallationRecord,
     MaintenancePhoto,
     MaintenanceRecord,
     MaintenanceResult,
@@ -54,6 +56,23 @@ def test_preventive_maintenance_stores_before_and_after_photos(client, db):
     assert stages == [EvidencePhotoStage.BEFORE, EvidencePhotoStage.AFTER]
 
 
+def test_preventive_maintenance_stores_direct_site_table_without_asset_link(client, db):
+    login(client, *LEADER_A)
+    response = submit_record(
+        client,
+        data_scope_index="0",
+        data_item_name="Camera cleaning",
+        data_quantity="3",
+        data_notes="All housings cleaned",
+    )
+    assert response.status_code == 303
+    record = _record(db)
+    assert record.device_evidence is None
+    assert record.work_items[0].installed_device_id is None
+    assert record.device_data_rows[0].item_name == "Camera cleaning"
+    assert record.device_data_rows[0].quantity == 3
+
+
 def test_preventive_maintenance_lists_and_accepts_uninstalled_catalog_item(client, db):
     device = DeviceCatalog(name="Solar Panel", model="SP-500")
     item = PricingItem(
@@ -88,9 +107,11 @@ def test_preventive_maintenance_lists_and_accepts_uninstalled_catalog_item(clien
 
 def test_team_leader_can_submit_a_complete_record(client, db):
     login(client, *LEADER_A)
+    assert 'name="quotation_number"' not in client.get("/maintenance").text
     response = submit_record(
         client,
         participants=["3"],
+        quotation_number="FORGED-QUOTATION",
         issue_description="Loose connector on camera 3.",
         recommendations="Replace the connector next visit.",
     )
@@ -104,6 +125,10 @@ def test_team_leader_can_submit_a_complete_record(client, db):
     assert record.participant_names == ["Leader Two"]
     assert len(record.photos) == 1
     assert record.result == MaintenanceResult.COMPLETED_SUCCESSFULLY
+    assert record.quotation_id is None
+    assert record.quotation_number is None
+    assert record.work_items[0].quotation_id is None
+    assert record.work_items[0].quotation_number is None
 
 
 def test_backend_records_the_user_and_its_own_timestamp(client, db):
@@ -269,12 +294,11 @@ def test_out_of_range_project_id_returns_field_error(client, db):
     assert db.query(MaintenanceRecord).count() == 0
 
 
-def test_submission_fails_without_notes(client, db):
+def test_submission_allows_blank_notes(client, db):
     login(client, *LEADER_A)
     response = submit_record(client, notes="   ")
-    assert response.status_code == 422
-    assert "Describe the maintenance" in response.text
-    assert db.query(MaintenanceRecord).count() == 0
+    assert response.status_code == 303
+    assert db.query(MaintenanceRecord).one().notes == ""
 
 
 def test_submission_fails_without_a_photo(client, db):
@@ -463,7 +487,11 @@ def test_preventive_maintenance_edit_is_saved_and_audited(client, db):
             "issue_description_0": "Minor dust remained inside the enclosure.",
             "recommendations_0": "Inspect the enclosure during the next visit.",
             "participant_ids": ["3"],
+            "add_after_photo_descriptions_0": "Enclosure after cleaning.",
         },
+        files=[
+            ("add_after_photos_0", ("after-edit.jpg", make_image(), "image/jpeg"))
+        ],
     )
 
     assert response.status_code == 303
@@ -473,6 +501,11 @@ def test_preventive_maintenance_edit_is_saved_and_audited(client, db):
     assert record.site_id == original_project
     assert record.notes == "Updated preventive maintenance notes."
     assert [person.name for person in record.participants] == ["Leader Two"]
+    assert any(
+        photo.description == "Enclosure after cleaning."
+        and photo.stage == EvidencePhotoStage.AFTER
+        for photo in record.work_items[0].photos
+    )
     revision = db.query(RecordRevision).one()
     assert revision.record_type == "preventive_maintenance"
     assert revision.editor_name == "Leader One"
@@ -606,6 +639,56 @@ def test_dashboard_statistics_update_after_a_submission(client, db):
     admin_dashboard = client.get("/dashboard").text
     assert "Camera Service" in admin_dashboard
     assert "Leader One" in admin_dashboard
+
+
+def test_dashboard_combines_all_record_types_and_uses_correct_recent_links(client, db):
+    db.add_all(
+        [
+            InstallationRecord(
+                record_number="NI-2026-90001",
+                site_id=1,
+                service_type_id=1,
+                submitted_by_id=2,
+                site_name="Tower A",
+                customer_name="Acme Holding",
+                site_address="Riyadh",
+                service_name="Camera installation",
+                team_leader_name="Leader One",
+                equipment_model="P3265-LV",
+                result=MaintenanceResult.COMPLETED_SUCCESSFULLY,
+                notes="Installed.",
+            ),
+            GeneralMaintenanceRecord(
+                record_number="GM-2026-90001",
+                site_id=1,
+                work_site_id=1,
+                service_type_id=1,
+                submitted_by_id=2,
+                project_name="Tower A",
+                site_name="Gate 1",
+                project_address="Riyadh",
+                service_name="Camera repair",
+                team_leader_name="Leader One",
+                result=MaintenanceResult.FURTHER_ACTION_REQUIRED,
+                notes="Repair pending.",
+            ),
+        ]
+    )
+    db.commit()
+
+    login(client, *ADMIN)
+    page = client.get("/dashboard").text
+
+    assert re.search(
+        r'<div class="label">Total records</div>\s*<div class="value">2</div>',
+        page,
+    )
+    assert 'href="/installations/records/1"' in page
+    assert 'href="/general-maintenance/records/1"' in page
+    assert "Camera installation" in page
+    assert "Camera repair" in page
+    assert 'class="topbar-dashboard-link"' in page
+    assert ">Dashboard</span>" in page
 
 
 def test_technical_dashboard_includes_other_technical_users_work(client, db):

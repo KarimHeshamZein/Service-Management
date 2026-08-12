@@ -19,7 +19,6 @@ from tests.conftest import (
     CUSTOMER_B,
     LEADER_A,
     csrf_of,
-    ensure_service_quotation,
     login,
     logout,
     make_image,
@@ -40,12 +39,13 @@ def test_maintenance_module_is_separate_and_uses_the_grouped_layout(client):
     page = client.get("/general-maintenance")
     assert page.status_code == 200
     assert 'action="/general-maintenance/submit"' in page.text
-    assert "Add another item" in page.text
+    assert "Add another device" in page.text
     assert "Maintenance result" in page.text
     assert 'href="/maintenance"' in page.text
     assert 'href="/general-maintenance"' in page.text
     assert "Before photos" in page.text
     assert "After photos" in page.text
+    assert 'name="quotation_number"' not in page.text
 
 
 def test_normal_maintenance_stores_before_and_after_photos(client, db):
@@ -57,7 +57,7 @@ def test_normal_maintenance_stores_before_and_after_photos(client, db):
             "csrf_token": csrf,
             "form_token": form_token,
             "project_id": "1",
-            "quotation_number": ensure_service_quotation("1"),
+            "quotation_number": "FORGED-QUOTATION",
             "work_site_id": "1",
             "service_type_id": "1",
             "installed_device_id": "1",
@@ -75,6 +75,58 @@ def test_normal_maintenance_stores_before_and_after_photos(client, db):
         EvidencePhotoStage.BEFORE,
         EvidencePhotoStage.AFTER,
     ]
+    assert record.quotation_id is None
+    assert record.quotation_number is None
+    assert record.work_items[0].quotation_id is None
+    assert record.work_items[0].quotation_number is None
+
+
+def test_normal_maintenance_stores_direct_site_table_without_asset_link(client, db):
+    login(client, *LEADER_A)
+    csrf, form_token = _tokens(client)
+    response = client.post(
+        "/general-maintenance/submit",
+        data={
+            "csrf_token": csrf,
+            "form_token": form_token,
+            "project_id": "1",
+            "work_site_id": "1",
+            "service_type_id": "1",
+            "result_0": "completed_successfully",
+            "notes": "Serviced gate",
+            "data_scope_index": "0",
+            "data_item_name": "Barrier service",
+            "data_quantity": "2",
+            "data_notes": "Lubricated mechanisms",
+        },
+        files=[("photos_0", ("proof.jpg", make_image(), "image/jpeg"))],
+    )
+    assert response.status_code == 303
+    record = db.query(GeneralMaintenanceRecord).one()
+    assert record.work_items[0].installed_device_id is None
+    assert record.device_data_rows[0].quantity == 2
+
+
+def test_normal_maintenance_allows_blank_notes(client, db):
+    login(client, *LEADER_A)
+    csrf, form_token = _tokens(client)
+    response = client.post(
+        "/general-maintenance/submit",
+        data={
+            "csrf_token": csrf,
+            "form_token": form_token,
+            "project_id": "1",
+            "work_site_id": "1",
+            "service_type_id": "1",
+            "installed_device_id": "1",
+            "result_0": "completed_successfully",
+            "notes": "",
+        },
+        files=[("photos_0", ("proof.jpg", make_image(), "image/jpeg"))],
+    )
+
+    assert response.status_code == 303
+    assert db.query(GeneralMaintenanceRecord).one().notes == ""
 
 
 def test_normal_maintenance_lists_and_accepts_uninstalled_catalog_item(client, db):
@@ -104,7 +156,6 @@ def test_normal_maintenance_lists_and_accepts_uninstalled_catalog_item(client, d
             "csrf_token": csrf,
             "form_token": form_token,
             "project_id": "1",
-            "quotation_number": ensure_service_quotation("1"),
             "work_site_id": "1",
             "service_type_id": "1",
             "installed_device_id": f"catalog:{item.id}",
@@ -142,7 +193,6 @@ def test_one_maintenance_record_contains_independent_device_evidence(client, db)
             "csrf_token": csrf,
             "form_token": form_token,
             "project_id": "1",
-            "quotation_number": ensure_service_quotation("1"),
             "work_site_id": "1",
             "service_type_id": ["1", "1"],
             "installed_device_id": ["1", str(second.id)],
@@ -210,7 +260,6 @@ def test_each_maintenance_item_requires_its_own_result_notes_and_photo(client, d
             "csrf_token": csrf,
             "form_token": form_token,
             "project_id": "1",
-            "quotation_number": ensure_service_quotation("1"),
             "work_site_id": "1",
             "service_type_id": "1",
             "installed_device_id": "1",
@@ -234,7 +283,6 @@ def test_normal_maintenance_requires_issue_detail_for_unable_result(client, db):
             "csrf_token": csrf,
             "form_token": form_token,
             "project_id": "1",
-            "quotation_number": ensure_service_quotation("1"),
             "work_site_id": "1",
             "service_type_id": "1",
             "installed_device_id": "1",
@@ -259,7 +307,6 @@ def test_normal_maintenance_can_be_edited_and_deleted_by_the_right_roles(client,
             "csrf_token": csrf,
             "form_token": form_token,
             "project_id": "1",
-            "quotation_number": ensure_service_quotation("1"),
             "work_site_id": "1",
             "service_type_id": "1",
             "installed_device_id": "1",
@@ -279,12 +326,21 @@ def test_normal_maintenance_can_be_edited_and_deleted_by_the_right_roles(client,
             "issue_description_0": "Small alignment issue observed.",
             "recommendations_0": "Check alignment next month.",
             "participant_ids": ["3"],
+            "add_after_photo_descriptions_0": "Alignment after correction.",
         },
+        files=[
+            ("add_after_photos_0", ("after-edit.jpg", make_image(), "image/jpeg"))
+        ],
     )
     assert edited.status_code == 303
     db.expire_all()
     assert db.get(GeneralMaintenanceRecord, record.id).work_items[0].notes == (
         "Updated normal maintenance notes."
+    )
+    assert any(
+        photo.description == "Alignment after correction."
+        and photo.stage == EvidencePhotoStage.AFTER
+        for photo in db.get(GeneralMaintenanceRecord, record.id).work_items[0].photos
     )
     assert db.query(RecordRevision).one().record_type == "maintenance"
     assert client.post(

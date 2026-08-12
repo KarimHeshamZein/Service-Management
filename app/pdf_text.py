@@ -10,7 +10,7 @@ import arabic_reshaper
 from bidi.algorithm import get_display
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.enums import TA_RIGHT
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.styles import ParagraphStyle
 
 PDF_FONT = "NotoSansArabic"
@@ -19,6 +19,8 @@ FONT_ROOT = Path(__file__).resolve().parent / "static" / "fonts"
 _ARABIC = re.compile(
     "[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]"
 )
+_INVISIBLE_FORMATTING = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]")
+_UNSUPPORTED_SYMBOLS = re.compile("[\u2600-\u27bf\U0001f000-\U0001faff]")
 
 
 def register_pdf_fonts() -> None:
@@ -62,7 +64,7 @@ def style_for_pdf_text(value: Any, style: ParagraphStyle) -> ParagraphStyle:
         f"{style.name}Arabic",
         parent=style,
         fontName=PDF_FONT_BOLD if bold else PDF_FONT,
-        alignment=TA_RIGHT,
+        alignment=TA_CENTER if style.alignment == TA_CENTER else TA_RIGHT,
     )
 
 
@@ -78,6 +80,11 @@ def pdf_text(value: Any, fallback: str = "-") -> str:
         .replace("\u2013", "-")
         .replace("\u2014", "-")
         .replace("\u00b7", "|")
+    )
+    normalized = _INVISIBLE_FORMATTING.sub("", normalized)
+    normalized = _UNSUPPORTED_SYMBOLS.sub("", normalized)
+    normalized = "\n".join(
+        re.sub(r"[ \t]+", " ", line).strip() for line in normalized.splitlines()
     )
     return "<br/>".join(
         html.escape(visual_text(line), quote=False)

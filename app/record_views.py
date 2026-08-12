@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import func, literal, or_, select, union_all
+from sqlalchemy import and_, func, literal, or_, select, union_all
 from sqlalchemy.orm import Session, selectinload
 
 from .helpers import paginate
@@ -49,6 +49,8 @@ def _photo_view(photo: Any) -> dict[str, str | None]:
         "thumbnail_key": photo.thumbnail_key,
         "original_filename": photo.original_filename,
         "stage": stage.value if stage is not None else "legacy",
+        "description": getattr(photo, "description", None),
+        "position": getattr(photo, "position", 0),
     }
 
 
@@ -56,10 +58,73 @@ def _device_label(name: str, model: str, serial: str) -> str:
     return f"{name} - {model} | {serial}"
 
 
+def _device_data(item: Any, *, location_fallback: str = "") -> dict[str, Any]:
+    return {
+        "imported_from_excel": bool(getattr(item, "imported_from_excel", False)),
+        "imei": getattr(item, "imei", None),
+        "iccid": getattr(item, "iccid", None),
+        "sim_type": getattr(item, "sim_type", None),
+        "phone_number": getattr(item, "phone_number", None),
+        "location_name": getattr(item, "location_name", None) or location_fallback,
+        "remarks": getattr(item, "remarks", None),
+    }
+
+
+def _entry_data_rows(record: Any) -> list[dict[str, Any]]:
+    return [
+        {
+            "scope_position": row.scope_position,
+            "position": row.position,
+            "project_id": row.project_id,
+            "project_name": row.project_name,
+            "sub_project_id": row.sub_project_id,
+            "sub_project_name": row.sub_project_name,
+            "work_site_id": row.work_site_id,
+            "work_site_name": row.work_site_name,
+            "item_name": row.item_name,
+            "model": getattr(row, "model", None),
+            "serial_number": getattr(row, "serial_number", None),
+            "imei": getattr(row, "imei", None),
+            "iccid": getattr(row, "iccid", None),
+            "sim_type": getattr(row, "sim_type", None),
+            "remarks": getattr(row, "remarks", None),
+            "quantity": getattr(row, "quantity", None),
+            "notes": getattr(row, "notes", None),
+        }
+        for row in sorted(
+            getattr(record, "device_data_rows", []),
+            key=lambda value: (value.scope_position, value.position),
+        )
+    ]
+
+
+def _scope_data(item: Any, record: Any, *, general: bool = False) -> dict[str, Any]:
+    work_site = getattr(record, "work_site_evidence", None)
+    project_name = getattr(record, "project_name", None) or getattr(record, "customer_name", "")
+    address = getattr(record, "project_address", None) or getattr(record, "site_address", "")
+    default_work_site_id = getattr(record, "work_site_id", None) if general else (
+        work_site.site_id if work_site else None
+    )
+    return {
+        "scope_position": getattr(item, "scope_position", None) or 0,
+        "project_id": getattr(item, "project_id", None) or record.site_id,
+        "project_name": getattr(item, "project_name", None) or project_name,
+        "project_address": getattr(item, "project_address", None) or address,
+        "sub_project_id": getattr(item, "sub_project_id", None) or record.sub_project_id,
+        "sub_project_name": getattr(item, "sub_project_name", None) or record.sub_project_name or "General",
+        "work_site_id": getattr(item, "work_site_id", None) or default_work_site_id,
+        "work_site_name": getattr(item, "work_site_name", None) or record.site_name,
+        "quotation_id": getattr(item, "quotation_id", None) or record.quotation_id,
+        "quotation_number": getattr(item, "quotation_number", None) or record.quotation_number,
+    }
+
+
 def _maintenance_items(record: MaintenanceRecord) -> list[dict[str, Any]]:
     if record.work_items:
         return [
             {
+                **_device_data(item, location_fallback=record.site_name),
+                **_scope_data(item, record),
                 "service_name": item.service_name,
                 "device_name": item.device_name,
                 "device_model": item.device_model,
@@ -78,6 +143,7 @@ def _maintenance_items(record: MaintenanceRecord) -> list[dict[str, Any]]:
     device = record.device_evidence
     return [
         {
+            **_device_data(device, location_fallback=record.site_name),
             "service_name": record.service_name,
             "device_name": device.device_name if device else "Legacy device",
             "device_model": device.device_model if device else "",
@@ -97,6 +163,8 @@ def _installation_items(record: InstallationRecord) -> list[dict[str, Any]]:
     if record.work_items:
         return [
             {
+                **_device_data(item, location_fallback=record.site_name),
+                **_scope_data(item, record),
                 "service_name": item.service_name,
                 "device_name": item.device_name,
                 "device_model": item.device_model,
@@ -115,6 +183,7 @@ def _installation_items(record: InstallationRecord) -> list[dict[str, Any]]:
     device = record.installed_device
     return [
         {
+            **_device_data(device, location_fallback=record.site_name),
             "service_name": record.service_name,
             "device_name": device.device_name if device else record.equipment_model,
             "device_model": device.device_model if device else record.equipment_model,
@@ -137,6 +206,8 @@ def _general_maintenance_items(
 ) -> list[dict[str, Any]]:
     return [
         {
+            **_device_data(item, location_fallback=record.site_name),
+            **_scope_data(item, record, general=True),
             "service_name": item.service_name,
             "device_name": item.device_name,
             "device_model": item.device_model,
@@ -151,6 +222,40 @@ def _general_maintenance_items(
         }
         for item in record.work_items
     ]
+
+
+def _site_sections(items: list[dict[str, Any]], fallback: dict[str, Any]) -> list[dict[str, Any]]:
+    sections: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for item in items:
+        key = (
+            item.get("scope_position", 0),
+            item.get("project_id") or fallback["project_id"],
+            item.get("sub_project_id") or fallback.get("sub_project_id"),
+            item.get("work_site_id") or fallback.get("work_site_id"),
+        )
+        section = sections.setdefault(
+            key,
+            {
+                "position": key[0],
+                "project_id": key[1],
+                "project_name": item.get("project_name") or fallback["project_name"],
+                "project_address": item.get("project_address") or fallback.get("project_address", ""),
+                "sub_project_id": key[2],
+                "sub_project_name": item.get("sub_project_name") or fallback.get("sub_project_name", "General"),
+                "work_site_id": key[3],
+                "work_site_name": item.get("work_site_name") or fallback["work_site_name"],
+                "quotation_number": item.get("quotation_number") or fallback.get("quotation_number"),
+                "device_count": 0,
+            },
+        )
+        section["device_count"] += 1
+    if not sections:
+        sections[(0, fallback["project_id"], fallback.get("sub_project_id"), fallback.get("work_site_id"))] = {
+            "position": 0,
+            **fallback,
+            "device_count": 0,
+        }
+    return sorted(sections.values(), key=lambda section: section["position"])
 
 
 def _common_conditions(
@@ -177,8 +282,6 @@ def _common_conditions(
         conditions.append(model.submitted_at >= start_at)
     if end_before is not None:
         conditions.append(model.submitted_at < end_before)
-    if project_id is not None:
-        conditions.append(model.site_id == project_id)
     return conditions
 
 
@@ -189,6 +292,22 @@ def _maintenance_conditions(user: User, q: str, **extra) -> list[Any]:
         user,
         **extra,
     )
+    if user.is_customer:
+        conditions.append(
+            ~MaintenanceRecord.work_items.any(
+                and_(
+                    MaintenanceRecordItem.project_id.is_not(None),
+                    MaintenanceRecordItem.project_id.notin_(user.assigned_project_ids),
+                )
+            )
+        )
+    if extra.get("project_id") is not None:
+        conditions.append(
+            or_(
+                MaintenanceRecord.site_id == extra["project_id"],
+                MaintenanceRecord.work_items.any(MaintenanceRecordItem.project_id == extra["project_id"]),
+            )
+        )
     if not q:
         return conditions
     like = f"%{q}%"
@@ -237,6 +356,22 @@ def _installation_conditions(user: User, q: str, **extra) -> list[Any]:
         user,
         **extra,
     )
+    if user.is_customer:
+        conditions.append(
+            ~InstallationRecord.work_items.any(
+                and_(
+                    InstallationRecordItem.project_id.is_not(None),
+                    InstallationRecordItem.project_id.notin_(user.assigned_project_ids),
+                )
+            )
+        )
+    if extra.get("project_id") is not None:
+        conditions.append(
+            or_(
+                InstallationRecord.site_id == extra["project_id"],
+                InstallationRecord.work_items.any(InstallationRecordItem.project_id == extra["project_id"]),
+            )
+        )
     if not q:
         return conditions
     like = f"%{q}%"
@@ -290,6 +425,22 @@ def _general_conditions(user: User, q: str, **extra) -> list[Any]:
         user,
         **extra,
     )
+    if user.is_customer:
+        conditions.append(
+            ~GeneralMaintenanceRecord.work_items.any(
+                and_(
+                    GeneralMaintenanceItem.project_id.is_not(None),
+                    GeneralMaintenanceItem.project_id.notin_(user.assigned_project_ids),
+                )
+            )
+        )
+    if extra.get("project_id") is not None:
+        conditions.append(
+            or_(
+                GeneralMaintenanceRecord.site_id == extra["project_id"],
+                GeneralMaintenanceRecord.work_items.any(GeneralMaintenanceItem.project_id == extra["project_id"]),
+            )
+        )
     if not q:
         return conditions
     like = f"%{q}%"
@@ -439,6 +590,8 @@ def load_record_views(
             selectinload(MaintenanceRecord.device_evidence),
             selectinload(MaintenanceRecord.additional_device_evidence),
             selectinload(MaintenanceRecord.work_items),
+            selectinload(MaintenanceRecord.work_site_evidence),
+            selectinload(MaintenanceRecord.device_data_rows),
         ]
         if include_evidence:
             options.extend(
@@ -460,6 +613,22 @@ def load_record_views(
         for record in db.scalars(stmt):
             device = record.device_evidence
             first_item = record.work_items[0] if record.work_items else None
+            evidence_items = _maintenance_items(record) if include_evidence else []
+            work_site_id = record.work_site_evidence.site_id if record.work_site_evidence else None
+            work_site_name = record.work_site_evidence.site_name if record.work_site_evidence else ""
+            site_sections = _site_sections(
+                _maintenance_items(record),
+                {
+                    "project_id": record.site_id,
+                    "project_name": record.customer_name,
+                    "project_address": record.site_address,
+                    "sub_project_id": record.sub_project_id,
+                    "sub_project_name": record.sub_project_name or "General",
+                    "work_site_id": work_site_id,
+                    "work_site_name": work_site_name or record.site_name,
+                    "quotation_number": record.quotation_number,
+                },
+            )
             device_total = (
                 len(record.work_items)
                 if record.work_items
@@ -469,17 +638,18 @@ def load_record_views(
                 {
                     "id": record.id,
                     "project_id": record.site_id,
+                    "sub_project_id": record.sub_project_id,
+                    "sub_project_name": record.sub_project_name or "General",
                     "submitted_by_id": record.submitted_by_id,
                     "record_number": record.record_number,
                     "quotation_number": record.quotation_number,
                     "record_key": "maintenance",
                     "record_type": "Preventive maintenance",
                     "site_name": record.site_name,
-                    "work_site_name": (
-                        record.work_site_evidence.site_name
-                        if include_evidence and record.work_site_evidence
-                        else ""
-                    ),
+                    "work_site_name": work_site_name,
+                    "work_site_id": work_site_id,
+                    "site_sections": site_sections,
+                    "site_count": len(site_sections),
                     "customer_name": record.customer_name,
                     "address": record.site_address,
                     "service_name": record.service_name,
@@ -519,9 +689,8 @@ def load_record_views(
                         if include_evidence
                         else []
                     ),
-                    "items": (
-                        _maintenance_items(record) if include_evidence else []
-                    ),
+                    "items": evidence_items,
+                    "data_rows": _entry_data_rows(record),
                 }
             )
 
@@ -535,6 +704,8 @@ def load_record_views(
                 InstallationRecordAdditionalDevice.installed_device
             ),
             selectinload(InstallationRecord.work_items),
+            selectinload(InstallationRecord.work_site_evidence),
+            selectinload(InstallationRecord.device_data_rows),
         ]
         if include_evidence:
             options.extend(
@@ -556,6 +727,22 @@ def load_record_views(
         for record in db.scalars(stmt):
             device = record.installed_device
             first_item = record.work_items[0] if record.work_items else None
+            evidence_items = _installation_items(record) if include_evidence else []
+            work_site_id = record.work_site_evidence.site_id if record.work_site_evidence else None
+            work_site_name = record.work_site_evidence.site_name if record.work_site_evidence else ""
+            site_sections = _site_sections(
+                _installation_items(record),
+                {
+                    "project_id": record.site_id,
+                    "project_name": record.customer_name,
+                    "project_address": record.site_address,
+                    "sub_project_id": record.sub_project_id,
+                    "sub_project_name": record.sub_project_name or "General",
+                    "work_site_id": work_site_id,
+                    "work_site_name": work_site_name or record.site_name,
+                    "quotation_number": record.quotation_number,
+                },
+            )
             device_total = (
                 len(record.work_items)
                 if record.work_items
@@ -565,17 +752,18 @@ def load_record_views(
                 {
                     "id": record.id,
                     "project_id": record.site_id,
+                    "sub_project_id": record.sub_project_id,
+                    "sub_project_name": record.sub_project_name or "General",
                     "submitted_by_id": record.submitted_by_id,
                     "record_number": record.record_number,
                     "quotation_number": record.quotation_number,
                     "record_key": "installation",
                     "record_type": "Installation",
                     "site_name": record.site_name,
-                    "work_site_name": (
-                        record.work_site_evidence.site_name
-                        if include_evidence and record.work_site_evidence
-                        else ""
-                    ),
+                    "work_site_name": work_site_name,
+                    "work_site_id": work_site_id,
+                    "site_sections": site_sections,
+                    "site_count": len(site_sections),
                     "customer_name": record.customer_name,
                     "address": record.site_address,
                     "service_name": record.service_name,
@@ -615,9 +803,8 @@ def load_record_views(
                         if include_evidence
                         else []
                     ),
-                    "items": (
-                        _installation_items(record) if include_evidence else []
-                    ),
+                    "items": evidence_items,
+                    "data_rows": _entry_data_rows(record),
                 }
             )
 
@@ -627,7 +814,10 @@ def load_record_views(
         else None
     )
     if record_type in {"", "general_maintenance"} and general_ids != []:
-        options = [selectinload(GeneralMaintenanceRecord.work_items)]
+        options = [
+            selectinload(GeneralMaintenanceRecord.work_items),
+            selectinload(GeneralMaintenanceRecord.device_data_rows),
+        ]
         if include_evidence:
             options.extend(
                 [
@@ -645,6 +835,20 @@ def load_record_views(
             stmt = stmt.where(*conditions)
         for record in db.scalars(stmt):
             first_item = record.work_items[0] if record.work_items else None
+            evidence_items = _general_maintenance_items(record) if include_evidence else []
+            site_sections = _site_sections(
+                _general_maintenance_items(record),
+                {
+                    "project_id": record.site_id,
+                    "project_name": record.project_name,
+                    "project_address": record.project_address,
+                    "sub_project_id": record.sub_project_id,
+                    "sub_project_name": record.sub_project_name or "General",
+                    "work_site_id": record.work_site_id,
+                    "work_site_name": record.site_name,
+                    "quotation_number": record.quotation_number,
+                },
+            )
             device = (
                 _device_label(
                     first_item.device_name,
@@ -658,6 +862,8 @@ def load_record_views(
                 {
                     "id": record.id,
                     "project_id": record.site_id,
+                    "sub_project_id": record.sub_project_id,
+                    "sub_project_name": record.sub_project_name or "General",
                     "submitted_by_id": record.submitted_by_id,
                     "record_number": record.record_number,
                     "quotation_number": record.quotation_number,
@@ -665,6 +871,9 @@ def load_record_views(
                     "record_type": "Maintenance",
                     "site_name": record.site_name,
                     "work_site_name": record.site_name,
+                    "work_site_id": record.work_site_id,
+                    "site_sections": site_sections,
+                    "site_count": len(site_sections),
                     "customer_name": record.project_name,
                     "address": record.project_address,
                     "service_name": record.service_name,
@@ -688,11 +897,8 @@ def load_record_views(
                         if include_evidence
                         else []
                     ),
-                    "items": (
-                        _general_maintenance_items(record)
-                        if include_evidence
-                        else []
-                    ),
+                    "items": evidence_items,
+                    "data_rows": _entry_data_rows(record),
                 }
             )
 

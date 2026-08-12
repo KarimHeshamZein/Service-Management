@@ -46,5 +46,6 @@ def all_records(
             "page_info": page_info,
             "filters": filters,
             "has_filters": any(filters.values()),
+            "search_action": "/records",
         },
     )

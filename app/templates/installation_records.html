@@ -79,7 +79,7 @@
             <td>{{ r.site_name }}</td>
             <td>{{ r.service_name }}{% if r.additional_devices %}<br><span class="meta">+ {{ r.additional_devices|length }} {{ t('ui.more.item') if r.additional_devices|length == 1 else t('ui.more.items') }}</span>{% endif %}</td>
             {% set device_total = r.work_items|length if r.work_items else 1 + r.additional_devices|length %}
-            <td>{{ r.equipment_model }}<br><span class="mono" style="color:var(--slate);font-size:.8rem;">{{ r.serial_number }}</span>{% if device_total > 1 %}<br><span class="tag">{{ t('record.device.more', count=device_total - 1) }}</span>{% endif %}</td>
+            <td>{{ r.equipment_model }}<br><span class="mono" style="color:var(--slate);font-size:.8rem;">{{ r.serial_number or '—' }}</span>{% if device_total > 1 %}<br><span class="tag">{{ t('record.device.more', count=device_total - 1) }}</span>{% endif %}</td>
             <td>{{ ui.result_badge(r.result) }}</td>
             {% if user.can_view_all_records %}<td>{{ r.team_leader_name }}</td>{% endif %}
             <td class="num">{{ r.submitted_at | datetime }}</td>
@@ -96,7 +96,7 @@
         <div class="site">{{ r.site_name }}</div>
         <div class="meta">{{ r.customer_name }} · {{ r.service_name }}</div>
         {% set device_total = r.work_items|length if r.work_items else 1 + r.additional_devices|length %}
-        <div class="meta">{{ r.equipment_model }} · <span class="mono">{{ r.serial_number }}</span>{% if device_total > 1 %} · {{ t('record.device.more', count=device_total - 1) }}{% endif %}</div>
+        <div class="meta">{{ r.equipment_model }} · <span class="mono">{{ r.serial_number or '—' }}</span>{% if device_total > 1 %} · {{ t('record.device.more', count=device_total - 1) }}{% endif %}</div>
         {% if user.can_view_all_records %}<div class="meta">{{ t('ui.by') }} {{ r.team_leader_name }}</div>{% endif %}
         <div class="foot"><span class="meta mono">{{ r.submitted_at | datetime }}</span><a class="btn btn-secondary btn-sm" href="/installations/records/{{ r.id }}">{{ t('ui.view') }}</a></div>
       </div>

@@ -154,6 +154,7 @@ def login_submit(
         user.role.value if hasattr(user.role, "value") else user.role,
         auth_version(db, user.id),
     )
+    request.state.user = user
     request.session["language"] = supported_language(user.language)
     flash(request, f"Signed in as {user.full_name}.")
     return RedirectResponse(_safe_next(next), status_code=status.HTTP_303_SEE_OTHER)
@@ -355,5 +356,6 @@ def verify_recovery_email(
 @router.post("/logout")
 def logout(request: Request, csrf_token: str = Form("")):
     if csrf_valid(request, csrf_token):
+        request.state.audit_actor_id = current_user_id(request)
         logout_session(request)
     return RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
