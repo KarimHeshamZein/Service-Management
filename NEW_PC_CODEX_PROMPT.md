@@ -115,15 +115,15 @@ Setup procedure:
    already exists, inspect it and ask before dropping, resetting, or reusing it.
 9. Run alembic heads and require exactly one head. Run alembic upgrade head
    against the new service_management database, then run alembic current. The
-    expected handoff revision is e7c2a91bd460 unless the repository contains a
-   newer committed migration.
+   expected committed handoff revision is c8e4f2a91d73.
 10. Run python seed.py once. Confirm the development Administrator exists
     without exposing password hashes or secrets.
 11. Run python -m compileall -q app alembic/versions and
     node --check app/static/js/app.js when Node is available. Node is optional;
     do not install Node merely for this vanilla-JavaScript project.
-12. Run python -m pytest -q. The handoff baseline is 356 passed with one existing
-    Starlette TestClient/httpx deprecation warning. Report the actual result.
+12. Run python -m pytest -q. Do not assume an old fixed test count; report the
+    actual result. One existing Starlette TestClient/httpx deprecation warning
+    is expected.
 13. Start the application with the new .venv on 0.0.0.0:8999. Use a hidden
     background process only after tests pass. Keep stdout/stderr in ignored tmp
     logs.
@@ -139,6 +139,21 @@ Setup procedure:
 15. Run git status --short --branch again. Confirm only expected ignored/local
     setup files and the preserved untracked root index.html remain; no secret or
     generated file may be staged.
+
+If I later ask for a deployment ZIP:
+
+- Build the next release-candidate version with
+  scripts/New-OfflineBundle.ps1, not the smaller application-only packager.
+- A full offline ZIP requires the four ignored vendor inputs: the Python 3.11
+  installer, PostgreSQL installer, .NET Framework offline installer, and WinSW.
+  Prefer a copied tmp/phase7-prereqs directory or an equivalent directory I
+  explicitly provide. If they are absent, stop and ask me to copy/provide them.
+- Run tests/test_release_workflow.py before packaging.
+- Generate the adjacent SHA-256 file and verify the exact outer ZIP and embedded
+  application ZIP CRCs, release.json version/Alembic head, packaged source, and
+  exclusion of .env, databases, uploads, dist history, and root index.html.
+- The latest verified reference artifact is 1.1.0-rc33; choose the next RC
+  number unless I explicitly request another version.
 
 Communication requirements:
 

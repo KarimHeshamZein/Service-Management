@@ -1,6 +1,6 @@
 # Service Management System — Project Handoff
 
-Updated: 2026-08-09
+Updated: 2026-08-12
 
 This file is the portable context for continuing development on another PC or
 with another Codex account. It is committed with the source. A new agent must
@@ -25,7 +25,8 @@ Give the next Codex session this instruction:
 
 - GitHub: `https://github.com/KarimHeshamZein/Service-Management.git`
 - Primary branch: `main`
-- The commit containing this file is the latest approved application state.
+- Hierarchical reporting was merged to `main` in `d80aba9`; the commit
+  containing this refreshed file may be newer and is the latest handoff state.
 - The root `index.html` is an unrelated original Camera Installation Planner
   source file. Its functionality has already been integrated into
   `app/static/camera-planner.html`; do not add, edit, or delete the root file.
@@ -72,7 +73,7 @@ Core locations:
 
 ### Project hierarchy and saved service reports
 
-- Work is on `feature/hierarchical-installation-reports` pending final user review.
+- The hierarchical reporting work is merged into `main` and approved.
 - The existing Project model and URLs are preserved as Main Projects.
 - Main Projects now have optional description, start date, and end date.
 - Additive Sub Projects organize assignments to the existing global Site
@@ -92,9 +93,9 @@ Core locations:
   separately selected Team Leader, technicians, record links, and hierarchy/
   customer snapshots. Customer access requires every linked Main Project to be
   assigned to that Customer user.
-- Installation Reports provide an `.xlsx` template and preview/confirm import.
-  Confirmed device rows become Installed Assets; imported device data can be
-  included or omitted from the report PDF.
+- All three Data Entry workflows now use browser-entered per-Site tables instead
+  of requiring technicians to download, fill, and upload an Excel workbook.
+  Historical confirmed Excel snapshots remain readable as a report fallback.
 - Before/after evidence accepts ordered descriptions shown on record pages and
   in saved report PDFs.
 
@@ -133,33 +134,33 @@ Core locations:
 
 ### Service entry
 
-- New Installation, Preventive Maintenance, and Maintenance accept all active
-  Pricing Items marked for service entry, not only previously installed units.
-- Every item selector uses the searchable image-card picker.
+- New Installation accepts active Pricing Items marked for service entry and
+  retains the searchable image-card picker. Preventive Maintenance and
+  Maintenance intentionally have no Item selector; their work cards begin with
+  Service Performed and do not create an installed-asset link.
 - Grouped multi-item records retain per-item results, notes, and evidence.
-- All three entry workflows provide a direct-download eleven-column Excel
-  template, validated preview, and signed confirmation. The columns are Item /
-  Device Name, Model, Serial Number, IMEI, SIM Serial Number, Sim Type, Main
-  Project, Sub Project, Site, Remarks, and Status. Phone Number is not part of
-  the workbook. Status is calculated by Excel as `Valid` when columns A-J are
-  complete and `Invalid` when anything is missing;
-  it is not a service-result input and has no dashboard Validation column.
-  Valid/Invalid use green/red formatting. Location/Site text, IMEI, and SIM
-  Serial Number are accepted as entered without scope or format warnings.
-- Installation imports create Installed Assets. Maintenance imports update a
-  matched asset only after the approved conflict confirmation; unmatched rows
-  remain immutable record snapshots. Saved report PDFs can include these entry
-  snapshots.
+- Each Installation Site has an add/remove-row device table with Item/Device
+  Name, Model, Serial Number, IMEI, SIM Serial Number, SIM Type, immutable
+  Main/Sub/Site scope labels, and Remarks. Selecting an Installation Item
+  prefills its row name/model; entered identifiers become part of the saved
+  installation/asset snapshot.
+- Each Preventive Maintenance and Maintenance Site has the exact browser table
+  `No / Item / Quantity / Notes`. These independent rows do not link assets.
 - All three entry pages support multiple Site sections across different Main/Sub
   Projects under one parent record number. Every Site section contains its own
-  devices, before/after evidence, and Excel preview/import. Installation Site
+  devices/services, before/after evidence, and its own browser data table. Installation Site
   sections additionally retain their Project-matched quotation snapshot;
   Preventive Maintenance and Maintenance do not link to quotations.
-  Add another device operates inside a Site; Add another Site creates another
-  complete section. The atomic save produces one record/ID for the full visit.
-- Report Device Data tables contain only explicitly Excel-imported snapshots
-  and are separated per Main Project. The report record picker supports
-  inclusive From/To submission-time filtering down to seconds.
+  Add another item/service operates inside a Site; Add another Site creates
+  another complete section. The atomic save produces one record/ID for the full
+  visit.
+- Optional report data tables use browser-entered rows and are separated by a
+  single-line `MAIN PROJECT | ... SUB PROJECT | ... SITE | ...` header.
+  Historical Excel-imported snapshots remain a fallback. The report picker
+  supports inclusive From/To submission-time filtering down to seconds.
+- Preventive Maintenance and Maintenance PDF cards intentionally omit Model,
+  Serial number, and Maintenance notes. They retain Service, Result, Issue
+  found, Recommendations, and photo evidence. Installation PDFs are unchanged.
 - Completed records remain controlled snapshots with append-only revision audit
   behavior as documented in `CLAUDE.md`.
 
@@ -169,17 +170,17 @@ Core locations:
 - Login includes an accessible Show password / Hide password control.
 - The shared application shell provides Quick Create, icon-led accordion
   navigation, a persistent desktop top bar, consistent controls, and mobile-safe
-  list tables. Field-service entry uses anchored four-step navigation with an
-  expanded Excel section and persistent submit actions. Quotation
+  list tables. Field-service entry uses anchored four-step navigation with
+  browser data tables and persistent submit actions. Quotation
   Create/Edit uses anchored sections and a persistent Save action.
 - English and Arabic catalogs are maintained; user-entered Arabic is supported
   in PDFs.
 
 ## Database state
 
-Current single Alembic head on the feature branch:
+Current single Alembic head on `main`:
 
-`e7c2a91bd460`
+`c8e4f2a91d73`
 
 Recent migrations:
 
@@ -192,6 +193,7 @@ Recent migrations:
 7. `a3f8d1c62b04_add_item_site_scope_snapshots.py`
 8. `d5b9e2a74c16_add_addressee_price_history_audit.py`
 9. `e7c2a91bd460_make_entry_identifiers_optional.py`
+10. `c8e4f2a91d73_add_browser_entry_data_rows.py`
 
 Always run `alembic upgrade head` after pulling and before starting updated
 application code. Never run migrations against a development or deployed
@@ -200,9 +202,12 @@ objects.
 
 ## Latest verification
 
-- Full suite: `356 passed, 1 warning`
-- Focused entry/report suite: `8 passed, 1 warning`
-- Entry/i18n/migration gate: `110 passed, 1 warning`
+- The old full-suite baseline was `356 passed, 1 warning`; do not treat that
+  count as current because the suite has grown.
+- Latest browser-entry/migration/report focused gate: `11 passed, 1 warning`.
+- Latest offline release-workflow gate: `20 passed, 1 warning`.
+- Latest maintenance PDF field-removal gate: `1 passed, 1 warning`, followed by
+  a successful visual render inspection.
 - The warning is Starlette's existing TestClient/httpx deprecation warning.
 - `python -m compileall -q app alembic/versions` passed.
 - `node --check app/static/js/app.js` passed.
@@ -213,20 +218,21 @@ objects.
 - The current focused quotation addressee, price-history, audit, and Alembic
   gate is `9 passed, 1 warning`. The local database is migrated to
   `d5b9e2a74c16`, and `/login` returns HTTP 200 on port 8999.
-- Source and local development database head `e7c2a91bd460` supports optional
-  serial/warranty/notes, collapsed Excel entry panels, and complete report-tree
-  expansion across a record's hierarchy scopes. Port 8999 was restarted and
-  returned HTTP 200 after the approved migration on 2026-08-10.
+- Source and local development database head `c8e4f2a91d73` supports optional
+  serial/warranty/notes, browser-entered per-Site tables, and complete
+  report-tree expansion across a record's hierarchy scopes. Port 8999 was
+  restarted and returned HTTP 200 after the approved migration.
 
 ## Latest offline deployment artifact
 
-- Version: `1.1.0-rc28`
-- Local ignored filename: `dist/service-management-offline-1.1.0-rc28.zip`
+- Version: `1.1.0-rc33`
+- Local ignored filename: `dist/service-management-offline-1.1.0-rc33.zip`
 - SHA-256:
-  `3ff83476bade9611524dbc94bafc2eae80aefbed976039c1b0732e301625fa9f`
-- Size: `534702194` bytes (about 510 MB)
-- Payload validation confirmed all three recent migrations and new templates are
-  present. `.env`, databases, uploads, `dist`, and root `index.html` are absent.
+  `f494123c624279313dba1613c46367c39790e6485a8f1fccf894d564450b1906`
+- Size: `535146924` bytes (about 510 MB)
+- Outer and embedded ZIP CRCs passed. The package reports Alembic head
+  `c8e4f2a91d73`, its PDF source matches the repository, and `.env`, databases,
+  uploads, `dist` history, and root `index.html` are absent.
 
 The ZIP is not in GitHub source history. Copy it separately if it is needed on
 the other PC. Building another full offline bundle also requires the ignored

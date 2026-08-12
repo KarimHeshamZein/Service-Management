@@ -1,6 +1,6 @@
 # New PC Development Setup — Windows
 
-Updated: 2026-08-06
+Updated: 2026-08-12
 
 For an automated setup, copy the prompt from `NEW_PC_CODEX_PROMPT.md` into the
 first Codex session on the new PC. Codex will perform the steps in this guide and
@@ -72,9 +72,12 @@ The expected remote is:
 
 `https://github.com/KarimHeshamZein/Service-Management.git`
 
-The approved handoff commit is:
+The merged feature baseline on `main` is:
 
-`25cc3e55eff9b85633fa475e3f1104a200f58945`
+`d80aba9` (`Merge pull request #1 from feature/hierarchical-installation-reports`)
+
+The documentation may have a newer commit. After pulling, use the current
+`origin/main` tip and confirm it contains `d80aba9`.
 
 The copied root `index.html` may appear as an untracked file. That is expected.
 It is the preserved original planner source and must not be committed, edited,
@@ -219,7 +222,7 @@ alembic current
 
 The expected single migration head/current revision is:
 
-`e7c2a91bd460`
+`c8e4f2a91d73`
 
 Do not use `Base.metadata.create_all()` or manually create application tables.
 Alembic owns the normal schema.
@@ -255,11 +258,11 @@ Run the complete suite before editing the application:
 python -m pytest -q
 ```
 
-The latest known result is:
-
-`356 passed, 1 warning`
-
-The warning is the existing Starlette TestClient/httpx deprecation warning.
+Test counts increase as features are added, so do not compare against the old
+`356 passed` baseline. Run the complete suite and report its actual result. The
+existing Starlette TestClient/httpx deprecation warning is expected. Recent
+focused gates include 20 passing release-workflow tests and 11 passing
+browser-entry/migration/report tests.
 
 If tests report that `service_management_test` or
 `service_management_migrations_test` does not exist, return to step 5. If they
@@ -308,8 +311,26 @@ committed handoff files provide the necessary project context and safety rules.
 - The external source-image folder — required planner assets are committed.
 - Old test caches such as `.pytest_cache` and `__pycache__`.
 
-The RC28 deployment ZIP under `dist` is optional for development. Keep it only
+The RC33 deployment ZIP under `dist` is optional for development. Keep it only
 if the new PC will also be used to deploy the application.
+
+## 13. Reproduce the full offline deployment ZIP
+
+This is optional for development. A Git clone alone cannot reproduce the full
+offline ZIP because these large vendor installers are intentionally ignored:
+
+- Python 3.11 Windows x64 installer
+- PostgreSQL Windows x64 installer
+- .NET Framework offline installer
+- WinSW executable
+
+Copy `tmp\phase7-prereqs` from the old PC, or extract the `prerequisites`
+directory from the latest verified offline ZIP. When asked to package, Codex
+must use `scripts\New-OfflineBundle.ps1`, run
+`tests\test_release_workflow.py`, create the adjacent `.sha256`, and validate
+both the outer and embedded ZIPs. The latest verified reference is
+`service-management-offline-1.1.0-rc33.zip`; use the next RC number unless a
+specific version is requested.
 
 ## Troubleshooting checklist
 
@@ -345,7 +366,7 @@ alembic upgrade head
 alembic current
 ```
 
-Confirm the current revision is `b7e5d8c41f20`.
+Confirm the current revision is `c8e4f2a91d73`.
 
 ### Port 8999 is already occupied
 
