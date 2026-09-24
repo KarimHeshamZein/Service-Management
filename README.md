@@ -2,7 +2,7 @@
 
 A service evidence portal for a field service team. Technical users file installation and maintenance proof; Administrators manage the system; Customers read records for their assigned Projects.
 
-**Maintenance, Preventive Maintenance, New Installations, Reports and Pricing are implemented.** Reports reuse the All Records filters and export the full matching evidence set as PDF. Administrators have both per-user Technician Activity reporting and a filterable append-only Audit Log for mutations, authentication, and sensitive downloads. Pricing provides the single imaged equipment/item catalogue, immutable catalogue price history, separate quoted-price snapshots, optional quotation addressees, mandatory charges, explicit optional-item decisions, search, and PDF export. Mixed-currency quotations intentionally show no aggregate total.
+**Maintenance, Preventive Maintenance, New Installations, Reports and Pricing are implemented.** Reports reuse the All Records filters and export the full matching evidence set as PDF. Administrators use one search-first **Management -> Logs Report** for append-only user/system activity and per-user Technician Activity; no log rows load until a filter is submitted, and matching results export to PDF or Excel. Pricing provides a two-level Main Category/Subcategory folder browser for the single imaged equipment/item catalogue and the Create Quotation item picker, immutable catalogue price history, separate quoted-price snapshots, optional quotation addressees, mandatory charges, explicit optional-item decisions, search, and PDF export. Pricing also includes a folder-first Purchase Documents archive: one supplier quotation or purchase invoice can contain several validated files, link to multiple Main or Related Items without duplicating storage, record an optional unit price per linked Item, preview as one PDF, download originals, and provide filtered item-level price analysis. Mixed currencies remain separate in every comparison.
 
 ## What this system is not
 
@@ -49,7 +49,9 @@ edited projects its legacy `customer_name` value is kept equal to the project
 name. Projects act as **Main Projects** and contain **Sub Projects**. Sub
 Projects receive scoped assignments to the existing Site catalog, forming the
 Main Project → Sub Project → Site hierarchy without changing existing Project
-IDs or Customer Project assignments.
+IDs or Customer Project assignments. A newly created Main Project receives an
+empty `General` Sub Project; Sites are assigned explicitly afterward, and any Sub
+Project may validly have all Site assignments cleared.
 
 Installation, normal-maintenance, and preventive-maintenance entries may submit
 multiple hierarchy branches under one atomic parent record and record number.
@@ -77,6 +79,7 @@ app/
   security.py     bcrypt hashing, sessions, CSRF, single-use form tokens
   deps.py         authentication and role dependencies
   uploads.py      image validation, storage, thumbnails, path safety
+  purchase_documents.py  purchase-file validation/storage, PDF preview and price report
   helpers.py      record numbering, timezone display, template rendering
   main.py         app factory, middleware, error handlers
   routers/        auth · dashboard · maintenance · records · reports · settings · admin
@@ -96,8 +99,12 @@ service_types ──┤
                 └──< installation_records >─┬──< installation_participants
                                             └──< installation_photos
 pricing_items ── 1:1 compatibility ── device_catalog ──< installed_devices ──< maintenance_record_devices
+purchase_documents ──< purchase_document_files
+purchase_documents ──< purchase_document_items >── pricing_items / pricing_related_items
 work_sites ──< installation_record_sites >── installation_records
 sites ──< sub_projects ──< sub_project_sites >── work_sites
+sites ── 1:1 project_photo_guidance_settings
+sites + pricing_items ──< project_photo_guidance_rules ──< project_photo_guidance_descriptions
 service_reports ──< service_report_records >── installation/maintenance records
 service_reports ──< installed_devices (optional confirmed Excel import)
 record_counters               (backs PM-YYYY-NNNNN)
@@ -353,9 +360,14 @@ The workflow was exercised against the running server at desktop and mobile widt
 - **No pagination on the admin lists.** Sites, service types and users render in full. Fine at a few hundred rows; add pagination beyond that.
 - **PostgreSQL is a required external service.** The application and test databases must be available before the app or test suite starts.
 - **Uploads are stored unencrypted at rest** and are not virus-scanned. They are access-controlled but not scanned for malicious payloads.
-- **Audit events are application-level.** The combined Administrator Audit Log
+- **Audit events are application-level.** The combined Administrator Logs Report
   records application mutations, authentication, and sensitive downloads, but
-  direct database changes made outside the application are not observable.
+  direct database changes made outside the application are not observable. The
+  log supports full-content, actor, module, action, record-type, outcome, IP and
+  second-precision time filters, plus a dedicated event view with request and
+  recursive field-level change details. Installation, Preventive Maintenance,
+  and Maintenance record pages intentionally do not render their revision
+  history; Administrators review those changes only in Logs Report.
 - **Arabic UI support is implemented.** Language persistence, RTL layout, HTML pages
   and server messages use the English/Arabic catalogs. PDF labels stay English, while
   user-entered Arabic is shaped and rendered with an embedded Noto Sans Arabic font.
@@ -375,6 +387,16 @@ Site, and quotation scopes, assigns each service item to one scope, then
 registers each serialized unit
 through a hidden legacy compatibility row. Project, Sub Project, Site, device,
 model and serial are available to structured report selection.
+
+**Photo Guidance Profiles** — each Main Project has an Administrator-only
+configuration page with an optional feature switch. Profiles are named concepts
+such as `Solar Solution` and are deliberately independent from Pricing Items and
+Installed Assets. Before and After stages independently provide a guidance alert
+and reusable descriptions. Installation, Preventive Maintenance, and Maintenance
+Create/Edit offer one optional profile per device/service and validate that it
+belongs to the selected Main Project. Selecting a standard description fills the
+ordinary editable photo-description field, so only the technician's final text is
+saved and printed. Profile names and alerts are guidance, not report evidence.
 
 **Reports** — `/reports` remains the read-only filtered preview over the same
 normalized record set used by `/records`. `/reports/installation`,
@@ -396,4 +418,46 @@ and Pricing-authorized Technical users see it on record details or may opt to
 include it in a standard Reports PDF; it is otherwise omitted from lists,
 searches, customer views and audit exports.
 
-**Audited corrections** — the specification asks for records to stay read-only, and they are. If corrections become necessary, do not add an edit form. Add a `record_corrections` table holding the record reference, the correcting user, a timestamp, a reason and the before/after values, and show corrections as an appended trail on the detail page. The original evidence stays untouched.
+**Audited record editing** — Installation, Preventive Maintenance, and
+Maintenance records have a nested Edit workflow matching creation. Users who
+may edit a record can update saved results, workflow details, evidence descriptions,
+photos, participants and per-Site browser tables, and can add another complete
+service/device or Site without changing the record number. Administrators may
+also remove saved devices/services, Sites, photos, and table rows. Every
+material change creates a structured revision and audit context; generated
+reports linked to changed evidence are removed and must be regenerated.
+Browser-added rows count as save intent even before a Service is selected, so an
+incomplete addition stays on the same Edit page with its exact cause instead of
+being reported as an unchanged record. Create/Edit preflight highlights the
+field and its Site/service card, focuses the first error, and preserves the
+in-progress form and selected files while the technician corrects it; the same
+rules are validated again by the server before any database mutation.
+Preventive Maintenance and Maintenance collect Issue Found and Recommendations
+as optional fields without a separate Maintenance Notes input. Historical
+maintenance notes remain stored, while report renderers omit every optional
+narrative row whose value is blank.
+
+**Long-entry autosave** — Installation, Preventive Maintenance, and Maintenance
+Create/Edit forms save changed hierarchy, services/devices, results, notes, and
+browser-table values to a private server-side draft after five seconds. Drafts
+are scoped to the authenticated user, limited in size/count, listed under `My
+drafts`, and expire after seven days. Selected photos are cached in IndexedDB on
+the same browser so they can be restored without uploading the same large files
+every few seconds. They therefore do not follow a draft to another browser or
+device. Entry pages refresh the signed session every four minutes; if connectivity
+still fails, the last successful draft remains recoverable after sign-in. Final
+record submission remains transactional and separate from autosave.
+Saved report PDF timestamps use the same configured display timezone as the
+Records interface. A saved report is rendered on download, so downloading it
+again applies current rendering rules; an older PDF file already downloaded to
+disk remains unchanged.
+Large saved reports include a clickable hierarchical table of contents, a
+searchable Record & Device Index, native PDF bookmarks, and a Back to contents
+link in every page footer. Contents also links Report Information, per-Site
+Service Data Tables, and Approvals. The PDF is laid out in multiple passes so
+page references remain accurate even when the navigation sections span many pages.
+The first page is customer-focused: customer/reporting-period metadata and an
+executive summary replace the Technician list. Any observation, issue,
+recommendation, further-action result, or incomplete result is promoted into a
+clickable Items Requiring Attention table before the contents. Approval cards
+provide blank Name, Job title, Signature, and Date lines for manual completion.

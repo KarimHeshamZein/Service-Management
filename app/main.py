@@ -19,10 +19,13 @@ from .routers import (
     audit_log,
     auth,
     dashboard,
+    drafts,
     general_maintenance,
     installations,
     maintenance,
     pricing,
+    purchase_documents,
+    photo_guidance,
     records,
     reports,
     structured_reports,
@@ -64,6 +67,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(dashboard.router)
+    app.include_router(drafts.router)
     app.include_router(maintenance.router)
     app.include_router(general_maintenance.router)
     app.include_router(installations.router)
@@ -72,6 +76,8 @@ def create_app() -> FastAPI:
     app.include_router(structured_reports.router)
     app.include_router(entry_device_imports.router)
     app.include_router(pricing.router)
+    app.include_router(purchase_documents.router)
+    app.include_router(photo_guidance.router)
     app.include_router(settings_router.router)
     app.include_router(admin.router)
     app.include_router(audit_log.router)

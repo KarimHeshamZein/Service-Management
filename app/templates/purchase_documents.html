@@ -1,0 +1,54 @@
+﻿{% extends "base.html" %}
+{% block title %}{{ t('ui.purchase.documents') }}{% endblock %}
+{% macro item_cards(entries) %}
+<div class="purchase-item-grid">
+  {% for card in entries %}
+  <a class="purchase-item-card" href="{{ card.url }}">
+    <span class="purchase-item-image">
+      {% if card.image_url %}<img src="{{ card.image_url }}" alt="{{ card.name }}">{% else %}<span>{{ card.name[:1]|upper }}</span>{% endif %}
+    </span>
+    <span class="purchase-item-copy">
+      <strong>{{ card.name }}</strong>
+      {% if card.model %}<span>{{ card.model }}</span>{% endif %}
+      {% if card.is_related %}<small>{{ t('ui.related.item') }} آ· {{ card.parent_name }}</small>{% endif %}
+    </span>
+    <span class="purchase-item-arrow" aria-hidden="true">â€؛</span>
+  </a>
+  {% else %}<p class="empty-state">{{ t('ui.no.items') }}</p>{% endfor %}
+</div>
+{% endmacro %}
+{% block content %}
+<div class="page-head">
+  <div><span class="eyebrow">{{ t('nav.group.pricing') }}</span><h1>{{ t('ui.purchase.documents') }}</h1><p class="lede">{{ t('ui.purchase.documents.help') }}</p></div>
+  <a class="btn btn-primary" href="/pricing/purchase-documents/new">+ {{ t('ui.add.purchase.document') }}</a>
+</div>
+
+<section class="card">
+  <form method="get" class="filter-bar purchase-search-bar">
+    <div class="field"><label for="purchase-search">{{ t('ui.search') }}</label><input id="purchase-search" name="q" value="{{ q }}" placeholder="{{ t('ui.search.items.by.name.or.model') }}"></div>
+    <button class="btn btn-secondary" type="submit">{{ t('ui.search') }}</button>
+    {% if q %}<a class="btn btn-quiet" href="/pricing/purchase-documents">{{ t('ui.clear') }}</a>{% endif %}
+  </form>
+</section>
+
+{% if q %}
+<section class="card"><div class="section-head"><h2>{{ t('ui.search.results') }}</h2><span class="badge">{{ cards|length }}</span></div>{{ item_cards(cards) }}</section>
+{% elif not selected_category_key %}
+<section class="card">
+  <div class="section-head"><div><h2>{{ t('ui.item.categories') }}</h2><p class="hint">{{ t('ui.open.one.category.to.view.and.manage.its.items') }}</p></div></div>
+  <div class="pricing-category-folder-grid">
+    {% if uncategorized_count %}<a class="pricing-category-folder pricing-uncategorized-folder" href="/pricing/purchase-documents?category=uncategorized"><span class="pricing-category-folder-icon" aria-hidden="true"></span><span class="pricing-category-folder-copy"><strong>{{ t('ui.uncategorized') }}</strong><span>{{ uncategorized_count }} {{ t('ui.items.lowercase') }}</span></span><span>â€؛</span></a>{% endif %}
+    {% for category in root_categories %}<a class="pricing-category-folder" href="/pricing/purchase-documents?category={{ category.id }}"><span class="pricing-category-folder-icon" aria-hidden="true"></span><span class="pricing-category-folder-copy"><strong>{{ category.name }}</strong><span>{{ root_counts.get(category.id, 0) }} {{ t('ui.items.lowercase') }}</span></span><span>â€؛</span></a>{% endfor %}
+  </div>
+</section>
+{% else %}
+<section class="card">
+  <div class="pricing-category-detail-title">
+    <a class="btn btn-secondary btn-sm" href="{% if selected_category.parent_id %}/pricing/purchase-documents?category={{ selected_category.parent_id }}{% else %}/pricing/purchase-documents{% endif %}">{{ t('ui.back.to.main.category') if selected_category.parent_id else t('ui.back.to.purchase.categories') }}</a>
+    <div><span class="eyebrow">{{ t('ui.subcategory') if selected_category.parent_id else t('ui.main.category') }}</span><h2>{{ selected_category.name }}</h2></div>
+  </div>
+  {% if subcategories %}<div class="pricing-category-folder-grid pricing-subcategory-folder-grid">{% for subcategory in subcategories %}<a class="pricing-category-folder pricing-subcategory-folder" href="/pricing/purchase-documents?category={{ subcategory.id }}"><span class="pricing-category-folder-icon" aria-hidden="true"></span><span class="pricing-category-folder-copy"><strong>{{ subcategory.name }}</strong><span>{{ t('ui.subcategory') }}</span></span><span>â€؛</span></a>{% endfor %}</div>{% endif %}
+  {% if cards %}<h3 class="purchase-items-heading">{{ t('ui.items') }}</h3>{{ item_cards(cards) }}{% elif not subcategories %}<p class="empty-state">{{ t('ui.no.items') }}</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

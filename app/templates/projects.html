@@ -3,6 +3,40 @@
 {% block title %}{{ t('ui.main.projects') }} {{ settings.app_name }}{% endblock %}
 {% block topbar_title %}{{ t('ui.project.hierarchy') }}{% endblock %}
 
+{% macro project_form_fields(project=None, prefix='project') %}
+<div class="project-form-shell">
+  <fieldset class="project-form-section">
+    <legend><span class="project-form-step">1</span><span><strong>{{ t('ui.project.identity.and.location') }}</strong><small>{{ t('ui.project.identity.help') }}</small></span></legend>
+    <div class="grid cols-2 project-form-grid">
+      <div class="field span-2"><label for="{{ prefix }}-name">{{ t('ui.main.project.name') }} <span class="req">*</span></label><input id="{{ prefix }}-name" name="name" value="{{ project.name if project else '' }}" required maxlength="160" placeholder="{{ t('ui.project.name.placeholder') }}" autocomplete="organization" dir="auto"></div>
+      <div class="field"><label for="{{ prefix }}-address">{{ t('ui.address.or.location') }} <span class="req">*</span></label><input id="{{ prefix }}-address" name="address" value="{{ project.address if project else '' }}" required maxlength="255" placeholder="{{ t('ui.project.address.placeholder') }}" autocomplete="street-address" dir="auto"></div>
+      <div class="field"><label for="{{ prefix }}-city">{{ t('ui.city') }} <span class="optional-label">{{ t('ui.optional') }}</span></label><input id="{{ prefix }}-city" name="city" value="{{ project.city or '' if project else '' }}" maxlength="80" placeholder="{{ t('ui.project.city.placeholder') }}" autocomplete="address-level2" dir="auto"></div>
+    </div>
+  </fieldset>
+
+  <fieldset class="project-form-section">
+    <legend><span class="project-form-step">2</span><span><strong>{{ t('ui.project.contact.details') }}</strong><small>{{ t('ui.project.contact.help') }}</small></span></legend>
+    <div class="grid cols-2 project-form-grid">
+      <div class="field"><label for="{{ prefix }}-contact">{{ t('ui.contact.person') }} <span class="optional-label">{{ t('ui.optional') }}</span></label><input id="{{ prefix }}-contact" name="contact_person" value="{{ project.contact_person or '' if project else '' }}" maxlength="120" placeholder="{{ t('ui.project.contact.placeholder') }}" autocomplete="name" dir="auto"></div>
+      <div class="field"><label for="{{ prefix }}-phone">{{ t('ui.contact.number') }} <span class="optional-label">{{ t('ui.optional') }}</span></label><input id="{{ prefix }}-phone" type="tel" name="contact_number" value="{{ project.contact_number or '' if project else '' }}" maxlength="40" placeholder="{{ t('ui.project.phone.placeholder') }}" autocomplete="tel" dir="ltr"></div>
+    </div>
+  </fieldset>
+
+  <fieldset class="project-form-section">
+    <legend><span class="project-form-step">3</span><span><strong>{{ t('ui.project.schedule') }}</strong><small>{{ t('ui.project.schedule.help') }}</small></span></legend>
+    <div class="grid cols-2 project-form-grid">
+      <div class="field"><label for="{{ prefix }}-start">{{ t('ui.start.date') }} <span class="optional-label">{{ t('ui.optional') }}</span></label><input id="{{ prefix }}-start" type="date" name="start_date" value="{{ project.start_date.isoformat() if project and project.start_date else '' }}"></div>
+      <div class="field"><label for="{{ prefix }}-end">{{ t('ui.end.date') }} <span class="optional-label">{{ t('ui.optional') }}</span></label><input id="{{ prefix }}-end" type="date" name="end_date" value="{{ project.end_date.isoformat() if project and project.end_date else '' }}"></div>
+    </div>
+  </fieldset>
+
+  <fieldset class="project-form-section">
+    <legend><span class="project-form-step">4</span><span><strong>{{ t('ui.additional.details') }}</strong><small>{{ t('ui.project.description.help') }}</small></span></legend>
+    <div class="field project-form-description"><label for="{{ prefix }}-description">{{ t('ui.description.optional') }}</label><textarea id="{{ prefix }}-description" name="description" maxlength="5000" rows="4" placeholder="{{ t('ui.project.description.placeholder') }}" dir="auto">{{ project.description or '' if project else '' }}</textarea></div>
+  </fieldset>
+</div>
+{% endmacro %}
+
 {% block content %}
 <div class="page-head">
   <div>
@@ -18,17 +52,8 @@
   <div class="card-body">
     <form method="post" action="/projects">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <div class="grid cols-2">
-        <div class="field"><label for="project-name">{{ t('ui.main.project.name') }} <span class="req">*</span></label><input id="project-name" name="name" required maxlength="160" dir="auto"></div>
-        <div class="field"><label for="project-address">{{ t('ui.address.or.location') }} <span class="req">*</span></label><input id="project-address" name="address" required maxlength="255" dir="auto"></div>
-        <div class="field"><label for="project-city">{{ t('ui.city') }}</label><input id="project-city" name="city" maxlength="80" dir="auto"></div>
-        <div class="field"><label for="project-contact">{{ t('ui.contact.person') }}</label><input id="project-contact" name="contact_person" maxlength="120" dir="auto"></div>
-        <div class="field"><label for="project-phone">{{ t('ui.contact.number') }}</label><input id="project-phone" name="contact_number" maxlength="40" dir="auto"></div>
-        <div class="field"><label for="project-start">{{ t('ui.start.date') }}</label><input id="project-start" type="date" name="start_date"></div>
-        <div class="field"><label for="project-end">{{ t('ui.end.date') }}</label><input id="project-end" type="date" name="end_date"></div>
-        <div class="field span-2"><label for="project-description">{{ t('ui.description.optional') }}</label><textarea id="project-description" name="description" maxlength="5000" rows="3" dir="auto"></textarea></div>
-      </div>
-      <div class="actions-row">
+      {{ project_form_fields(prefix='project-create') }}
+      <div class="actions-row project-form-actions">
         <button class="btn btn-primary" type="submit">{{ t('ui.save.main.project') }}</button>
         <button class="btn btn-secondary" type="button" data-toggle-target="add-project">{{ t('ui.cancel') }}</button>
       </div>
@@ -115,17 +140,8 @@
           <summary>{{ t('ui.edit') }}</summary>
           <form method="post" action="/projects/{{ selected_project.id }}/edit">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <div class="grid cols-2">
-              <div class="field"><label>{{ t('ui.main.project.name') }} <span class="req">*</span></label><input name="name" value="{{ selected_project.name }}" required maxlength="160" dir="auto"></div>
-              <div class="field"><label>{{ t('ui.address.or.location') }} <span class="req">*</span></label><input name="address" value="{{ selected_project.address }}" required maxlength="255" dir="auto"></div>
-              <div class="field"><label>{{ t('ui.city') }}</label><input name="city" value="{{ selected_project.city or '' }}" maxlength="80" dir="auto"></div>
-              <div class="field"><label>{{ t('ui.contact.person') }}</label><input name="contact_person" value="{{ selected_project.contact_person or '' }}" maxlength="120" dir="auto"></div>
-              <div class="field"><label>{{ t('ui.contact.number') }}</label><input name="contact_number" value="{{ selected_project.contact_number or '' }}" maxlength="40" dir="auto"></div>
-              <div class="field"><label>{{ t('ui.start.date') }}</label><input type="date" name="start_date" value="{{ selected_project.start_date.isoformat() if selected_project.start_date else '' }}"></div>
-              <div class="field"><label>{{ t('ui.end.date') }}</label><input type="date" name="end_date" value="{{ selected_project.end_date.isoformat() if selected_project.end_date else '' }}"></div>
-              <div class="field span-2"><label>{{ t('ui.description.optional') }}</label><textarea name="description" maxlength="5000" rows="3" dir="auto">{{ selected_project.description or '' }}</textarea></div>
-            </div>
-            <div class="actions-row">
+            {{ project_form_fields(selected_project, 'project-edit') }}
+            <div class="actions-row project-form-actions">
               <button class="btn btn-primary btn-sm">{{ t('ui.save.changes') }}</button>
               {% if user.is_admin %}
               <button class="btn btn-quiet btn-sm" type="submit" formaction="/projects/{{ selected_project.id }}/toggle">{{ t('ui.deactivate') if selected_project.is_active else t('ui.activate') }}</button>
@@ -136,6 +152,22 @@
         </details>
       </div>
     </div>
+
+    {% if user.is_admin %}
+    {% set guidance_enabled = (selected_project.photo_guidance_setting and selected_project.photo_guidance_setting.enabled) or (not selected_project.photo_guidance_setting and selected_project.photo_guidance_profiles) %}
+    <div class="card project-photo-guidance-card">
+      <div class="card-body">
+        <div class="project-photo-guidance-copy">
+          <span class="project-photo-guidance-icon" aria-hidden="true"></span>
+          <div><span class="eyebrow">{{ t('nav.installations') }}</span><h2>{{ t('ui.photo.guidance') }}</h2><p>{{ t('ui.project.photo.guidance.card.help') }}</p></div>
+        </div>
+        <div class="project-photo-guidance-action">
+          <span class="badge {{ 'ok' if guidance_enabled else 'muted' }}">{{ t('ui.enabled') if guidance_enabled else t('ui.disabled') }}</span>
+          <a class="btn btn-primary" href="/projects/{{ selected_project.id }}/photo-guidance">{{ t('ui.manage.photo.guidance') }}</a>
+        </div>
+      </div>
+    </div>
+    {% endif %}
 
     <div class="card">
       <div class="card-head"><h2>{{ t('ui.sub.projects') }}</h2><button class="btn btn-primary btn-sm" data-toggle-target="add-sub-project" aria-expanded="false">{{ t('ui.add.sub.project') }}</button></div>
@@ -169,7 +201,7 @@
                 </div>
               </form>
 
-              <form method="post" action="/sub-projects/{{ sub_project.id }}/sites" class="site-assignment-form">
+              <form method="post" action="/sub-projects/{{ sub_project.id }}/sites" class="site-assignment-form" data-site-assignment-form>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <fieldset>
                   <legend>{{ t('ui.assign.sites') }}</legend>
@@ -180,7 +212,10 @@
                     {% endfor %}
                   </div>
                 </fieldset>
-                <button class="btn btn-primary btn-sm">{{ t('ui.save.site.assignments') }}</button>
+                <div class="actions-row">
+                  <button class="btn btn-primary btn-sm">{{ t('ui.save.site.assignments') }}</button>
+                  <button class="btn btn-secondary btn-sm" type="button" data-deselect-sites>{{ t('ui.deselect.all.sites') }}</button>
+                </div>
               </form>
             </div>
           </details>

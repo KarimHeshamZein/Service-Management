@@ -11,9 +11,9 @@
     try { hierarchy = JSON.parse(dataNode.textContent); } catch (_) { return; }
     function initializeScope(scope) {
       if (scope.dataset.hierarchyInitialized === "true") return;
-      var projectSelect = scope.querySelector("[name=project_id]");
-      var subSelect = scope.querySelector("[name=sub_project_id]");
-      var siteSelect = scope.querySelector("[name=work_site_id]");
+      var projectSelect = scope.querySelector("select[name=project_id]");
+      var subSelect = scope.querySelector("select[name=sub_project_id]");
+      var siteSelect = scope.querySelector("select[name=work_site_id]");
       if (!projectSelect || !subSelect || !siteSelect) return;
       scope.dataset.hierarchyInitialized = "true";
       var subOptions = Array.prototype.slice.call(subSelect.options, 1);
@@ -47,6 +47,7 @@
 
     var scopesRoot = form.querySelector("[data-site-scopes]");
     var addSite = form.querySelector("[data-add-site]");
+    var siteTemplate = form.querySelector("[data-site-template]");
     if (!scopesRoot || !addSite) return;
     function optionLabel(scope, index) {
       var names = ["project_id", "sub_project_id", "work_site_id"].map(function (name) {
@@ -76,7 +77,10 @@
       });
     }
     addSite.addEventListener("click", function () {
-      var clone = scopesRoot.querySelector("[data-site-scope]").cloneNode(true);
+      var sourceScope = scopesRoot.querySelector("[data-site-scope]");
+      var clone = siteTemplate && siteTemplate.content.firstElementChild
+        ? siteTemplate.content.firstElementChild.cloneNode(true)
+        : sourceScope.cloneNode(true);
       var deviceTemplate = form.querySelector("[data-device-template]");
       var clonedItems = clone.querySelector("[data-device-items]");
       if (deviceTemplate && clonedItems) clonedItems.replaceChildren(deviceTemplate.content.cloneNode(true));
@@ -106,6 +110,7 @@
     scopesRoot.addEventListener("click", function (event) {
       var remove = event.target.closest("[data-remove-site]");
       if (remove && scopesRoot.querySelectorAll("[data-site-scope]").length > 1) {
+        if (remove.dataset.confirm && !window.confirm(remove.dataset.confirm)) return;
         remove.closest("[data-site-scope]").remove();
         refreshScopes();
       }
@@ -332,8 +337,10 @@
   function clearEntryDataRow(row, maintenance) {
     row.dataset.autofilled = "";
     row.querySelectorAll("input, select").forEach(function (field) {
-      if (field.hasAttribute("data-entry-data-scope")) return;
-      if (maintenance && field.name === "data_quantity") field.value = "1";
+      // Creation rows are re-numbered by refreshEntryDataTables. Existing edit
+      // rows must retain their immutable saved Site position when cloned.
+      if (field.hasAttribute("data-entry-data-scope") || field.hasAttribute("data-existing-data-scope")) return;
+      if (maintenance && (field.name === "data_quantity" || field.name === "existing_data_quantity")) field.value = "1";
       else field.value = "";
     });
   }
@@ -386,8 +393,8 @@
       dataRows = Array.from(table.querySelectorAll("[data-entry-data-row]"));
     }
     var row = dataRows[deviceIndex];
-    var itemInput = row.querySelector('[name="data_item_name"]');
-    var modelInput = row.querySelector('[name="data_model"]');
+    var itemInput = row.querySelector('[name="data_item_name"], [name="existing_data_item_name"]');
+    var modelInput = row.querySelector('[name="data_model"], [name="existing_data_model"]');
     var option = select.selectedOptions[0];
     if (!option || !option.value) return;
     if (!itemInput.value || row.dataset.autofilled === "true") itemInput.value = option.dataset.itemName || option.textContent.trim();
@@ -405,13 +412,16 @@
         var remove = row.querySelector("[data-remove-device]");
         var scopeInput = row.querySelector("[data-item-scope-index]");
         if (number) number.textContent = localIndex + 1;
-        if (remove) remove.hidden = rows.length === 1;
+        if (remove) remove.hidden = rows.length === 1 && !scope.matches("[data-existing-site]");
         if (scopeInput) scopeInput.value = String(scopeIndex);
         row.querySelectorAll("[data-name-kind]").forEach(function (field) {
           field.name = field.dataset.nameKind + "_" + globalIndex;
         });
         row.querySelectorAll("[data-description-kind]").forEach(function (root) {
           root.dataset.descriptionName = root.dataset.descriptionKind + "_" + globalIndex;
+        });
+        row.querySelectorAll("[data-issue-kind]").forEach(function (root) {
+          root.dataset.issueName = root.dataset.issueKind + "_" + globalIndex;
         });
         row.querySelectorAll("[data-photo-kind]").forEach(function (input) {
           input.id = prefix + "-" + input.dataset.photoKind + "-" + globalIndex;
@@ -439,13 +449,40 @@
       });
     });
     refreshEntryDataTables(form);
+    if (window.refreshPhotoGuidance) window.refreshPhotoGuidance(form);
     form.dispatchEvent(new CustomEvent("deviceitemschange"));
   }
+  function prepareNestedEditSubmission(form) {
+    if (!form.matches("[data-record-nested-edit]")) return;
+    var activeScopes = Array.from(form.querySelectorAll("[data-site-scope]")).filter(function (scope) {
+      return scope.matches("[data-new-site]") || scope.querySelector("[data-device-row]");
+    });
+    form.querySelectorAll("[data-site-scope]").forEach(function (scope) {
+      var activeIndex = activeScopes.indexOf(scope);
+      scope.querySelectorAll("[data-addition-scope-field]").forEach(function (field) {
+        field.disabled = activeIndex < 0;
+      });
+      scope.querySelectorAll("[data-device-row] [data-item-scope-index]").forEach(function (field) {
+        field.value = String(Math.max(activeIndex, 0));
+      });
+      scope.querySelectorAll("[data-entry-data-scope]").forEach(function (field) {
+        field.value = String(Math.max(activeIndex, 0));
+      });
+    });
+  }
   window.refreshNestedEntryDevices = refreshNestedEntryDevices;
-  document.addEventListener("DOMContentLoaded", function () {
+  function initializeNestedEntryForms() {
     document.querySelectorAll("[data-nested-entry-devices]").forEach(function (form) {
+      if (form.dataset.nestedEntryInitialized === "true") return;
+      form.dataset.nestedEntryInitialized = "true";
       var template = form.querySelector("[data-device-template]");
       form.addEventListener("click", function (event) {
+        var removeExisting = event.target.closest("[data-remove-existing-item]");
+        if (removeExisting) {
+          if (removeExisting.dataset.confirm && !window.confirm(removeExisting.dataset.confirm)) return;
+          removeExisting.closest("[data-existing-item]").remove();
+          return;
+        }
         var addDataRow = event.target.closest("[data-add-data-row]");
         if (addDataRow) {
           addEntryDataRow(addDataRow.closest("[data-entry-data-table]"));
@@ -468,6 +505,9 @@
         }
         var add = event.target.closest("[data-add-device]");
         if (add && template) {
+          add.closest("[data-site-scope]").querySelectorAll("[data-addition-scope-field]").forEach(function (field) {
+            field.disabled = false;
+          });
           add.closest("[data-site-scope]").querySelector("[data-device-items]").appendChild(template.content.cloneNode(true));
           refreshNestedEntryDevices(form);
           return;
@@ -475,7 +515,10 @@
         var remove = event.target.closest("[data-remove-device]");
         if (remove) {
           var root = remove.closest("[data-device-items]");
-          if (root.querySelectorAll("[data-device-row]").length > 1) remove.closest("[data-device-row]").remove();
+          var scope = remove.closest("[data-site-scope]");
+          if (root.querySelectorAll("[data-device-row]").length > 1 || scope.matches("[data-existing-site]")) {
+            remove.closest("[data-device-row]").remove();
+          }
           refreshNestedEntryDevices(form);
         }
       });
@@ -483,9 +526,12 @@
         if (event.target.matches('[name="device_id"]')) syncInstallationDataRow(event.target);
       });
       form.addEventListener("scopechange", function () { refreshNestedEntryDevices(form); });
+      form.addEventListener("submit", function () {
+        prepareNestedEditSubmission(form);
+      });
       refreshNestedEntryDevices(form);
     });
-  });
+  }
 
   /* ---------------------------------------------------------- navigation */
   var burger = document.querySelector("[data-nav-toggle]");
@@ -581,6 +627,110 @@
     });
   });
 
+  /* -------------------------------------- Pricing Category folder picker */
+  var pricingCategoryPicker = document.querySelector(
+    "[data-pricing-category-assignment-picker]"
+  );
+  if (pricingCategoryPicker) {
+    var activePricingCategorySelector = null;
+    var pricingCategoryRoot = pricingCategoryPicker.querySelector(
+      "[data-pricing-category-root]"
+    );
+    var pricingCategoryBack = pricingCategoryPicker.querySelector(
+      "[data-pricing-category-back]"
+    );
+    var pricingCategoryTitle = pricingCategoryPicker.querySelector(
+      "[data-pricing-category-picker-title]"
+    );
+
+    function closePricingCategoryPicker() {
+      if (typeof pricingCategoryPicker.close === "function") {
+        pricingCategoryPicker.close();
+      } else {
+        pricingCategoryPicker.removeAttribute("open");
+      }
+    }
+
+    function showPricingCategoryRoot() {
+      if (pricingCategoryRoot) pricingCategoryRoot.hidden = false;
+      if (pricingCategoryBack) pricingCategoryBack.hidden = true;
+      if (pricingCategoryTitle) {
+        pricingCategoryTitle.textContent = pricingCategoryTitle.dataset.rootTitle;
+      }
+      pricingCategoryPicker.querySelectorAll("[data-pricing-category-panel]").forEach(
+        function (panel) { panel.hidden = true; }
+      );
+    }
+
+    document.querySelectorAll("[data-open-pricing-category-picker]").forEach(
+      function (button) {
+        button.addEventListener("click", function () {
+          activePricingCategorySelector = button.closest(
+            "[data-pricing-category-selector]"
+          );
+          if (!activePricingCategorySelector) return;
+          showPricingCategoryRoot();
+          if (typeof pricingCategoryPicker.showModal === "function") {
+            pricingCategoryPicker.showModal();
+          } else {
+            pricingCategoryPicker.setAttribute("open", "");
+          }
+        });
+      }
+    );
+
+    pricingCategoryPicker.querySelectorAll("[data-open-pricing-category]").forEach(
+      function (folder) {
+        folder.addEventListener("click", function () {
+          var panel = document.getElementById(folder.dataset.openPricingCategory);
+          if (!panel) return;
+          if (pricingCategoryRoot) pricingCategoryRoot.hidden = true;
+          pricingCategoryPicker.querySelectorAll("[data-pricing-category-panel]").forEach(
+            function (candidate) { candidate.hidden = candidate !== panel; }
+          );
+          if (pricingCategoryBack) pricingCategoryBack.hidden = false;
+          if (pricingCategoryTitle) {
+            pricingCategoryTitle.textContent = folder.dataset.categoryLabel;
+          }
+        });
+      }
+    );
+
+    pricingCategoryPicker.querySelectorAll("[data-select-pricing-category]").forEach(
+      function (choice) {
+        choice.addEventListener("click", function () {
+          if (!activePricingCategorySelector) return;
+          var input = activePricingCategorySelector.querySelector(
+            "[data-pricing-category-value]"
+          );
+          var label = activePricingCategorySelector.querySelector(
+            "[data-pricing-category-label]"
+          );
+          if (input) {
+            input.value = choice.dataset.categoryId || "";
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          if (label) label.textContent = choice.dataset.categoryLabel;
+          closePricingCategoryPicker();
+          var trigger = activePricingCategorySelector.querySelector(
+            "[data-open-pricing-category-picker]"
+          );
+          if (trigger) trigger.focus();
+        });
+      }
+    );
+
+    if (pricingCategoryBack) {
+      pricingCategoryBack.addEventListener("click", showPricingCategoryRoot);
+    }
+    var closePricingCategory = pricingCategoryPicker.querySelector(
+      "[data-close-pricing-category-picker]"
+    );
+    if (closePricingCategory) {
+      closePricingCategory.addEventListener("click", closePricingCategoryPicker);
+    }
+  }
+
   document.querySelectorAll("[data-service-item-picker]").forEach(function (picker) {
     var search = picker.querySelector("[data-service-item-picker-search]");
     var empty = picker.querySelector("[data-service-item-picker-empty]");
@@ -655,7 +805,11 @@
     var pricingItemPicker = pricingForm.querySelector("[data-pricing-item-picker]");
     var pricingItemPickerSearch = pricingForm.querySelector("[data-pricing-item-picker-search]");
     var pricingItemPickerEmpty = pricingForm.querySelector("[data-pricing-item-picker-empty]");
+    var pricingPickerCategoryList = pricingForm.querySelector("[data-pricing-picker-category-list]");
+    var pricingPickerBack = pricingForm.querySelector("[data-pricing-picker-back]");
+    var pricingPickerTitle = pricingForm.querySelector("[data-pricing-picker-view-title]");
     var pricingPickerSection = null;
+    var pricingPickerParentPanel = null;
     var nextPricingIndex = 0;
 
     function catalogueItem(value) {
@@ -1048,14 +1202,62 @@
       if (!pricingItemPicker) return;
       if (pricingItemPickerSearch) {
         pricingItemPickerSearch.value = "";
-        pricingItemPickerSearch.dispatchEvent(new Event("input"));
       }
+      showPricingPickerCategories();
       if (typeof pricingItemPicker.showModal === "function") {
         pricingItemPicker.showModal();
       } else {
         pricingItemPicker.setAttribute("open", "");
       }
       if (pricingItemPickerSearch) pricingItemPickerSearch.focus();
+    }
+
+    function showPricingPickerCategories() {
+      if (pricingPickerCategoryList) pricingPickerCategoryList.hidden = false;
+      if (pricingPickerBack) pricingPickerBack.hidden = true;
+      if (pricingPickerTitle) pricingPickerTitle.textContent = pricingPickerTitle.dataset.defaultTitle;
+      pricingPickerParentPanel = null;
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-category-panel]").forEach(function (panel) {
+        panel.hidden = true;
+      });
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory-panel]").forEach(function (panel) {
+        panel.hidden = true;
+      });
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory]").forEach(function (folder) {
+        folder.hidden = false;
+      });
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-item]").forEach(function (choice) {
+        choice.hidden = false;
+      });
+      if (pricingItemPickerEmpty) pricingItemPickerEmpty.hidden = true;
+    }
+
+    function showPricingPickerCategory(panelId, label) {
+      if (pricingPickerCategoryList) pricingPickerCategoryList.hidden = true;
+      if (pricingPickerBack) pricingPickerBack.hidden = false;
+      if (pricingPickerTitle) pricingPickerTitle.textContent = label;
+      pricingPickerParentPanel = null;
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-category-panel]").forEach(function (panel) {
+        panel.hidden = panel.id !== panelId;
+      });
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory-panel]").forEach(function (panel) {
+        panel.hidden = true;
+      });
+      if (pricingItemPickerEmpty) pricingItemPickerEmpty.hidden = true;
+    }
+
+    function showPricingPickerSubcategory(panelId, parentPanelId, label) {
+      if (pricingPickerCategoryList) pricingPickerCategoryList.hidden = true;
+      if (pricingPickerBack) pricingPickerBack.hidden = false;
+      if (pricingPickerTitle) pricingPickerTitle.textContent = label;
+      pricingPickerParentPanel = parentPanelId;
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-category-panel]").forEach(function (panel) {
+        panel.hidden = true;
+      });
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory-panel]").forEach(function (panel) {
+        panel.hidden = panel.id !== panelId;
+      });
+      if (pricingItemPickerEmpty) pricingItemPickerEmpty.hidden = true;
     }
 
     addPricingLineButtons.forEach(function (button) {
@@ -1066,6 +1268,34 @@
     });
 
     if (pricingItemPicker) {
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-category]").forEach(function (folder) {
+        folder.addEventListener("click", function () {
+          showPricingPickerCategory(folder.dataset.pricingPickerCategory, folder.dataset.categoryLabel);
+        });
+      });
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory]").forEach(function (folder) {
+        folder.addEventListener("click", function () {
+          showPricingPickerSubcategory(
+            folder.dataset.pricingPickerSubcategory,
+            folder.dataset.parentPanel,
+            folder.dataset.categoryLabel
+          );
+        });
+      });
+      if (pricingPickerBack) {
+        pricingPickerBack.addEventListener("click", function () {
+          if (pricingItemPickerSearch) pricingItemPickerSearch.value = "";
+          if (pricingPickerParentPanel) {
+            var parentPanel = pricingItemPicker.querySelector("#" + pricingPickerParentPanel);
+            showPricingPickerCategory(
+              pricingPickerParentPanel,
+              parentPanel ? parentPanel.dataset.categoryLabel : ""
+            );
+          } else {
+            showPricingPickerCategories();
+          }
+        });
+      }
       pricingItemPicker.querySelectorAll("[data-pricing-picker-item]").forEach(function (choice) {
         choice.addEventListener("click", function () {
           pricingItemPicker.close();
@@ -1086,13 +1316,29 @@
       if (pricingItemPickerSearch) {
         pricingItemPickerSearch.addEventListener("input", function () {
           var query = pricingItemPickerSearch.value.trim().toLowerCase();
+          if (!query) {
+            showPricingPickerCategories();
+            return;
+          }
+          if (pricingPickerCategoryList) pricingPickerCategoryList.hidden = true;
+          if (pricingPickerBack) pricingPickerBack.hidden = false;
+          if (pricingPickerTitle) pricingPickerTitle.textContent = pricingPickerTitle.dataset.searchTitle;
+          pricingPickerParentPanel = null;
+          pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory]").forEach(function (folder) {
+            folder.hidden = true;
+          });
           var visibleCount = 0;
           pricingItemPicker.querySelectorAll("[data-pricing-picker-item]").forEach(function (choice) {
             var matches = !query || choice.dataset.searchText.indexOf(query) !== -1;
             choice.hidden = !matches;
             if (matches) visibleCount += 1;
           });
-          pricingItemPicker.querySelectorAll(".pricing-item-picker-category").forEach(function (category) {
+          pricingItemPicker.querySelectorAll("[data-pricing-picker-category-panel]").forEach(function (category) {
+            category.hidden = !category.querySelector(
+              "[data-pricing-picker-item]:not([hidden])"
+            );
+          });
+          pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory-panel]").forEach(function (category) {
             category.hidden = !category.querySelector(
               "[data-pricing-picker-item]:not([hidden])"
             );
@@ -1453,6 +1699,29 @@
           description.setAttribute("aria-label", (photoRoot.dataset.descriptionLabel || "Description for") + " " + file.name);
           description.value = entry.description || "";
           description.addEventListener("input", function () { entry.description = description.value; });
+          var guidanceOptions = photoRoot.photoGuidanceOptions || [];
+          if (guidanceOptions.length) {
+            var guidanceSelect = document.createElement("select");
+            guidanceSelect.className = "photo-guidance-description-select";
+            var guidancePlaceholder = document.createElement("option");
+            guidancePlaceholder.value = "";
+            guidancePlaceholder.textContent = photoRoot.photoGuidanceSelectLabel || "Select a standard description";
+            guidanceSelect.appendChild(guidancePlaceholder);
+            guidanceOptions.forEach(function (value) {
+              var option = document.createElement("option");
+              option.value = value;
+              option.textContent = value;
+              if (entry.description === value) option.selected = true;
+              guidanceSelect.appendChild(option);
+            });
+            guidanceSelect.addEventListener("change", function () {
+              if (!guidanceSelect.value) return;
+              entry.description = guidanceSelect.value;
+              description.value = guidanceSelect.value;
+              description.dispatchEvent(new Event("input", { bubbles: true }));
+            });
+            cell.appendChild(guidanceSelect);
+          }
           var ordering = document.createElement("div");
           ordering.className = "preview-order-actions";
           var up = document.createElement("button");
@@ -1470,7 +1739,24 @@
             if (index < selected.length - 1) { var next = selected[index + 1]; selected[index + 1] = selected[index]; selected[index] = next; refresh(); }
           });
           ordering.append(up, down);
-          cell.append(description, ordering);
+          cell.append(description);
+          if (photoRoot.dataset.issueName) {
+            var issueLabel = document.createElement("label");
+            issueLabel.className = "photo-issue-toggle";
+            var issueCheckbox = document.createElement("input");
+            issueCheckbox.type = "checkbox";
+            issueCheckbox.name = photoRoot.dataset.issueName + "_" + index;
+            issueCheckbox.value = "1";
+            issueCheckbox.checked = Boolean(entry.issueFound);
+            issueCheckbox.addEventListener("change", function () {
+              entry.issueFound = issueCheckbox.checked;
+            });
+            var issueText = document.createElement("span");
+            issueText.textContent = photoRoot.dataset.issueLabel || "Issue Found";
+            issueLabel.append(issueCheckbox, issueText);
+            cell.append(issueLabel);
+          }
+          cell.append(ordering);
         }
         grid.appendChild(cell);
       });
@@ -1495,7 +1781,7 @@
           showError("“" + file.name + "” is larger than the " + (maxBytes / 1048576).toFixed(0) + " MB limit.");
           return;
         }
-        selected.push({ file: file, description: "" });
+        selected.push({ file: file, description: "", issueFound: false });
       });
       refresh();
     }
@@ -1526,8 +1812,688 @@
     zone.addEventListener("drop", function (e) {
       if (e.dataTransfer && e.dataTransfer.files) accept(e.dataTransfer.files);
     });
+    photoRoot.refreshPhotoGuidance = refresh;
   };
   document.querySelectorAll("[data-photos]").forEach(window.initializePhotoPicker);
+
+  /* ------------------------------------------ shared page navigation */
+  document.querySelectorAll("[data-page-back]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var fallback = button.dataset.fallbackUrl || "/dashboard";
+      var referrer = null;
+      try { referrer = document.referrer ? new URL(document.referrer) : null; } catch (error) { referrer = null; }
+      var canReturn = referrer && referrer.origin === window.location.origin &&
+        referrer.pathname !== "/login" && referrer.pathname !== "/logout" &&
+        window.history.length > 1;
+      if (canReturn) window.history.back();
+      else window.location.assign(fallback);
+    });
+  });
+
+  /* ------------------------------------------ Sub Project Site assignment */
+  document.querySelectorAll("[data-site-assignment-form]").forEach(function (form) {
+    var button = form.querySelector("[data-deselect-sites]");
+    var sites = Array.prototype.slice.call(form.querySelectorAll('input[name="site_ids"]'));
+    if (!button) return;
+    function refresh() {
+      button.disabled = !sites.some(function (site) { return site.checked; });
+    }
+    button.addEventListener("click", function () {
+      sites.forEach(function (site) {
+        if (!site.checked) return;
+        site.checked = false;
+        site.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      refresh();
+    });
+    sites.forEach(function (site) { site.addEventListener("change", refresh); });
+    refresh();
+  });
+
+  /* ---------------- Optional project photo guidance profiles */
+  function initializePhotoGuidance(config) {
+    var form = config.matches("form") ? config : config.closest("form");
+    if (!form || form.dataset.photoGuidanceInitialized === "true") return;
+    form.dataset.photoGuidanceInitialized = "true";
+    var url = config.dataset.guidanceUrl;
+    var selectLabel = config.dataset.guidanceSelectLabel || "Select a standard description";
+    var alertLabel = config.dataset.guidanceAlertLabel || "Photo guidance";
+    var cache = new Map();
+
+    function stageOf(root) {
+      if (root.dataset.photoStage) return root.dataset.photoStage;
+      var name = root.dataset.descriptionName || root.dataset.descriptionKind || "";
+      return name.indexOf("before") !== -1 ? "before" : "after";
+    }
+    function showAlert(root, message) {
+      var zone = root.querySelector(".dropzone");
+      if (!zone) return;
+      var existing = zone.querySelector(".photo-guidance-alert");
+      if (existing) existing.remove();
+      if (!message) return;
+      var alert = document.createElement("span");
+      alert.className = "photo-guidance-alert";
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "photo-guidance-alert-icon";
+      button.textContent = "i";
+      button.title = message;
+      button.setAttribute("aria-label", alertLabel + ": " + message);
+      button.setAttribute("aria-expanded", "false");
+      var popover = document.createElement("span");
+      popover.className = "photo-guidance-alert-text";
+      popover.textContent = message;
+      popover.hidden = true;
+      button.addEventListener("click", function () {
+        popover.hidden = !popover.hidden;
+        button.setAttribute("aria-expanded", popover.hidden ? "false" : "true");
+      });
+      button.addEventListener("blur", function () { popover.hidden = true; button.setAttribute("aria-expanded", "false"); });
+      alert.append(button, popover);
+      zone.insertBefore(alert, zone.firstChild);
+    }
+    function clearRow(row) {
+      row.querySelectorAll("[data-photos]").forEach(function (root) {
+        root.photoGuidanceOptions = [];
+        root.photoGuidanceSelectLabel = selectLabel;
+        showAlert(root, "");
+        if (root.refreshPhotoGuidance) root.refreshPhotoGuidance();
+      });
+      row.querySelectorAll("[data-guidance-photo-stage] .photo-guidance-description-select").forEach(function (select) { select.remove(); });
+    }
+    function applyExistingDescriptions(row, payload) {
+      row.querySelectorAll("[data-guidance-photo-stage]").forEach(function (card) {
+        var oldSelect = card.querySelector(".photo-guidance-description-select");
+        if (oldSelect) oldSelect.remove();
+        var guidance = payload.enabled ? payload[card.dataset.guidancePhotoStage] : null;
+        var options = guidance && guidance.descriptions ? guidance.descriptions : [];
+        var textarea = card.querySelector('textarea[name^="photo_description_"]');
+        if (!textarea || !options.length) return;
+        var select = document.createElement("select");
+        select.className = "photo-guidance-description-select";
+        var placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = selectLabel;
+        select.appendChild(placeholder);
+        options.forEach(function (value) {
+          var option = document.createElement("option");
+          option.value = value;
+          option.textContent = value;
+          if (textarea.value === value) option.selected = true;
+          select.appendChild(option);
+        });
+        select.addEventListener("change", function () {
+          if (!select.value) return;
+          textarea.value = select.value;
+          textarea.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        textarea.parentNode.insertBefore(select, textarea);
+      });
+    }
+    function apply(row, payload) {
+      row.querySelectorAll("[data-photos]").forEach(function (root) {
+        var stage = stageOf(root);
+        var guidance = payload.enabled && payload[stage] ? payload[stage] : { alert: "", descriptions: [] };
+        root.photoGuidanceOptions = guidance.descriptions || [];
+        root.photoGuidanceSelectLabel = selectLabel;
+        showAlert(root, guidance.alert || "");
+        if (root.refreshPhotoGuidance) root.refreshPhotoGuidance();
+      });
+      applyExistingDescriptions(row, payload);
+    }
+    function loadRow(row) {
+      var scope = row.closest("[data-site-scope]");
+      var project = scope && scope.querySelector('[name="project_id"]');
+      var site = scope && scope.querySelector('[name="work_site_id"]');
+      var profile = row.querySelector('[data-photo-guidance-profile-select], [data-guidance-profile-id]');
+      var values = [project && project.value, profile && profile.value, site && site.value];
+      row.photoGuidanceRequest = (row.photoGuidanceRequest || 0) + 1;
+      var requestNumber = row.photoGuidanceRequest;
+      if (values.some(function (value) { return !value; })) { clearRow(row); return; }
+      var key = values.join(":");
+      var pending = cache.get(key);
+      if (!pending) {
+        var params = new URLSearchParams({ project_id: values[0], profile_id: values[1], work_site_id: values[2] });
+        pending = fetch(url + "?" + params.toString(), { headers: { "Accept": "application/json" } })
+          .then(function (response) { return response.ok ? response.json() : { enabled: false }; })
+          .catch(function () { return { enabled: false }; });
+        cache.set(key, pending);
+      }
+      pending.then(function (payload) {
+        if (requestNumber === row.photoGuidanceRequest) apply(row, payload);
+      });
+    }
+    function refresh() {
+      form.querySelectorAll("[data-device-row], [data-existing-item]").forEach(function (row) {
+        var scope = row.closest("[data-site-scope]");
+        var project = scope && scope.querySelector('[name="project_id"]');
+        var profile = row.querySelector('[data-photo-guidance-profile-select]');
+        if (profile) {
+          Array.from(profile.options).forEach(function (option) {
+            if (!option.value) return;
+            var available = Boolean(project && project.value && option.dataset.projectId === project.value);
+            option.hidden = !available;
+            option.disabled = !available;
+          });
+          var selected = profile.options[profile.selectedIndex];
+          if (profile.value && (!selected || selected.disabled)) profile.value = "";
+        }
+        loadRow(row);
+      });
+    }
+    form.addEventListener("change", function (event) {
+      if (event.target.matches('[name="project_id"], [name="work_site_id"], [data-photo-guidance-profile-select]')) refresh();
+    });
+    form.addEventListener("scopechange", refresh);
+    form.refreshPhotoGuidance = refresh;
+    refresh();
+  }
+  window.refreshPhotoGuidance = function (form) {
+    if (form && form.refreshPhotoGuidance) form.refreshPhotoGuidance();
+  };
+  document.querySelectorAll("[data-photo-guidance]").forEach(initializePhotoGuidance);
+
+  /* --------------------------------- Project photo guidance description rows */
+  function initializePhotoGuidanceRuleForm(form) {
+    function refreshPreview(stage) {
+      var editor = form.querySelector('[data-description-stage="' + stage + '"]');
+      var preview = form.querySelector('[data-guidance-preview="' + stage + '"]');
+      if (!editor || !preview) return;
+      var select = preview.querySelector("[data-preview-select]");
+      var alertIcon = preview.querySelector("[data-preview-alert]");
+      var alertField = form.querySelector('[name="' + stage + '_alert"]');
+      var placeholder = select.options[0] ? select.options[0].textContent : "";
+      select.replaceChildren();
+      var first = document.createElement("option");
+      first.textContent = placeholder;
+      select.appendChild(first);
+      editor.querySelectorAll('input[type="text"]').forEach(function (input) {
+        var value = input.value.trim();
+        if (!value) return;
+        var option = document.createElement("option");
+        option.textContent = value;
+        select.appendChild(option);
+      });
+      select.disabled = select.options.length === 1;
+      var alertText = alertField ? alertField.value.trim() : "";
+      alertIcon.hidden = !alertText;
+      alertIcon.title = alertText;
+    }
+
+    function refreshEditor(editor) {
+      var rows = Array.from(editor.querySelectorAll("[data-description-row]"));
+      var populated = 0;
+      rows.forEach(function (row, index) {
+        var number = row.querySelector("[data-description-number]");
+        var input = row.querySelector('input[type="text"]');
+        if (number) number.textContent = index + 1;
+        if (input) {
+          input.setAttribute("aria-label", editor.dataset.descriptionLabel + " " + (index + 1));
+          if (input.value.trim()) populated += 1;
+        }
+      });
+      var count = editor.querySelector("[data-description-count]");
+      if (count) count.textContent = populated;
+      var add = editor.querySelector("[data-add-description]");
+      if (add) add.disabled = rows.length >= Number(editor.dataset.maxDescriptions || 30);
+      refreshPreview(editor.dataset.descriptionStage);
+    }
+
+    form.querySelectorAll("[data-description-editor]").forEach(function (editor) {
+      var list = editor.querySelector("[data-description-list]");
+      var add = editor.querySelector("[data-add-description]");
+      if (!list || !add) return;
+      add.addEventListener("click", function () {
+        if (list.querySelectorAll("[data-description-row]").length >= Number(editor.dataset.maxDescriptions || 30)) return;
+        var row = document.createElement("div");
+        row.className = "photo-guidance-description-row";
+        row.dataset.descriptionRow = "";
+        var number = document.createElement("span");
+        number.className = "photo-guidance-description-number";
+        number.dataset.descriptionNumber = "";
+        var input = document.createElement("input");
+        input.type = "text";
+        input.name = editor.dataset.descriptionName;
+        input.maxLength = 1000;
+        input.dir = "auto";
+        var remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "btn btn-quiet btn-sm";
+        remove.dataset.removeDescription = "";
+        remove.textContent = editor.querySelector("[data-remove-description]").textContent;
+        row.append(number, input, remove);
+        list.appendChild(row);
+        refreshEditor(editor);
+        input.focus();
+      });
+      list.addEventListener("click", function (event) {
+        var remove = event.target.closest("[data-remove-description]");
+        if (!remove) return;
+        var rows = list.querySelectorAll("[data-description-row]");
+        if (rows.length === 1) {
+          rows[0].querySelector('input[type="text"]').value = "";
+        } else {
+          remove.closest("[data-description-row]").remove();
+        }
+        refreshEditor(editor);
+      });
+      list.addEventListener("input", function () { refreshEditor(editor); });
+      refreshEditor(editor);
+    });
+    form.querySelectorAll('[name="before_alert"], [name="after_alert"]').forEach(function (field) {
+      field.addEventListener("input", function () { refreshPreview(field.name.replace("_alert", "")); });
+    });
+  }
+  document.querySelectorAll(".photo-guidance-rule-form").forEach(initializePhotoGuidanceRuleForm);
+
+  /* -------------------------- long-running record entry autosave + keepalive */
+  function initializeRecordAutosave(form) {
+    var csrfField = form.querySelector('input[name="csrf_token"]');
+    if (!csrfField || !window.fetch) return;
+
+    // Returning to the same form means the final submission was rejected and
+    // rendered again. Keep its draft instead of treating a later navigation as
+    // a successful save.
+    if (sessionStorage.getItem("sms-finalizing-edit-path") === window.location.pathname) {
+      sessionStorage.removeItem("sms-finalizing-draft");
+      sessionStorage.removeItem("sms-finalizing-edit-path");
+      sessionStorage.removeItem("sms-finalizing-draft-csrf");
+      sessionStorage.removeItem("sms-finalizing-file-prefix");
+    }
+
+    var appendField = form.querySelector('input[name="append_record_id"]');
+    var draftKey = (window.location.pathname + (appendField && appendField.value ? ":append:" + appendField.value : "")).toLowerCase();
+    var userStorageKey = draftKey;
+    var ready = false;
+    var restoring = false;
+    var dirty = false;
+    var saveTimer = null;
+    var lastSavedPayload = "";
+    var arabic = (document.documentElement.lang || "").toLowerCase().indexOf("ar") === 0;
+    function local(english, arabicText) { return arabic ? arabicText : english; }
+
+    var bar = document.createElement("div");
+    bar.className = "record-autosave-bar no-print";
+    bar.setAttribute("role", "status");
+    bar.innerHTML = '<span class="record-autosave-dot" aria-hidden="true"></span><span data-autosave-status></span><span class="record-autosave-actions"><button type="button" class="btn btn-secondary btn-sm" data-autosave-now></button><button type="button" class="btn btn-secondary btn-sm" data-autosave-restore hidden></button><button type="button" class="btn btn-quiet btn-sm" data-autosave-discard hidden></button></span>';
+    form.insertBefore(bar, form.firstChild);
+    var statusText = bar.querySelector("[data-autosave-status]");
+    var saveButton = bar.querySelector("[data-autosave-now]");
+    var restoreButton = bar.querySelector("[data-autosave-restore]");
+    var discardButton = bar.querySelector("[data-autosave-discard]");
+    statusText.textContent = local("Preparing autosave…", "جارٍ تجهيز الحفظ التلقائي…");
+    saveButton.textContent = local("Save draft", "حفظ المسودة");
+    restoreButton.textContent = local("Restore draft", "استعادة المسودة");
+    discardButton.textContent = local("Discard draft", "حذف المسودة");
+
+    function setStatus(message, tone) {
+      statusText.textContent = message;
+      bar.dataset.tone = tone || "";
+    }
+
+    function draftFields() {
+      var occurrences = {};
+      return Array.from(form.elements).filter(function (field) {
+        return field.name && field.type !== "file" && field.type !== "submit" && field.type !== "button" &&
+          field.name !== "csrf_token" && field.name !== "form_token" &&
+          field.name.indexOf("existing_remove_photo_") !== 0;
+      }).map(function (field) {
+        var ordinal = occurrences[field.name] || 0;
+        occurrences[field.name] = ordinal + 1;
+        return {
+          name: field.name,
+          ordinal: ordinal,
+          type: field.type || field.tagName.toLowerCase(),
+          value: field.value,
+          checked: Boolean(field.checked)
+        };
+      });
+    }
+
+    function draftStructure() {
+      return Array.from(form.querySelectorAll("[data-site-scopes] > [data-site-scope]")).map(function (scope) {
+        var table = scope.querySelector("[data-entry-data-table]");
+        return {
+          savedScope: scope.dataset.savedScope || null,
+          isNew: scope.hasAttribute("data-new-site") || !scope.hasAttribute("data-existing-site"),
+          existingItems: Array.from(scope.querySelectorAll("[data-existing-item-id]")).map(function (item) { return item.dataset.existingItemId; }),
+          newDeviceCount: scope.querySelectorAll("[data-device-items] [data-device-row]").length,
+          rowCount: table ? table.querySelectorAll("[data-entry-data-row]").length : 0
+        };
+      });
+    }
+
+    function snapshot() {
+      return {
+        version: 1,
+        savedAt: new Date().toISOString(),
+        structure: draftStructure(),
+        fields: draftFields(),
+        hasSelectedPhotos: Array.from(form.querySelectorAll('input[type="file"]')).some(function (field) { return field.files && field.files.length; })
+      };
+    }
+
+    function fieldGroups() {
+      var groups = {};
+      Array.from(form.elements).forEach(function (field) {
+        if (!field.name) return;
+        (groups[field.name] = groups[field.name] || []).push(field);
+      });
+      return groups;
+    }
+
+    function restoreStructure(structure) {
+      if (!Array.isArray(structure)) return;
+      var scopesRoot = form.querySelector("[data-site-scopes]");
+      var addSite = form.querySelector("[data-add-site]");
+      if (!scopesRoot || !addSite) return;
+      // A draft restores additions and field work, never an old destructive
+      // action. Saved Sites/items are authoritative and remain visible until an
+      // Administrator explicitly removes them again in the current page.
+      var wantedNewCount = structure.filter(function (item) { return item.savedScope === null; }).length;
+      while (scopesRoot.querySelectorAll("[data-new-site]").length < wantedNewCount) addSite.click();
+      while (scopesRoot.querySelectorAll("[data-new-site]").length > wantedNewCount) {
+        var extras = scopesRoot.querySelectorAll("[data-new-site]");
+        extras[extras.length - 1].remove();
+      }
+      var newScopes = Array.from(scopesRoot.querySelectorAll("[data-new-site]"));
+      var newIndex = 0;
+      structure.forEach(function (wanted) {
+        var scope = wanted.savedScope !== null
+          ? Array.from(scopesRoot.querySelectorAll("[data-existing-site]")).find(function (candidate) { return String(candidate.dataset.savedScope) === String(wanted.savedScope); })
+          : newScopes[newIndex++];
+        if (!scope) return;
+        var itemsRoot = scope.querySelector("[data-device-items]");
+        var addDevice = scope.querySelector("[data-add-device]");
+        if (itemsRoot && addDevice) {
+          while (itemsRoot.querySelectorAll("[data-device-row]").length < wanted.newDeviceCount) addDevice.click();
+          while (itemsRoot.querySelectorAll("[data-device-row]").length > wanted.newDeviceCount) {
+            var devices = itemsRoot.querySelectorAll("[data-device-row]");
+            devices[devices.length - 1].remove();
+          }
+        }
+        var table = scope.querySelector("[data-entry-data-table]");
+        var addRow = table && table.querySelector("[data-add-data-row]");
+        if (table && addRow) {
+          while (table.querySelectorAll("[data-entry-data-row]").length < Math.max(1, wanted.rowCount)) addRow.click();
+          while (table.querySelectorAll("[data-entry-data-row]").length > Math.max(1, wanted.rowCount)) {
+            var rows = table.querySelectorAll("[data-entry-data-row]");
+            rows[rows.length - 1].remove();
+          }
+        }
+      });
+      if (window.refreshNestedEntryDevices) window.refreshNestedEntryDevices(form);
+    }
+
+    function applyNamedFields(savedFields, names, dispatchChange) {
+      var groups = fieldGroups();
+      savedFields.forEach(function (saved) {
+        if (names && names.indexOf(saved.name) === -1) return;
+        if (!names && ["project_id", "sub_project_id", "work_site_id"].indexOf(saved.name) !== -1) return;
+        var field = groups[saved.name] && groups[saved.name][saved.ordinal];
+        if (!field || field.type === "file") return;
+        if (field.type === "checkbox" || field.type === "radio") field.checked = Boolean(saved.checked);
+        else field.value = saved.value;
+        if (dispatchChange) field.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    }
+
+    function restoreFields(savedFields) {
+      if (!Array.isArray(savedFields)) return;
+      applyNamedFields(savedFields, ["project_id"], true);
+      applyNamedFields(savedFields, ["sub_project_id"], true);
+      applyNamedFields(savedFields, ["work_site_id"], true);
+      applyNamedFields(savedFields, null, false);
+      form.querySelectorAll('input[type="checkbox"][name^="existing_remove_photo_"]').forEach(function (field) {
+        field.checked = false;
+      });
+      if (window.refreshNestedEntryDevices) window.refreshNestedEntryDevices(form);
+    }
+
+    function openFileDatabase() {
+      return new Promise(function (resolve, reject) {
+        if (!window.indexedDB) { reject(new Error("IndexedDB unavailable")); return; }
+        var request = indexedDB.open("sms-record-drafts", 1);
+        request.onupgradeneeded = function () {
+          if (!request.result.objectStoreNames.contains("files")) request.result.createObjectStore("files", { keyPath: "key" });
+        };
+        request.onsuccess = function () { resolve(request.result); };
+        request.onerror = function () { reject(request.error); };
+      });
+    }
+
+    function fileInputKey(input) {
+      var peers = Array.from(form.querySelectorAll('input[type="file"]')).filter(function (candidate) { return candidate.name === input.name; });
+      return userStorageKey + "|" + input.name + "|" + Math.max(0, peers.indexOf(input));
+    }
+
+    function rememberFiles(input) {
+      if (!ready || !input.files) return;
+      openFileDatabase().then(function (db) {
+        var tx = db.transaction("files", "readwrite");
+        var store = tx.objectStore("files");
+        var key = fileInputKey(input);
+        if (!input.files.length) store.delete(key);
+        else store.put({ key: key, files: Array.from(input.files), savedAt: Date.now() });
+      }).catch(function () { setStatus(local("Text saved; keep this page open to retain selected photos.", "تم حفظ النصوص؛ اترك الصفحة مفتوحة للاحتفاظ بالصور المختارة."), "warning"); });
+    }
+
+    function restoreFiles() {
+      if (!window.DataTransfer) return Promise.resolve();
+      return openFileDatabase().then(function (db) {
+        var inputs = Array.from(form.querySelectorAll('input[type="file"]'));
+        return Promise.all(inputs.map(function (input) {
+          return new Promise(function (resolve) {
+            var request = db.transaction("files", "readonly").objectStore("files").get(fileInputKey(input));
+            request.onsuccess = function () {
+              if (request.result && request.result.files) {
+                try {
+                  var transfer = new DataTransfer();
+                  request.result.files.forEach(function (file) { transfer.items.add(file); });
+                  input.files = transfer.files;
+                  input.dispatchEvent(new Event("change", { bubbles: true }));
+                } catch (error) { /* Browser keeps the text draft even if files cannot be restored. */ }
+              }
+              resolve();
+            };
+            request.onerror = function () { resolve(); };
+          });
+        }));
+      }).catch(function () {});
+    }
+
+    function deleteLocalFiles() {
+      return openFileDatabase().then(function (db) {
+        return new Promise(function (resolve) {
+          var tx = db.transaction("files", "readwrite");
+          var request = tx.objectStore("files").openCursor();
+          request.onsuccess = function () {
+            var cursor = request.result;
+            if (!cursor) return;
+            if (String(cursor.key).indexOf(userStorageKey + "|") === 0) cursor.delete();
+            cursor.continue();
+          };
+          tx.oncomplete = resolve;
+          tx.onerror = resolve;
+        });
+      }).catch(function () {});
+    }
+
+    function pruneExpiredLocalFiles() {
+      var cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      return openFileDatabase().then(function (db) {
+        var tx = db.transaction("files", "readwrite");
+        var request = tx.objectStore("files").openCursor();
+        request.onsuccess = function () {
+          var cursor = request.result;
+          if (!cursor) return;
+          if (!cursor.value.savedAt || cursor.value.savedAt < cutoff) cursor.delete();
+          cursor.continue();
+        };
+      }).catch(function () {});
+    }
+    pruneExpiredLocalFiles();
+
+    function discardDraft() {
+      return Promise.all([
+        fetch("/drafts/current?draft_key=" + encodeURIComponent(draftKey) + "&csrf_token=" + encodeURIComponent(csrfField.value), {
+          method: "DELETE", credentials: "same-origin", headers: { "X-Requested-With": "XMLHttpRequest" }
+        }).catch(function () {}),
+        deleteLocalFiles()
+      ]).then(function () {
+        lastSavedPayload = "";
+        dirty = false;
+        setStatus(local("Draft discarded. Autosave is ready.", "تم حذف المسودة، والحفظ التلقائي جاهز."), "ready");
+      });
+    }
+
+    function saveNow() {
+      if (!ready || restoring) return Promise.resolve(false);
+      var payload = snapshot();
+      var encoded = JSON.stringify(payload);
+      if (!dirty && encoded === lastSavedPayload) return Promise.resolve(true);
+      setStatus(local("Saving draft…", "جارٍ حفظ المسودة…"), "saving");
+      return fetch("/drafts/autosave", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest" },
+        body: JSON.stringify({ csrf_token: csrfField.value, draft_key: draftKey, page_url: window.location.pathname + window.location.search, payload: payload })
+      }).then(function (response) {
+        if (response.status === 401 || response.status === 403) throw new Error("session");
+        if (!response.ok) throw new Error("save");
+        return response.json();
+      }).then(function (data) {
+        dirty = false;
+        lastSavedPayload = encoded;
+        var time = data.updated_at ? new Date(data.updated_at + (data.updated_at.endsWith("Z") ? "" : "Z")) : new Date();
+        setStatus(local("Draft saved at ", "تم حفظ المسودة الساعة ") + time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }), "saved");
+        return true;
+      }).catch(function (error) {
+        setStatus(error.message === "session"
+          ? local("Session expired. Sign in again; your last draft is safe.", "انتهت الجلسة. سجل الدخول مجددًا؛ آخر مسودة محفوظة بأمان.")
+          : local("Draft not saved. Check the connection; retrying automatically.", "لم تُحفظ المسودة. تحقق من الاتصال؛ ستتم إعادة المحاولة تلقائيًا."), "error");
+        return false;
+      });
+    }
+
+    function scheduleSave() {
+      if (!ready || restoring) return;
+      dirty = true;
+      window.clearTimeout(saveTimer);
+      saveTimer = window.setTimeout(saveNow, 5000);
+    }
+
+    form.addEventListener("input", scheduleSave);
+    form.addEventListener("change", function (event) {
+      if (event.target && event.target.type === "file") rememberFiles(event.target);
+      scheduleSave();
+    });
+    form.addEventListener("click", function (event) {
+      if (event.target.closest("[data-add-site], [data-add-device], [data-add-data-row], [data-remove-site], [data-remove-device], [data-remove-existing-item], [data-remove-data-row]")) {
+        window.setTimeout(scheduleSave, 0);
+      }
+    });
+    saveButton.addEventListener("click", function () { dirty = true; saveNow(); });
+
+    fetch("/drafts/current?draft_key=" + encodeURIComponent(draftKey), {
+      credentials: "same-origin", headers: { "X-Requested-With": "XMLHttpRequest" }
+    }).then(function (response) {
+      if (!response.ok) throw new Error("load");
+      return response.json();
+    }).then(function (data) {
+      userStorageKey = String(data.user_id || "user") + "|" + draftKey;
+      var saved = data.draft && data.draft.payload;
+      if (!saved) {
+        ready = true;
+        setStatus(local("Autosave is ready. Changes are protected for 7 days.", "الحفظ التلقائي جاهز. التغييرات محفوظة لمدة 7 أيام."), "ready");
+        return;
+      }
+      setStatus(local("A saved draft is available from ", "توجد مسودة محفوظة منذ ") + new Date(data.draft.updated_at + (data.draft.updated_at.endsWith("Z") ? "" : "Z")).toLocaleString() + ".", "warning");
+      restoreButton.hidden = false;
+      discardButton.hidden = false;
+      saveButton.hidden = true;
+      restoreButton.addEventListener("click", function () {
+        restoring = true;
+        restoreStructure(saved.structure);
+        restoreFields(saved.fields);
+        restoreFiles().then(function () {
+          // File restoration recreates each dynamic photo description and
+          // Issue Found checkbox. Reapply the saved values after those fields
+          // exist so long-entry drafts keep both pieces of photo evidence.
+          restoreFields(saved.fields);
+        }).finally(function () {
+          restoring = false;
+          ready = true;
+          dirty = false;
+          lastSavedPayload = JSON.stringify(snapshot());
+          restoreButton.hidden = true;
+          discardButton.hidden = true;
+          saveButton.hidden = false;
+          setStatus(local("Draft restored. Autosave is active.", "تمت استعادة المسودة والحفظ التلقائي يعمل."), "saved");
+        });
+      }, { once: true });
+      discardButton.addEventListener("click", function () {
+        discardDraft().then(function () {
+          ready = true;
+          restoreButton.hidden = true;
+          discardButton.hidden = true;
+          saveButton.hidden = false;
+        });
+      }, { once: true });
+    }).catch(function () {
+      ready = true;
+      setStatus(local("Autosave is temporarily unavailable; keep this page open.", "الحفظ التلقائي غير متاح مؤقتًا؛ اترك هذه الصفحة مفتوحة."), "error");
+    });
+
+    window.setInterval(function () {
+      if (dirty) saveNow();
+      else fetch("/drafts/keepalive", { credentials: "same-origin", headers: { "X-Requested-With": "XMLHttpRequest" } }).catch(function () {
+        setStatus(local("Connection lost. Your last saved draft remains available.", "انقطع الاتصال. آخر مسودة محفوظة ما زالت متاحة."), "error");
+      });
+    }, 4 * 60 * 1000);
+
+    form.addEventListener("submit", function () {
+      window.clearTimeout(saveTimer);
+      sessionStorage.setItem("sms-finalizing-draft", draftKey);
+      sessionStorage.setItem("sms-finalizing-edit-path", window.location.pathname);
+      sessionStorage.setItem("sms-finalizing-draft-csrf", csrfField.value);
+      sessionStorage.setItem("sms-finalizing-file-prefix", userStorageKey + "|");
+    });
+
+    form._discardAutosaveDraft = discardDraft;
+  }
+  document.querySelectorAll("[data-record-autosave]").forEach(initializeRecordAutosave);
+
+  var finalizedDraft = sessionStorage.getItem("sms-finalizing-draft");
+  var finalizedEditPath = sessionStorage.getItem("sms-finalizing-edit-path");
+  var finalizedCsrf = sessionStorage.getItem("sms-finalizing-draft-csrf");
+  var finalizedFilePrefix = sessionStorage.getItem("sms-finalizing-file-prefix");
+  if (finalizedDraft && finalizedEditPath && window.location.pathname !== finalizedEditPath && !document.querySelector("[data-record-autosave]")) {
+    sessionStorage.removeItem("sms-finalizing-draft");
+    sessionStorage.removeItem("sms-finalizing-edit-path");
+    sessionStorage.removeItem("sms-finalizing-draft-csrf");
+    sessionStorage.removeItem("sms-finalizing-file-prefix");
+    // The server accepted and redirected away from the entry/edit form.
+    // The draft endpoint remains user-scoped; stale local files are cleaned
+    // the next time this draft is explicitly discarded.
+    fetch("/drafts/current?draft_key=" + encodeURIComponent(finalizedDraft) + "&csrf_token=" + encodeURIComponent(finalizedCsrf || ""), { method: "DELETE", credentials: "same-origin" }).catch(function () {});
+    if (finalizedFilePrefix && window.indexedDB) {
+      var cleanupRequest = indexedDB.open("sms-record-drafts", 1);
+      cleanupRequest.onupgradeneeded = function () {
+        if (!cleanupRequest.result.objectStoreNames.contains("files")) cleanupRequest.result.createObjectStore("files", { keyPath: "key" });
+      };
+      cleanupRequest.onsuccess = function () {
+        var tx = cleanupRequest.result.transaction("files", "readwrite");
+        var cursorRequest = tx.objectStore("files").openCursor();
+        cursorRequest.onsuccess = function () {
+          var cursor = cursorRequest.result;
+          if (!cursor) return;
+          if (String(cursor.key).indexOf(finalizedFilePrefix) === 0) cursor.delete();
+          cursor.continue();
+        };
+      };
+    }
+  }
 
   /* ------------------------------------ submit with progress + duplicate lock */
   var submitForm = document.querySelector("[data-async-form]");
@@ -1538,11 +2504,90 @@
     var busy = false;
     var dirtyGuardOff = false;
     var submitLabel = submitBtn.dataset.label || submitBtn.textContent;
+
+    function entryValidationCopy() {
+      var arabic = (document.documentElement.lang || "").toLowerCase().indexOf("ar") === 0;
+      return arabic ? {
+        summary: "تعذر الحفظ. أكمل الحقول المحددة باللون الأحمر ثم حاول مرة أخرى. لم يتم فقد أي بيانات.",
+        site: "الموقع", service: "الخدمة",
+        project: "اختر المشروع الرئيسي.", subProject: "اختر المشروع الفرعي.",
+        workSite: "اختر الموقع.", quotation: "اختر عرض سعر صالحًا لهذا المشروع.",
+        serviceType: "اختر الخدمة المنفذة.", device: "اختر الصنف أو الجهاز.",
+        result: "اختر نتيجة العمل.", photos: "أضف صورة واحدة على الأقل قبل الحفظ.",
+        badge: "بيانات مطلوبة"
+      } : {
+        summary: "The record was not saved. Complete the fields highlighted in red and try again. No entered data was lost.",
+        site: "Site", service: "service",
+        project: "Select the Main Project.", subProject: "Select the Sub Project.",
+        workSite: "Select the Site.", quotation: "Select a valid quotation for this Project.",
+        serviceType: "Select the service performed.", device: "Select the Item or device.",
+        result: "Select the work result.", photos: "Add at least one photo before saving.",
+        badge: "Required information"
+      };
+    }
+
+    function validateEntryBeforeSubmit() {
+      var copy = entryValidationCopy();
+      var errors = {};
+      var details = [];
+      var scopes = Array.from(submitForm.querySelectorAll("[data-site-scope]"));
+      var rows = Array.from(submitForm.querySelectorAll("[data-device-row]"));
+      var isNestedEdit = submitForm.matches("[data-record-nested-edit]");
+
+      function add(key, message, context) {
+        if (errors[key]) return;
+        errors[key] = message;
+        details.push(context + ": " + message);
+      }
+
+      scopes.forEach(function (scope, scopeIndex) {
+        var active = !isNestedEdit || scope.matches("[data-new-site]") || Boolean(scope.querySelector("[data-device-row]"));
+        if (!active) return;
+        var suffix = scopeIndex === 0 ? "" : "_scope_" + scopeIndex;
+        var scopeLabel = copy.site + " " + (scopeIndex + 1);
+        [
+          ["project_id", copy.project], ["sub_project_id", copy.subProject],
+          ["work_site_id", copy.workSite], ["quotation_number", copy.quotation]
+        ].forEach(function (definition) {
+          var field = scope.querySelector('[name="' + definition[0] + '"]:not([disabled])');
+          if (field && !String(field.value || "").trim()) add(definition[0] + suffix, definition[1], scopeLabel);
+        });
+      });
+
+      rows.forEach(function (row, rowIndex) {
+        var scope = row.closest("[data-site-scope]");
+        var scopeIndex = Math.max(scopes.indexOf(scope), 0);
+        var rowIndexInScope = Array.from(scope.querySelectorAll("[data-device-row]")).indexOf(row);
+        var context = copy.site + " " + (scopeIndex + 1) + "، " + copy.service + " " + (rowIndexInScope + 1);
+        var service = row.querySelector('select[name="service_type_id"]');
+        var device = row.querySelector('select[name="device_id"]');
+        var result = row.querySelector('input[data-name-kind="result"]:checked');
+        var photoCount = Array.from(row.querySelectorAll('input[type="file"][name]')).reduce(function (total, input) {
+          return total + (input.files ? input.files.length : 0);
+        }, 0);
+        if (!service || !service.value) add("service_type_id_" + rowIndex, copy.serviceType, context);
+        if (device && !device.value) add("device_id_" + rowIndex, copy.device, context);
+        if (!result) add("result_" + rowIndex, copy.result, context);
+        if (!photoCount) add("photos_" + rowIndex, copy.photos, context);
+      });
+
+      if (!details.length) return null;
+      errors.form = copy.summary + " " + details.join(" ");
+      return errors;
+    }
     var savingLabel = submitBtn.dataset.savingLabel || "Saving record…";
 
     submitForm.addEventListener("submit", function (e) {
       e.preventDefault();
       if (busy) return;
+      // The async handler is registered before the nested-entry handler on a
+      // deferred page. Rebase additions before FormData captures the fields.
+      prepareNestedEditSubmission(submitForm);
+      var clientErrors = validateEntryBeforeSubmit();
+      if (clientErrors) {
+        renderErrors(clientErrors);
+        return;
+      }
       busy = true;
       dirtyGuardOff = true;
       submitBtn.disabled = true;
@@ -1558,6 +2603,17 @@
       xhr.addEventListener("load", function () {
         var data = {};
         try { data = JSON.parse(xhr.responseText); } catch (err) { data = {}; }
+        if (!data.errors && xhr.responseText) {
+          try {
+            var responsePage = new DOMParser().parseFromString(xhr.responseText, "text/html");
+            var responseError = responsePage.querySelector("[data-form-error], .alert.error");
+            var responseToken = responsePage.querySelector('input[name="form_token"]');
+            if (responseError && responseError.textContent.trim()) {
+              data.errors = { form: responseError.textContent.trim() };
+            }
+            if (responseToken) data.form_token = responseToken.value;
+          } catch (parseError) { /* fall through to the safe generic message */ }
+        }
         if (xhr.status >= 200 && xhr.status < 300 && data.redirect) {
           if (bar) bar.style.width = "100%";
           window.location.assign(data.redirect);
@@ -1565,6 +2621,10 @@
         }
         busy = false;
         dirtyGuardOff = false;
+        sessionStorage.removeItem("sms-finalizing-draft");
+        sessionStorage.removeItem("sms-finalizing-edit-path");
+        sessionStorage.removeItem("sms-finalizing-draft-csrf");
+        sessionStorage.removeItem("sms-finalizing-file-prefix");
         submitBtn.disabled = false;
         submitBtn.textContent = submitLabel;
         if (progress) progress.setAttribute("hidden", "");
@@ -1572,6 +2632,10 @@
       });
       xhr.addEventListener("error", function () {
         busy = false; dirtyGuardOff = false;
+        sessionStorage.removeItem("sms-finalizing-draft");
+        sessionStorage.removeItem("sms-finalizing-edit-path");
+        sessionStorage.removeItem("sms-finalizing-draft-csrf");
+        sessionStorage.removeItem("sms-finalizing-file-prefix");
         submitBtn.disabled = false;
         submitBtn.textContent = submitLabel;
         if (progress) progress.setAttribute("hidden", "");
@@ -1581,25 +2645,118 @@
     });
 
     function renderErrors(errors, freshToken) {
+      var copy = entryValidationCopy();
       if (freshToken) {
         var tokenField = submitForm.querySelector('input[name=form_token]');
         if (tokenField) tokenField.value = freshToken;
       }
+      submitForm.querySelectorAll('[aria-invalid="true"]').forEach(function (field) { field.removeAttribute("aria-invalid"); });
+      submitForm.querySelectorAll('[data-validation-error="true"]').forEach(function (section) { section.removeAttribute("data-validation-error"); });
+      submitForm.querySelectorAll("[data-validation-badge], [data-client-validation-error]").forEach(function (node) { node.remove(); });
+      submitForm.querySelectorAll("[data-error-for], [data-error-kind], [data-photo-error]").forEach(function (slot) {
+        slot.textContent = "";
+        slot.style.display = "none";
+      });
+
+      function markSection(section) {
+        if (!section) return;
+        section.dataset.validationError = "true";
+        var head = section.querySelector(":scope > .card-head");
+        if (head && !head.querySelector("[data-validation-badge]")) {
+          var badge = document.createElement("span");
+          badge.className = "validation-error-badge";
+          badge.dataset.validationBadge = "true";
+          badge.textContent = copy.badge;
+          head.appendChild(badge);
+        }
+      }
+
+      function showFieldError(field, message, preferredSlot) {
+        if (!field) return;
+        var visualField = field;
+        if (field.matches('select[name="device_id"]')) {
+          var pickerButton = field.closest(".field") && field.closest(".field").querySelector("[data-service-item-trigger]");
+          if (pickerButton && !pickerButton.hidden) visualField = pickerButton;
+        }
+        if (field.matches('input[type="file"]')) {
+          var photoPanel = field.closest("[data-photos]");
+          if (photoPanel) {
+            photoPanel.dataset.validationError = "true";
+            visualField = photoPanel.querySelector("[data-pick]") || field;
+          }
+        }
+        visualField.setAttribute("aria-invalid", "true");
+        if (field.matches('input[type="radio"]')) {
+          var choices = field.closest(".choice-list");
+          if (choices) choices.dataset.validationError = "true";
+        }
+        var slot = preferredSlot;
+        if (!slot) {
+          var fieldWrap = field.closest(".field");
+          slot = fieldWrap && fieldWrap.querySelector(".error-text");
+        }
+        if (!slot) {
+          slot = document.createElement("p");
+          slot.className = "error-text";
+          slot.dataset.clientValidationError = "true";
+          (field.closest(".field") || field.parentElement).appendChild(slot);
+        }
+        slot.textContent = message;
+        slot.style.display = "";
+        markSection(field.closest("[data-device-row]"));
+        markSection(field.closest("[data-site-scope]"));
+      }
+
       submitForm.querySelectorAll("[data-error-for]").forEach(function (slot) {
         var key = slot.dataset.errorFor;
-        slot.textContent = errors[key] || "";
-        slot.style.display = errors[key] ? "" : "none";
+        if (!errors[key]) return;
         var field = submitForm.querySelector('[name="' + key + '"]');
-        if (field) field.setAttribute("aria-invalid", errors[key] ? "true" : "false");
+        if (field) showFieldError(field, errors[key], slot);
       });
-      var top = submitForm.querySelector("[data-form-error]") ||
-        document.querySelector("[data-form-error]");
+
+      Object.keys(errors).forEach(function (key) {
+        if (key === "form") return;
+        var scopeMatch = key.match(/^(project_id|sub_project_id|work_site_id|quotation_number)(?:_scope_(\d+))?$/);
+        if (scopeMatch) {
+          var scopeIndex = scopeMatch[2] ? parseInt(scopeMatch[2], 10) : 0;
+          var scope = submitForm.querySelectorAll("[data-site-scope]")[scopeIndex];
+          var scopeField = scope && scope.querySelector('[name="' + scopeMatch[1] + '"]:not([disabled])');
+          if (scopeField) showFieldError(scopeField, errors[key]);
+          else markSection(scope);
+          return;
+        }
+        var siteMatch = key.match(/^site_scope_(\d+)$/);
+        if (siteMatch) {
+          markSection(submitForm.querySelectorAll("[data-site-scope]")[parseInt(siteMatch[1], 10)]);
+          return;
+        }
+        var match = key.match(/^(service_type_id|device_id|result|serial_number|warranty_start|notes|handover_notes|issue_description|photo_guidance_profile_id|photos|before_photos|after_photos)_(\d+)$/);
+        if (!match) return;
+        var kind = match[1];
+        var itemIndex = parseInt(match[2], 10);
+        var item = submitForm.querySelectorAll("[data-device-row]")[itemIndex];
+        if (!item) return;
+        var slot = item.querySelector('[data-error-kind="' + kind + '"]');
+        if (!slot && (kind === "before_photos" || kind === "after_photos")) {
+          var stage = kind === "before_photos" ? "before" : "after";
+          slot = item.querySelector('[data-photo-stage="' + stage + '"] [data-photo-error]');
+        }
+        if (!slot && kind === "photos") slot = item.querySelector('[data-error-kind="photos"]');
+        var field = kind === "result" ? item.querySelector('input[data-name-kind="result"]') : item.querySelector('[name="' + kind + '"]');
+        if (kind === "photos" || kind === "before_photos" || kind === "after_photos") {
+          var stageName = kind === "before_photos" ? "before" : (kind === "after_photos" ? "after" : "");
+          field = stageName ? item.querySelector('[data-photo-stage="' + stageName + '"] input[type="file"][name]') : item.querySelector('input[type="file"][name]');
+        }
+        showFieldError(field, errors[key], slot);
+      });
+      var top = submitForm.querySelector("[data-form-error]") || document.querySelector("[data-form-error]");
       if (top) {
         top.textContent = errors.form || "";
         top.style.display = errors.form ? "" : "none";
       }
-      var first = submitForm.querySelector('[data-error-for]:not([style*="display: none"])');
-      (first || submitForm).scrollIntoView({ behavior: "smooth", block: "center" });
+      var first = submitForm.querySelector('[aria-invalid="true"], [data-error-for]:not([style*="display: none"]), [data-error-kind]:not([style*="display: none"]), [data-photo-error]:not([style*="display: none"])');
+      (first || top || submitForm).scrollIntoView({ behavior: "smooth", block: "center" });
+      if (first && typeof first.focus === "function") first.focus({ preventScroll: true });
     }
 
     /* unsaved-changes guard */
@@ -1728,6 +2885,142 @@
     updateSelection();
   });
 
+  /* ------------------------------------------------ purchase documents */
+  document.querySelectorAll("[data-purchase-document-form]").forEach(function (form) {
+    var catalogueNode = document.getElementById("purchase-catalogue-data");
+    var categoryNode = document.getElementById("purchase-category-data");
+    var jsonInput = form.querySelector("[data-purchase-selected-json]");
+    var selectedHost = form.querySelector("[data-purchase-selected-items]");
+    var picker = document.querySelector("[data-purchase-picker]");
+    if (!catalogueNode || !categoryNode || !jsonInput || !selectedHost || !picker) return;
+
+    var catalogue = JSON.parse(catalogueNode.textContent || "[]");
+    var categories = JSON.parse(categoryNode.textContent || "[]");
+    var catalogueByKey = new Map(catalogue.map(function (item) { return [item.key, item]; }));
+    var selectedValues = [];
+    try { selectedValues = JSON.parse(jsonInput.value || "[]"); } catch (_error) { selectedValues = []; }
+    var selected = new Map();
+    selectedValues.forEach(function (value) {
+      var key = String(value.kind) + ":" + String(value.id);
+      if (catalogueByKey.has(key)) selected.set(key, {
+        kind: String(value.kind), id: Number(value.id),
+        unit_price: String(value.unit_price || ""),
+        currency: String(value.currency || catalogueByKey.get(key).currency || "SAR")
+      });
+    });
+    var pickerContent = picker.querySelector("[data-purchase-picker-content]");
+    var pickerBack = picker.querySelector("[data-purchase-picker-back]");
+    var pickerSearch = picker.querySelector("[data-purchase-picker-search]");
+    var countNode = picker.querySelector("[data-purchase-selected-count]");
+    var emptyLabel = selectedHost.querySelector("[data-purchase-empty]") ? selectedHost.querySelector("[data-purchase-empty]").textContent : "No items selected yet.";
+    var view = { root: null, category: null };
+
+    function sync() {
+      jsonInput.value = JSON.stringify(Array.from(selected.values()));
+      if (countNode) countNode.textContent = String(selected.size);
+    }
+    function field(labelText, input) {
+      var holder = document.createElement("label");
+      holder.className = "field";
+      var label = document.createElement("span"); label.textContent = labelText;
+      holder.append(label, input);
+      return holder;
+    }
+    function identity(item) {
+      var holder = document.createElement("div"); holder.className = "purchase-selected-identity";
+      if (item.image_url) {
+        var image = document.createElement("img"); image.src = item.image_url; image.alt = item.name; holder.appendChild(image);
+      } else {
+        var placeholder = document.createElement("span"); placeholder.className = "purchase-selected-placeholder"; placeholder.textContent = item.name.charAt(0).toUpperCase(); holder.appendChild(placeholder);
+      }
+      var copy = document.createElement("span");
+      var name = document.createElement("strong"); name.textContent = item.name; copy.appendChild(name);
+      if (item.model || item.is_related) {
+        var detail = document.createElement("small");
+        detail.textContent = item.is_related ? form.dataset.relatedLabel + " · " + item.parent_name : item.model;
+        copy.appendChild(detail);
+      }
+      holder.appendChild(copy); return holder;
+    }
+    function renderSelected() {
+      selectedHost.replaceChildren();
+      if (!selected.size) {
+        var empty = document.createElement("p"); empty.className = "empty-state";
+        empty.textContent = emptyLabel;
+        selectedHost.appendChild(empty); sync(); return;
+      }
+      selected.forEach(function (value, key) {
+        var item = catalogueByKey.get(key); if (!item) return;
+        var row = document.createElement("div"); row.className = "purchase-selected-row"; row.appendChild(identity(item));
+        var price = document.createElement("input"); price.type = "number"; price.min = "0"; price.step = "0.01"; price.value = value.unit_price;
+        price.addEventListener("input", function () { value.unit_price = price.value; sync(); });
+        row.appendChild(field(form.dataset.unitPriceLabel, price));
+        var currency = document.createElement("select");
+        ["SAR", "USD"].forEach(function (code) { var option = document.createElement("option"); option.value = code; option.textContent = code; option.selected = value.currency === code; currency.appendChild(option); });
+        currency.addEventListener("change", function () { value.currency = currency.value; sync(); });
+        row.appendChild(field(form.dataset.currencyLabel, currency));
+        var remove = document.createElement("button"); remove.type = "button"; remove.className = "btn btn-danger btn-sm"; remove.textContent = form.dataset.removeLabel;
+        remove.addEventListener("click", function () { selected.delete(key); renderSelected(); renderPicker(); });
+        row.appendChild(remove); selectedHost.appendChild(row);
+      });
+      sync();
+    }
+    function folder(name, small, onClick) {
+      var button = document.createElement("button"); button.type = "button";
+      button.className = "pricing-category-folder pricing-picker-folder" + (small ? " pricing-subcategory-folder" : "");
+      var icon = document.createElement("span"); icon.className = "pricing-category-folder-icon";
+      var copy = document.createElement("span"); copy.className = "pricing-category-folder-copy";
+      var strong = document.createElement("strong"); strong.textContent = name; copy.appendChild(strong);
+      var arrow = document.createElement("span"); arrow.className = "pricing-category-folder-arrow"; arrow.textContent = "›";
+      button.append(icon, copy, arrow); button.addEventListener("click", onClick); return button;
+    }
+    function itemButton(item) {
+      var button = document.createElement("button"); button.type = "button"; button.className = "purchase-item-card purchase-picker-item";
+      if (selected.has(item.key)) button.classList.add("is-selected");
+      button.appendChild(identity(item));
+      var mark = document.createElement("span"); mark.className = "purchase-selected-check"; mark.textContent = selected.has(item.key) ? "✓" : "+"; button.appendChild(mark);
+      button.addEventListener("click", function () {
+        if (selected.has(item.key)) selected.delete(item.key);
+        else selected.set(item.key, { kind: item.kind, id: item.id, unit_price: "", currency: item.currency || "SAR" });
+        renderSelected(); renderPicker();
+      }); return button;
+    }
+    function renderPicker() {
+      pickerContent.replaceChildren();
+      var search = String(pickerSearch.value || "").trim().toLowerCase();
+      if (search) {
+        var resultGrid = document.createElement("div"); resultGrid.className = "purchase-item-grid";
+        catalogue.filter(function (item) { return (item.name + " " + item.model + " " + item.parent_name).toLowerCase().includes(search); }).forEach(function (item) { resultGrid.appendChild(itemButton(item)); });
+        pickerContent.appendChild(resultGrid); pickerBack.hidden = true; sync(); return;
+      }
+      if (!view.root) {
+        var roots = document.createElement("div"); roots.className = "pricing-category-folder-grid";
+        categories.forEach(function (root) { roots.appendChild(folder(root.name, false, function () { view.root = root; view.category = root.id; renderPicker(); })); });
+        if (catalogue.some(function (item) { return item.category_id === null; })) roots.appendChild(folder(form.dataset.uncategorizedLabel, false, function () { view.root = { id: null, name: form.dataset.uncategorizedLabel, children: [] }; view.category = null; renderPicker(); }));
+        pickerContent.appendChild(roots); pickerBack.hidden = true; sync(); return;
+      }
+      pickerBack.hidden = false;
+      if (view.category === view.root.id && view.root.children && view.root.children.length) {
+        var subfolders = document.createElement("div"); subfolders.className = "pricing-category-folder-grid pricing-subcategory-folder-grid";
+        view.root.children.forEach(function (child) { subfolders.appendChild(folder(child.name, true, function () { view.category = child.id; renderPicker(); })); });
+        pickerContent.appendChild(subfolders);
+      }
+      var items = catalogue.filter(function (item) { return item.category_id === view.category; });
+      var itemGrid = document.createElement("div"); itemGrid.className = "purchase-item-grid";
+      items.forEach(function (item) { itemGrid.appendChild(itemButton(item)); }); pickerContent.appendChild(itemGrid); sync();
+    }
+    pickerBack.addEventListener("click", function () {
+      if (view.root && view.category !== view.root.id) { view.category = view.root.id; }
+      else { view.root = null; view.category = null; }
+      renderPicker();
+    });
+    pickerSearch.addEventListener("input", renderPicker);
+    form.querySelector("[data-open-purchase-picker]").addEventListener("click", function () { picker.hidden = false; document.body.style.overflow = "hidden"; renderPicker(); });
+    picker.querySelectorAll("[data-close-purchase-picker]").forEach(function (button) { button.addEventListener("click", function () { picker.hidden = true; document.body.style.overflow = ""; }); });
+    form.addEventListener("submit", sync);
+    renderSelected();
+  });
+
   /* ------------------------------------------------------------ lightbox */
   var lightbox = document.querySelector("[data-lightbox]");
   if (lightbox) {
@@ -1768,5 +3061,13 @@
       if (e.key === "ArrowRight") show(at + 1);
       if (e.key === "ArrowLeft") show(at - 1);
     });
+  }
+
+  // This script is normally deferred, but initialize safely if it is loaded
+  // after DOMContentLoaded as well (for example from a restored browser tab).
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initializeNestedEntryForms, { once: true });
+  } else {
+    initializeNestedEntryForms();
   }
 })();

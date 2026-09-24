@@ -36,12 +36,15 @@ from ..models import (
     PricingQuotationSiteSurveyImage,
     PricingRelatedItem,
     PricingSettings,
+    PurchaseDocument,
+    PurchaseDocumentItem,
     Site,
     User,
     utcnow,
 )
 from ..pricing import money, next_quotation_number, percentage, quantity
 from ..pricing_pdf import build_quotation_pdf
+from ..purchase_documents import delete_purchase_files
 from ..quotation_planner import (
     InstallationPlanSubmission,
     validate_installation_plan_submission,
@@ -269,6 +272,34 @@ def _sync_legacy_device(db: Session, item: PricingItem) -> None:
     device.updated_at = utcnow()
 
 
+def _remove_orphan_purchase_documents(
+    db: Session, document_ids: set[int]
+) -> list[str]:
+    """Delete a document only when deleting an Item removed its final link."""
+    if not document_ids:
+        return []
+    db.flush()
+    stored_keys: list[str] = []
+    for document_id in document_ids:
+        remaining = db.scalar(
+            select(func.count(PurchaseDocumentItem.id)).where(
+                PurchaseDocumentItem.document_id == document_id
+            )
+        ) or 0
+        if remaining:
+            continue
+        document = db.scalar(
+            select(PurchaseDocument)
+            .options(selectinload(PurchaseDocument.files))
+            .where(PurchaseDocument.id == document_id)
+        )
+        if document is None:
+            continue
+        stored_keys.extend(entry.storage_key for entry in document.files)
+        db.delete(document)
+    return stored_keys
+
+
 def _redirect(path: str) -> RedirectResponse:
     return RedirectResponse(path, status_code=status.HTTP_303_SEE_OTHER)
 
@@ -300,7 +331,7 @@ def _catalogue(db: Session, *, include_inactive: bool = False) -> list[PricingIt
             selectinload(PricingItem.related_items),
             selectinload(PricingItem.price_history),
             selectinload(PricingItem.related_items).selectinload(PricingRelatedItem.price_history),
-            selectinload(PricingItem.category),
+            selectinload(PricingItem.category).selectinload(PricingItemCategory.parent),
         )
         .order_by(PricingItem.name, PricingItem.model)
     )
@@ -325,6 +356,10 @@ def _catalogue_payload(items: list[PricingItem]) -> list[dict]:
             "price": str(item.unit_price),
             "currency": item.currency,
             "category_name": item.category_name,
+            "category_id": item.category_id,
+            "main_category_name": item.main_category_name,
+            "subcategory_name": item.subcategory_name,
+            "parent_category_id": item.category.parent_id if item.category else None,
             "image_url": (
                 f"/pricing/items/{item.id}/image?size=thumb"
                 if item.image_storage_key
@@ -346,24 +381,89 @@ def _catalogue_payload(items: list[PricingItem]) -> list[dict]:
     ]
 
 
+def _catalogue_tree(catalogue: list[dict]) -> list[dict]:
+    roots: dict[str, dict] = {}
+    for item in catalogue:
+        root_key = (
+            f"category-{item['parent_category_id'] or item['category_id']}"
+            if item["category_id"]
+            else "uncategorized"
+        )
+        root = roots.setdefault(
+            root_key,
+            {
+                "key": root_key,
+                "name": item["main_category_name"],
+                "items": [],
+                "subcategories": {},
+            },
+        )
+        if item["subcategory_name"]:
+            sub_key = f"subcategory-{item['category_id']}"
+            subcategory = root["subcategories"].setdefault(
+                sub_key,
+                {"key": sub_key, "name": item["subcategory_name"], "items": []},
+            )
+            subcategory["items"].append(item)
+        else:
+            root["items"].append(item)
+    result = []
+    for root in roots.values():
+        root["subcategories"] = list(root["subcategories"].values())
+        root["item_count"] = len(root["items"]) + sum(
+            len(entry["items"]) for entry in root["subcategories"]
+        )
+        result.append(root)
+    return result
+
+
 def _item_context(
     db: Session,
     user: User,
     *,
     q: str = "",
+    category: str = "",
 ) -> dict:
     term = q.strip()
+    category_key = category.strip()
+    categories = list(
+        db.scalars(
+            select(PricingItemCategory)
+            .options(
+                selectinload(PricingItemCategory.items),
+                selectinload(PricingItemCategory.parent),
+                selectinload(PricingItemCategory.children),
+            )
+            .order_by(PricingItemCategory.name)
+        )
+    )
+    selected_category = None
+    if category_key and category_key != "uncategorized":
+        selected_category_id = entity_id(category_key)
+        selected_category = next(
+            (entry for entry in categories if entry.id == selected_category_id),
+            None,
+        )
+        if selected_category is None:
+            raise HTTPException(status_code=404, detail="Item category not found")
     stmt = (
         select(PricingItem)
         .options(
             selectinload(PricingItem.related_items).selectinload(
                 PricingRelatedItem.price_history
             ),
-            selectinload(PricingItem.category),
+            selectinload(PricingItem.category).selectinload(PricingItemCategory.parent),
             selectinload(PricingItem.price_history),
         )
         .order_by(PricingItem.is_active.desc(), PricingItem.name, PricingItem.model)
     )
+    if category_key == "uncategorized":
+        stmt = stmt.where(PricingItem.category_id.is_(None))
+    elif selected_category is not None:
+        category_ids = [selected_category.id]
+        if term and selected_category.parent_id is None:
+            category_ids.extend(child.id for child in selected_category.children)
+        stmt = stmt.where(PricingItem.category_id.in_(category_ids))
     if term:
         like = f"%{term}%"
         stmt = stmt.where(
@@ -405,14 +505,25 @@ def _item_context(
         "quoted_main_history": quoted_main,
         "quoted_related_history": quoted_related,
         "active_items": _catalogue(db),
-        "categories": list(
-            db.scalars(
-                select(PricingItemCategory)
-                .options(selectinload(PricingItemCategory.items))
-                .order_by(PricingItemCategory.name)
-            )
+        "categories": categories,
+        "root_categories": [entry for entry in categories if entry.parent_id is None],
+        "root_category_item_counts": {
+            entry.id: len(entry.items) + sum(len(child.items) for child in entry.children)
+            for entry in categories
+            if entry.parent_id is None
+        },
+        "selected_subcategories": (
+            selected_category.children
+            if selected_category and selected_category.parent_id is None
+            else []
         ),
         "q": term,
+        "selected_category": selected_category,
+        "selected_category_key": category_key,
+        "show_category_overview": not term and not category_key,
+        "uncategorized_count": db.scalar(
+            select(func.count(PricingItem.id)).where(PricingItem.category_id.is_(None))
+        ) or 0,
         "currency": _pricing_settings(db)["currency"],
         "currencies": CURRENCIES,
         "can_delete": user.is_admin,
@@ -428,10 +539,15 @@ def pricing_root(user: User = Depends(require_pricing_access)):
 def items_page(
     request: Request,
     q: str = "",
+    category: str = "",
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
-    return render(request, "pricing_items.html", _item_context(db, user, q=q))
+    return render(
+        request,
+        "pricing_items.html",
+        _item_context(db, user, q=q, category=category),
+    )
 
 
 @router.post("/categories")
@@ -444,8 +560,13 @@ async def create_category(
     if _csrf_error(request, form.get("csrf_token")):
         return _redirect("/pricing/items")
     name = str(form.get("name") or "").strip()
+    parent_id = entity_id(str(form.get("parent_category_id") or ""))
+    parent = db.get(PricingItemCategory, parent_id) if parent_id else None
     if not name:
         flash(request, "Enter a category name.", "error")
+        return _redirect("/pricing/items")
+    if parent_id and (parent is None or parent.parent_id is not None):
+        flash(request, "Choose an existing Main Category.", "error")
         return _redirect("/pricing/items")
     clash = db.scalar(
         select(PricingItemCategory).where(
@@ -455,7 +576,7 @@ async def create_category(
     if clash:
         flash(request, f"Category “{clash.name}” already exists.", "error")
         return _redirect("/pricing/items")
-    db.add(PricingItemCategory(name=name))
+    db.add(PricingItemCategory(name=name, parent=parent))
     db.commit()
     flash(request, f"Category “{name}” created.")
     return _redirect("/pricing/items")
@@ -473,11 +594,25 @@ async def edit_category(
         return _redirect("/pricing/items")
     category = db.get(PricingItemCategory, category_id)
     name = str(form.get("name") or "").strip()
+    parent_id = entity_id(str(form.get("parent_category_id") or ""))
     if category is None:
         flash(request, "That category no longer exists.", "error")
         return _redirect("/pricing/items")
     if not name:
         flash(request, "Enter a category name.", "error")
+        return _redirect("/pricing/items")
+    parent = db.get(PricingItemCategory, parent_id) if parent_id else None
+    if parent_id and (
+        parent is None
+        or parent.id == category.id
+        or parent.parent_id is not None
+        or bool(category.children)
+    ):
+        flash(
+            request,
+            "A Subcategory must belong to a Main Category and cannot contain another Subcategory.",
+            "error",
+        )
         return _redirect("/pricing/items")
     clash = db.scalar(
         select(PricingItemCategory).where(
@@ -489,6 +624,7 @@ async def edit_category(
         flash(request, f"Category “{clash.name}” already exists.", "error")
         return _redirect("/pricing/items")
     category.name = name
+    category.parent = parent
     category.updated_at = utcnow()
     db.commit()
     flash(request, "Item category updated.")
@@ -515,6 +651,13 @@ async def delete_category(
         flash(
             request,
             "Move its items to another category or Uncategorized before deleting it.",
+            "error",
+        )
+        return _redirect("/pricing/items")
+    if category.children:
+        flash(
+            request,
+            "Delete or move its Subcategories before deleting this Main Category.",
             "error",
         )
         return _redirect("/pricing/items")
@@ -752,9 +895,24 @@ async def delete_item(
         return _redirect("/pricing/items")
     label = item.display_label
     stored_keys = (item.image_storage_key, item.image_thumbnail_key)
+    related_ids = [related.id for related in item.related_items]
+    purchase_document_ids = set(
+        db.scalars(
+            select(PurchaseDocumentItem.document_id).where(
+                or_(
+                    PurchaseDocumentItem.pricing_item_id == item.id,
+                    PurchaseDocumentItem.related_item_id.in_(related_ids),
+                )
+            )
+        )
+    )
     db.delete(item)
+    purchase_storage_keys = _remove_orphan_purchase_documents(
+        db, purchase_document_ids
+    )
     db.commit()
     delete_stored(*stored_keys)
+    delete_purchase_files(*purchase_storage_keys)
     flash(request, f"Pricing item “{label}” deleted. Quotations keep their snapshots.")
     return _redirect("/pricing/items")
 
@@ -964,8 +1122,19 @@ async def delete_related_item(
         flash(request, "That related item no longer exists.", "error")
         return _redirect("/pricing/items")
     name = related.name
+    purchase_document_ids = set(
+        db.scalars(
+            select(PurchaseDocumentItem.document_id).where(
+                PurchaseDocumentItem.related_item_id == related.id
+            )
+        )
+    )
     db.delete(related)
+    purchase_storage_keys = _remove_orphan_purchase_documents(
+        db, purchase_document_ids
+    )
     db.commit()
+    delete_purchase_files(*purchase_storage_keys)
     flash(request, f"Related item “{name}” deleted. Quotations keep their snapshots.")
     return _redirect("/pricing/items")
 
@@ -1101,6 +1270,7 @@ def _quotation_form_context(
             .order_by(User.full_name, CustomerProjectAssignment.project_id)
         )
     )
+    catalogue = _catalogue_payload(items)
     return {
         "active_nav": "pricing_quotations",
         "quotation": quotation,
@@ -1110,7 +1280,8 @@ def _quotation_form_context(
             )
         ),
         "quotation_addressees": addressees,
-        "catalogue": _catalogue_payload(items),
+        "catalogue": catalogue,
+        "catalogue_tree": _catalogue_tree(catalogue),
         "form": form or _default_quote_form(db),
         "errors": errors or {},
         "form_token": form_token or issue_form_token(request),

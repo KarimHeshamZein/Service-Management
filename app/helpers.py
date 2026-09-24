@@ -105,6 +105,16 @@ def fmt_datetime(value: datetime | None, lang: str = DEFAULT_LANGUAGE) -> str:
     )
 
 
+def fmt_datetime_seconds(value: datetime | None, lang: str = DEFAULT_LANGUAGE) -> str:
+    if value is None:
+        return "—"
+    displayed = to_display(value)
+    return (
+        f"{displayed.day:02d} {_localized_month(displayed, lang)} "
+        f"{displayed.year}, {displayed:%H:%M:%S}"
+    )
+
+
 def fmt_date(
     value: datetime | date | None, lang: str = DEFAULT_LANGUAGE
 ) -> str:
@@ -268,6 +278,12 @@ def _register_filters() -> None:
         return fmt_date(value, context.get("lang", DEFAULT_LANGUAGE))
 
     env.filters["datetime"] = localized_datetime
+
+    @pass_context
+    def localized_datetime_seconds(context, value):
+        return fmt_datetime_seconds(value, context.get("lang", DEFAULT_LANGUAGE))
+
+    env.filters["datetime_seconds"] = localized_datetime_seconds
     env.filters["date"] = localized_date
     env.filters["filesize"] = fmt_filesize
     env.filters["money"] = fmt_money

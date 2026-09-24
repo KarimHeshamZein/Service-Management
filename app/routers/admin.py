@@ -139,6 +139,8 @@ def projects_page(
             selectinload(Site.sub_projects)
             .selectinload(SubProject.site_assignments)
             .selectinload(SubProjectSite.site),
+            selectinload(Site.photo_guidance_setting),
+            selectinload(Site.photo_guidance_profiles),
         )
         .order_by(Site.is_active.desc(), Site.name)
     )
@@ -237,10 +239,6 @@ def create_project(
         end_date=ends_on,
     )
     general = SubProject(name="General")
-    general.site_assignments = [
-        SubProjectSite(site_id=site.id)
-        for site in db.scalars(select(WorkSite).order_by(WorkSite.id))
-    ]
     project.sub_projects.append(general)
     db.add(project)
     db.commit()

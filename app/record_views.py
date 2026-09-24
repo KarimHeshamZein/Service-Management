@@ -50,12 +50,18 @@ def _photo_view(photo: Any) -> dict[str, str | None]:
         "original_filename": photo.original_filename,
         "stage": stage.value if stage is not None else "legacy",
         "description": getattr(photo, "description", None),
+        "is_issue_found": bool(getattr(photo, "is_issue_found", False)),
         "position": getattr(photo, "position", 0),
     }
 
 
 def _device_label(name: str, model: str, serial: str) -> str:
-    return f"{name} - {model} | {serial}"
+    label = name or "-"
+    if model:
+        label = f"{label} - {model}"
+    if serial:
+        label = f"{label} | {serial}"
+    return label
 
 
 def _device_data(item: Any, *, location_fallback: str = "") -> dict[str, Any]:

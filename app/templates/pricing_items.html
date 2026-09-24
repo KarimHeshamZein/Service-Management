@@ -1,5 +1,19 @@
 {% extends "base.html" %}
 {% import "partials/macros.html" as ui with context %}
+{% macro category_selector(input_id, selected=None) %}
+<div class="field pricing-category-selector" data-pricing-category-selector>
+  <label for="{{ input_id }}-trigger">{{ t('ui.item.category') }}</label>
+  <input type="hidden" id="{{ input_id }}" name="category_id" value="{{ selected.id if selected else '' }}" data-pricing-category-value>
+  <div class="pricing-category-selection">
+    <span class="pricing-category-selection-icon" aria-hidden="true"></span>
+    <span class="pricing-category-selection-copy">
+      <small>{{ t('ui.selected.category') }}</small>
+      <strong data-pricing-category-label>{{ selected.display_label if selected else t('ui.uncategorized') }}</strong>
+    </span>
+    <button class="btn btn-secondary btn-sm" id="{{ input_id }}-trigger" type="button" data-open-pricing-category-picker>{{ t('ui.choose.category') }}</button>
+  </div>
+</div>
+{% endmacro %}
 {% block title %}{{ t('ui.items') }} {{ settings.app_name }}{% endblock %}
 {% block topbar_title %}{{ t('ui.pricing.items') }}{% endblock %}
 
@@ -23,6 +37,7 @@
     <form method="post" action="/pricing/categories" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:18px;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="field" style="margin:0;flex:1 1 260px;"><label for="category-name">{{ t('ui.category.name') }}</label><input id="category-name" name="name" required maxlength="120" dir="auto"></div>
+      <div class="field" style="margin:0;flex:1 1 260px;"><label for="category-parent">{{ t('ui.category.level') }}</label><select id="category-parent" name="parent_category_id"><option value="">{{ t('ui.main.category') }}</option>{% for parent in root_categories %}<option value="{{ parent.id }}">{{ t('ui.subcategory.under') }} {{ parent.name }}</option>{% endfor %}</select></div>
       <button class="btn btn-primary" type="submit">{{ t('ui.add.category') }}</button>
     </form>
     {% if categories %}
@@ -30,7 +45,8 @@
       <form method="post" action="/pricing/categories/{{ category.id }}/edit" class="pricing-category-row">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="field"><label class="sr-only" for="category-{{ category.id }}">{{ t('ui.category.name') }}</label><input id="category-{{ category.id }}" name="name" value="{{ category.name }}" required maxlength="120" dir="auto"></div>
-        <span class="hint">{{ category.items|length }} {{ t('ui.items.lowercase') }}</span>
+        <div class="field"><label class="sr-only" for="category-parent-{{ category.id }}">{{ t('ui.category.level') }}</label><select id="category-parent-{{ category.id }}" name="parent_category_id"><option value="">{{ t('ui.main.category') }}</option>{% for parent in root_categories if parent.id != category.id %}<option value="{{ parent.id }}" {{ 'selected' if category.parent_id == parent.id }}>{{ t('ui.subcategory.under') }} {{ parent.name }}</option>{% endfor %}</select></div>
+        <span class="hint">{{ category.items|length }} {{ t('ui.items.lowercase') }}{% if category.children %} · {{ category.children|length }} {{ t('ui.subcategories') }}{% endif %}</span>
         <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.save') }}</button>
         {% if can_delete %}<button class="btn btn-danger btn-sm" type="submit" formaction="/pricing/categories/{{ category.id }}/delete">{{ t('ui.delete') }}</button>{% endif %}
       </form>
@@ -52,7 +68,7 @@
         <div class="field"><label for="pi-price">{{ t('ui.unit.price.label') }} <span class="req">*</span></label>
           <input id="pi-price" name="unit_price" type="number" min="0" max="999999999999.99" step="0.01" required></div>
         <div class="field"><label for="pi-currency">{{ t('ui.currency') }} <span class="req">*</span></label><select id="pi-currency" name="currency" required>{% for code in currencies %}<option value="{{ code }}">{{ code }}</option>{% endfor %}</select></div>
-        <div class="field"><label for="pi-category">{{ t('ui.item.category') }}</label><select id="pi-category" name="category_id"><option value="">{{ t('ui.uncategorized') }}</option>{% for category in categories %}<option value="{{ category.id }}">{{ category.name }}</option>{% endfor %}</select></div>
+        {{ category_selector('pi-category', selected_category) }}
         <input type="hidden" name="service_enabled" value="0"><label class="choice"><input type="checkbox" name="service_enabled" value="1" checked><span>{{ t('ui.available.for.service.records') }}</span></label>
         <div class="field"><label for="pi-image">{{ t('ui.item.image') }}</label>
           <input id="pi-image" name="image" type="file" accept="image/jpeg,image/png,image/webp">
@@ -92,13 +108,67 @@
   </div>
 </div>
 
+{% if show_category_overview %}
+<section class="pricing-category-browser" data-category-overview>
+  <div class="pricing-category-browser-head">
+    <div>
+      <h2>{{ t('ui.item.categories') }}</h2>
+      <p class="hint">{{ t('ui.open.a.category.to.view.and.manage.its.items') }}</p>
+    </div>
+    <form method="get" action="/pricing/items" class="pricing-category-search">
+      <input type="search" name="q" placeholder="{{ t('ui.search.name.or.model') }}" aria-label="{{ t('ui.search.pricing.items') }}" dir="auto">
+      <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.search') }}</button>
+    </form>
+  </div>
+  <div class="pricing-category-folder-grid">
+    {% for category in root_categories %}
+    <a class="pricing-category-folder" href="/pricing/items?category={{ category.id }}" aria-label="{{ category.name }}">
+      <span class="pricing-category-folder-icon" aria-hidden="true"></span>
+      <span class="pricing-category-folder-copy">
+        <strong>{{ category.name }}</strong>
+        {% set category_count = root_category_item_counts[category.id] %}<span>{{ category_count }} {{ t('ui.item') if category_count == 1 else t('ui.items.lowercase') }}</span>
+      </span>
+      <span class="pricing-category-folder-arrow" aria-hidden="true">›</span>
+    </a>
+    {% endfor %}
+    <a class="pricing-category-folder pricing-category-folder-muted" href="/pricing/items?category=uncategorized" aria-label="{{ t('ui.uncategorized') }}">
+      <span class="pricing-category-folder-icon" aria-hidden="true"></span>
+      <span class="pricing-category-folder-copy">
+        <strong>{{ t('ui.uncategorized') }}</strong>
+        <span>{{ uncategorized_count }} {{ t('ui.item') if uncategorized_count == 1 else t('ui.items.lowercase') }}</span>
+      </span>
+      <span class="pricing-category-folder-arrow" aria-hidden="true">›</span>
+    </a>
+  </div>
+</section>
+{% else %}
+{% if selected_subcategories %}
+<section class="pricing-category-browser pricing-subcategory-browser" data-subcategory-overview>
+  <div class="pricing-category-browser-head">
+    <div class="pricing-category-detail-title"><a class="btn btn-secondary btn-sm" href="/pricing/items">{{ t('ui.back.to.categories') }}</a><div><h2>{{ selected_category.name }}</h2><p class="hint">{{ t('ui.choose.a.subcategory.or.manage.direct.items.below') }}</p></div></div>
+  </div>
+  <div class="pricing-category-folder-grid pricing-subcategory-folder-grid">
+    {% for subcategory in selected_subcategories %}
+    <a class="pricing-category-folder pricing-subcategory-folder" href="/pricing/items?category={{ subcategory.id }}">
+      <span class="pricing-category-folder-icon" aria-hidden="true"></span>
+      <span class="pricing-category-folder-copy"><strong>{{ subcategory.name }}</strong><span>{{ subcategory.items|length }} {{ t('ui.item') if subcategory.items|length == 1 else t('ui.items.lowercase') }}</span></span>
+      <span class="pricing-category-folder-arrow" aria-hidden="true">›</span>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 <div class="card">
   <div class="card-head">
-    <h2>{{ items|length }} {{ t('ui.item') if items|length == 1 else t('ui.items.lowercase') }}</h2>
+    <div class="pricing-category-detail-title" data-category-detail>
+      {% if not selected_subcategories %}<a class="btn btn-secondary btn-sm" href="{{ '/pricing/items?category=' ~ selected_category.parent_id if selected_category and selected_category.parent_id else '/pricing/items' }}">{{ t('ui.back') }}</a>{% endif %}
+      <div><h2>{% if selected_subcategories %}{{ t('ui.direct.items') }}{% else %}{{ selected_category.name if selected_category else (t('ui.uncategorized') if selected_category_key == 'uncategorized' else t('ui.search.results')) }}{% endif %}</h2><p class="hint">{{ items|length }} {{ t('ui.item') if items|length == 1 else t('ui.items.lowercase') }}</p></div>
+    </div>
     <form method="get" action="/pricing/items" style="display:flex;gap:8px;">
+      {% if selected_category_key %}<input type="hidden" name="category" value="{{ selected_category_key }}">{% endif %}
       <input type="search" name="q" value="{{ q }}" placeholder="{{ t('ui.search.name.or.model') }}" aria-label="{{ t('ui.search.pricing.items') }}" dir="auto">
       <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.search') }}</button>
-      {% if q %}<a class="btn btn-quiet btn-sm" href="/pricing/items">{{ t('ui.clear') }}</a>{% endif %}
+      {% if q %}<a class="btn btn-quiet btn-sm" href="{{ '/pricing/items?category=' ~ selected_category_key if selected_category_key else '/pricing/items' }}">{{ t('ui.clear') }}</a>{% endif %}
     </form>
   </div>
   <div class="card-body tight">
@@ -108,7 +178,7 @@
         <thead><tr><th>{{ t('ui.image') }}</th><th>{{ t('ui.main.item') }}</th><th>{{ t('ui.item.category') }}</th><th>{{ t('ui.model') }}</th><th>{{ t('ui.unit.price.label') }}</th><th>{{ t('ui.service.records') }}</th><th>{{ t('ui.related.items') }}</th><th>{{ t('ui.status') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
         <tbody>
         {% for item in items %}
-          <tr>
+          <tr data-pricing-item-row="{{ item.id }}">
             <td>{% if item.image_storage_key %}<img src="/pricing/items/{{ item.id }}/image?size=thumb" alt="{{ item.name }}" style="width:64px;height:48px;object-fit:cover;border-radius:6px;">{% else %}<span class="hint">{{ t('ui.no.image') }}</span>{% endif %}</td>
             <td><strong>{{ item.name }}</strong></td>
             <td>{{ item.category.name if item.category else t('ui.uncategorized') }}</td>
@@ -135,7 +205,7 @@
                   <div class="field"><label for="pim{{ item.id }}">{{ t('ui.model') }}</label><input id="pim{{ item.id }}" name="model" value="{{ item.model }}" maxlength="120" dir="auto"></div>
                   <div class="field"><label for="pip{{ item.id }}">{{ t('ui.unit.price.label') }}</label><input id="pip{{ item.id }}" name="unit_price" type="number" min="0" step="0.01" value="{{ item.unit_price }}" required></div>
                   <div class="field"><label for="pic{{ item.id }}">{{ t('ui.currency') }}</label><select id="pic{{ item.id }}" name="currency" required>{% for code in currencies %}<option value="{{ code }}" {{ 'selected' if code == item.currency }}>{{ code }}</option>{% endfor %}</select></div>
-                  <div class="field"><label for="pict{{ item.id }}">{{ t('ui.item.category') }}</label><select id="pict{{ item.id }}" name="category_id"><option value="">{{ t('ui.uncategorized') }}</option>{% for category in categories %}<option value="{{ category.id }}" {{ 'selected' if item.category_id == category.id }}>{{ category.name }}</option>{% endfor %}</select></div>
+                  {{ category_selector('pict' ~ item.id, item.category) }}
                   <input type="hidden" name="service_enabled" value="0"><label class="choice"><input type="checkbox" name="service_enabled" value="1" {{ 'checked' if item.service_enabled }}><span>{{ t('ui.available.for.service.records') }}</span></label>
                   <div class="field"><label for="pii{{ item.id }}">{{ t('ui.replace.image') if item.image_storage_key else t('ui.add.image') }}</label><input id="pii{{ item.id }}" name="image" type="file" accept="image/jpeg,image/png,image/webp"></div>
                   <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -186,4 +256,56 @@
     {% endif %}
   </div>
 </div>
+{% endif %}
+
+<dialog class="pricing-item-picker pricing-category-assignment-picker" data-pricing-category-assignment-picker aria-labelledby="pricing-category-assignment-title">
+  <div class="pricing-item-picker-head">
+    <div>
+      <span class="eyebrow">{{ t('ui.item.category') }}</span>
+      <h2 id="pricing-category-assignment-title" data-pricing-category-picker-title data-root-title="{{ t('ui.choose.category') }}">{{ t('ui.choose.category') }}</h2>
+    </div>
+    <div class="pricing-picker-head-actions">
+      <button type="button" class="btn btn-secondary btn-sm" data-pricing-category-back hidden>{{ t('ui.back') }}</button>
+      <button type="button" class="btn btn-quiet btn-sm" data-close-pricing-category-picker>{{ t('ui.close') }}</button>
+    </div>
+  </div>
+  <div class="pricing-item-picker-grid">
+    <div class="pricing-category-folder-grid" data-pricing-category-root>
+      {% for category in root_categories %}
+      <button type="button" class="pricing-category-folder pricing-picker-folder" data-open-pricing-category="pricing-category-choice-{{ category.id }}" data-category-label="{{ category.name }}">
+        <span class="pricing-category-folder-icon" aria-hidden="true"></span>
+        <span class="pricing-category-folder-copy"><strong>{{ category.name }}</strong><span>{{ category.children|length }} {{ t('ui.subcategories') }}</span></span>
+        <span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span>
+      </button>
+      {% endfor %}
+      <button type="button" class="pricing-category-folder pricing-category-folder-muted pricing-picker-folder" data-select-pricing-category data-category-id="" data-category-label="{{ t('ui.uncategorized') }}">
+        <span class="pricing-category-folder-icon" aria-hidden="true"></span>
+        <span class="pricing-category-folder-copy"><strong>{{ t('ui.uncategorized') }}</strong><span>{{ t('ui.remove.from.category') }}</span></span>
+        <span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span>
+      </button>
+    </div>
+    {% for category in root_categories %}
+    <section id="pricing-category-choice-{{ category.id }}" data-pricing-category-panel hidden>
+      <div class="pricing-category-choice-head">
+        <div><span class="eyebrow">{{ t('ui.main.category') }}</span><h3>{{ category.name }}</h3></div>
+        <button type="button" class="btn btn-primary btn-sm" data-select-pricing-category data-category-id="{{ category.id }}" data-category-label="{{ category.name }}">{{ t('ui.select.this.main.category') }}</button>
+      </div>
+      {% if category.children %}
+      <p class="hint">{{ t('ui.open.a.subcategory.to.select.it') }}</p>
+      <div class="pricing-category-folder-grid pricing-subcategory-folder-grid">
+        {% for subcategory in category.children|sort(attribute='name') %}
+        <button type="button" class="pricing-category-folder pricing-subcategory-folder pricing-picker-folder" data-select-pricing-category data-category-id="{{ subcategory.id }}" data-category-label="{{ category.name }} &rsaquo; {{ subcategory.name }}">
+          <span class="pricing-category-folder-icon" aria-hidden="true"></span>
+          <span class="pricing-category-folder-copy"><strong>{{ subcategory.name }}</strong><span>{{ t('ui.subcategory') }}</span></span>
+          <span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span>
+        </button>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="hint">{{ t('ui.this.main.category.has.no.subcategories') }}</p>
+      {% endif %}
+    </section>
+    {% endfor %}
+  </div>
+</dialog>
 {% endblock %}

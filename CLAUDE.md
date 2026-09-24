@@ -4,7 +4,214 @@ Service Management System — a maintenance evidence portal. Read `README.md` fo
 full architecture, entities and known limitations. This file is the short version
 plus the rules that aren't inferable from the code.
 
-## Current handoff — 2026-08-12
+## Current handoff — 2026-08-26
+
+- Pending review on `feature/logs-report`: incomplete browser-added Sites,
+  services, or devices can no longer fall through Edit as `No changes were
+  made`. Edit detects the added row itself, so a missing Service reaches normal
+  validation while the original record remains unchanged. All three Create/Edit
+  workflows now run a client preflight before upload, keep entered fields and
+  selected photos in place, mark the exact field plus its Site/service card in
+  red, show an English/Arabic cause summary, focus the first problem, and accept
+  a corrected resubmission. Server validation remains authoritative. The focused
+  Edit/Append/Autosave gate is `16 passed, 1 warning`; JavaScript syntax, Python
+  compilation, and `git diff --check` pass. No migration was added or applied,
+  and the service was not restarted. In-app browser connection was unavailable,
+  so live visual verification remains pending.
+
+- Pending review on `feature/logs-report`: Pricing now has **Purchase
+  Documents** directly beneath Items. It reuses the existing Main
+  Category/Subcategory hierarchy and image catalogue, including Related Items
+  with their parent image. A supplier quotation or purchase invoice is stored
+  once and may link to multiple Main/Related Items selected across folders;
+  each link has its own optional unit price/currency for item-level trend
+  analysis. Multiple validated PDF/JPEG/PNG/WebP files combine into one safe
+  PDF preview, remain individually downloadable, and download together as ZIP.
+  Item pages filter Invoice/Quotation, supplier and date, render hoverable
+  currency-separated price charts, and export the matching analysis to PDF.
+  Admin and Pricing-authorized Technical users may create/edit/view/download;
+  only Admin may delete. Item deletion retains shared documents and removes a
+  document/file set only if its final Item link disappears. All mutations,
+  previews, downloads and exports feed Logs Report. Migration
+  `c6a4e8f21d90` creates the shared document/file/link tables and has **not**
+  been applied to the development database; the service has not been restarted.
+  The focused feature/i18n/Pricing/Logs/Alembic gate is `42 passed, 1 warning`;
+  Python compilation, JavaScript syntax and `git diff --check` pass. In-app
+  browser connection was unavailable, so no live-browser visual claim is made.
+
+- Pending review: Customer-report redesign is isolated behind an Administrator-
+  only `Open design preview` action. Part 1 renders only a new cover and
+  executive summary from the saved report's real data, with the existing
+  horizontal AFAQY logo and a light AFAQY watermark on both pages. The official
+  preview/download routes and renderer are unchanged. No dependency, database,
+  or migration change was made. The focused access/PDF/i18n gate is `25 passed,
+  1 warning`; both preview pages were rendered to PNG and visually inspected.
+
+- Pending review: Add/Edit Pricing Item no longer uses a flat Category
+  dropdown. A shared folder picker shows all Main Category folders, opens one
+  Main Category to show its smaller teal Subcategory folders, supports Back,
+  direct Main Category selection, and Uncategorized. The chosen path is shown
+  on the item form and is persisted only when Create/Save is submitted, so the
+  same UI also moves an existing Item between folders. No migration is needed.
+  The full Pricing gate is `41 passed, 1 warning`; the focused hierarchy/i18n
+  gate is `25 passed, 1 warning`, and JavaScript syntax passes.
+
+- Pending review: Pricing categories now support exactly two
+  levels, Main Category and Subcategory. Existing categories remain Main
+  Categories. The Items page opens one Main Category at a time, renders smaller
+  teal Subcategory folders above directly assigned items, and opens a
+  Subcategory as its own item view. The Create Quotation picker uses the same
+  hierarchy in a compact dialog and Back navigates one level at a time. CSS now
+  strictly hides inactive picker views. Migration e7c3a1b95d42 adds the nullable
+  self-referencing parent field without moving existing data. The Pricing plus
+  Alembic round-trip/ORM-drift gate is 42 passed, 1 warning; JavaScript syntax
+  passes. The development database was backed up to
+  `tmp/phase2-dev-backups/service_management-before-e7c3a1b95d42-20260825-133148.dump`,
+  migrated to `e7c3a1b95d42`, and restarted successfully on port 8999 on
+  2026-08-25. All three existing Categories and all four Pricing Items were
+  verified after migration.
+
+- Pending review on `feature/logs-report`: Pricing Items now opens as a
+  responsive folder-style category browser instead of one continuously visible
+  item table. Categories are arranged in a three-to-four-column desktop grid;
+  only the selected Category is opened at a time, with an explicit Back to
+  categories action. Uncategorized items have their own folder. Search can
+  return cross-category results from the overview or remain scoped to an opened
+  Category. Existing item management, pricing history, quoted-price history,
+  related items, and permissions are unchanged. The Create Quotation item picker
+  now uses the same folder-first navigation: one Category opens at a time, Back
+  returns to all Category folders without closing the dialog, and search shows
+  matching items across folders. No migration is required. The Pricing/i18n gate
+  is `64 passed, 1 warning`; the quotation-picker gate is `27 passed, 1
+  warning`, and JavaScript syntax passes.
+
+- Pending review on `feature/logs-report`: Administrators now have one
+  **Management -> Logs Report** entry instead of separate Audit Log and
+  Technician Activity navigation links. Activity/system searches and technician
+  led/assisted-work searches are tabs of the same page. Both tabs are
+  search-first: opening them performs no result query and displays no log rows;
+  at least one activity criterion or a Technical user is required before Search
+  returns data. Activity filters include second-precision display-time bounds,
+  actor, role, module, action, record type/ID/full content, outcome, IP and
+  user/system category. Matching activity exports to PDF or formatted Excel;
+  technician work exports to its existing PDF or a new three-sheet Excel
+  workbook. Old Audit Log and Technician Activity page URLs redirect to the new
+  Management location, while legacy PDF endpoints remain compatible. Detailed
+  event views and append-only storage are unchanged. Record detail pages no
+  longer expose Change history; Installation, Preventive Maintenance, and
+  Maintenance revisions remain stored and are visible only through Logs Report.
+  No migration is required.
+  The focused cross-feature gate is `45 passed, 37 deselected, 1 warning`;
+  the additional record-detail visibility gate is `9 passed, 1 warning`.
+  Python compilation and `git diff --check` pass.
+
+- Pending review on `fix/record-edit-autosave-drafts`: long-running Installation,
+  Preventive Maintenance, and Maintenance Create/Edit forms now autosave changed
+  structure and field values to a private per-user server draft after five seconds.
+  Drafts remain available for seven days and are listed under Data Entry -> My
+  drafts. Selected photo `File` objects are retained in same-browser IndexedDB
+  for draft restoration without repeatedly uploading them. A four-minute
+  authenticated keepalive now mutates the signed session timestamp so a deployed
+  15-minute session is renewed while an entry page remains open. Status, restore,
+  discard, manual-save, disconnected, and expired-session states are visible in
+  English and Arabic.
+- The Edit-table root cause shown in production was fixed: cloning an existing
+  browser-table row no longer clears its immutable saved Site position, and the
+  cloned maintenance quantity correctly resets to one. Existing atomic append
+  behavior keeps the original record unchanged when validation rejects a new
+  Site/service/device. Migration `d8f4a6c21e90` creates private JSON draft rows
+  with owner/key uniqueness and expiry cleanup. It passed Alembic round-trip and
+  ORM drift checks. The focused gate is `169 passed, 1 warning`; JavaScript syntax
+  and Python compilation pass. With approval, the development database was backed
+  up to `tmp/phase2-dev-backups/service_management-before-d8f4a6c21e90-20260823-165434.dump`,
+  migrated to `d8f4a6c21e90`, and restarted on port 8999. Authenticated live HTTP
+  checks passed for Preventive Maintenance, My drafts, and the draft API. The
+  autosave CSS cache fingerprint and hidden restore/discard controls were verified.
+- A subsequent live Preventive Maintenance edit exposed two append-only UI
+  defects. Edit submissions now stay on the audited Edit screen when validation
+  rejects additions, show the concrete validation reason without changing the
+  saved record, and rebase new Site service/table indexes before asynchronous
+  `FormData` capture. The exact regression scenario—one saved record plus two
+  new Sites, one service, photos, and an independent browser table per Site—now
+  saves under the original record number. The focused edit/append gate passed
+  `15 passed, 1 warning`; the exact two-Site regressions passed separately.
+- A production-style Admin regression then reproduced a separate Site-removal
+  failure: removing a saved non-primary Site rebuilt the legacy parent photo
+  mirror by deleting and reinserting the same unique storage key in one flush.
+  The mirror now reuses matching rows and only adds/removes actual differences.
+  An isolated cross-project test proves one old Preventive Maintenance Site can
+  be retained, a different Main/Sub/Site appended under the same record number,
+  and that added Site removed in a later Edit. Draft restoration is now
+  non-destructive: it never restores saved-Site/service removal or checked
+  existing-photo deletion controls. Async Edit also extracts the concrete
+  server validation message from HTML error responses. The focused
+  Edit/Append/Draft gate passed `22 passed, 1 warning`.
+
+- New Main Projects still receive an automatic `General` Sub Project, but it now
+  starts with zero Site assignments. Every Sub Project Site-assignment form has
+  a `Deselect all Sites` control; clearing all assignments is valid and persists
+  only after `Save Site Assignments`. A global Back button now appears before the
+  Dashboard link on every authenticated page, returns through same-origin browser
+  history, excludes Login/Logout, and falls back to Dashboard (or All Records for
+  Customer users). The focused administration/access gate passed `62 passed, 1
+  warning`; JavaScript syntax, Python compilation, `git diff --check`, restart on
+  port 8999, and authenticated live HTTP checks all pass. No migration was needed.
+
+- Pending review on `feature/project-photo-guidance-profiles`: Photo Guidance is
+  now independent from Pricing Items and Installed Assets. Administrators create
+  named, Main-Project-scoped profiles such as `Solar Solution`; each profile has
+  optional Before/After alerts and reusable descriptions. Technicians may select
+  one optional profile per device/service in Installation, Preventive Maintenance,
+  or Maintenance Create/Edit, including dynamically added Sites and services.
+  Selecting a standard description fills the ordinary editable photo-description
+  field. Only the technician's final description is evidence or appears in reports;
+  profile names and alerts remain guidance-only.
+- Migration `b4e8d3c71a26` converts existing item-linked rules into named profiles,
+  removes their Pricing Item/Site foreign keys, and adds nullable profile links to
+  all three work-item tables with `ON DELETE SET NULL`. It passed the Alembic
+  upgrade/downgrade/metadata-drift gate. With approval, the development database
+  was backed up to `tmp/phase2-dev-backups/service_management-before-b4e8d3c71a26-20260819-032403.dump`,
+  migrated to `b4e8d3c71a26`, and restarted on port 8999 with reload disabled.
+  Authenticated checks returned HTTP 200 for Project Photo Guidance and all three
+  data-entry pages, each exposing the new profile controls.
+- Focused gate for the profile redesign: `105 passed, 1 warning` across Photo
+  Guidance, all three record workflows, and Alembic round-trip. Additional tests
+  prove selection persistence on create and edit for every record type and reject
+  profiles from another Main Project. JavaScript syntax, Python compilation, and
+  `git diff --check` pass. In-app browser connection was unavailable in the current
+  tool session, so no live-browser claim is made for this revision.
+
+- Historical implementation note, superseded by the profile redesign above:
+  Administrators could configure
+  optional Installation Photo Guidance inside each Main Project. The Project
+  has one enable/disable switch; each service-enabled Pricing Item can have a
+  one Project-wide rule per Item, shared by every Site. Before and After stages
+  independently support a hover/focus/tap guidance alert and reusable standard
+  descriptions. In Installation Create/Edit, selecting one standard description
+  fills the existing photo-description textarea and the technician may edit that
+  text directly. Existing saved descriptions are never changed automatically,
+  and guidance is never included in customer reports. Maintenance and Preventive
+  Maintenance are unchanged. Migration `f6a2c9e41b70` creates the configuration
+  tables and passed the Alembic upgrade/downgrade/metadata-drift gate. With
+  approval, the development database was backed up to
+  `tmp/phase2-dev-backups/service_management-before-f6a2c9e41b70-20260818-145427.dump`,
+  migrated to `f6a2c9e41b70`, and restarted on port 8999. Authenticated access to
+  the Project Photo Guidance page returned HTTP 200.
+  The enable control is repeated inside every Add/Edit rule form and saving a
+  rule saves that Project setting at the same time. A first rule defaults to
+  enabled; pre-existing rules created before this correction are also treated
+  as enabled when no explicit setting row exists. An explicit disabled setting
+  always wins.
+  Guidance scope is intentionally Project-wide: the Site override selector was
+  removed, and Installation lookup uses the same Item rule at every Site within
+  the selected Main Project. The Projects page now shows a prominent dedicated
+  Photo Guidance status/management card between Project Details and Sub Projects.
+  Editing a guidance rule now reconciles saved description rows in place instead
+  of replacing them at still-occupied unique positions; alert and description
+  edits therefore commit atomically. The full Photo Guidance boundary gate passed
+  `16 passed, 1 warning`, including authorization, create/edit/delete,
+  enable/disable, duplicate protection, Project-wide lookup, Installation photo
+  descriptions, Project UI, translations, and Alembic round-trip/schema drift.
 
 - `main` is now an integration-only branch. Never implement, edit tracked
   files, or create development commits directly on it. Before each approved
@@ -12,6 +219,73 @@ plus the rules that aren't inferable from the code.
   `fix/*`, or `docs/*` branch, commit and push only that branch, and merge it
   through a GitHub pull request after approval and testing. Never force-push
   `main` or bypass its protection.
+
+- Pending review on `feature/full-record-editing`: Installation, Preventive
+  Maintenance, and Maintenance Edit now use the same nested Site workflow as
+  creation. A saved record can receive another service/device under an existing
+  Site or a complete new Site, while keeping one record number and one Save.
+  Existing photos/descriptions, participants, results/workflow details, and each Site's
+  browser-entered table remain editable inline. Administrators can remove saved
+  services/devices, complete Sites, photos, and table rows; removed installation
+  assets are detached and deactivated without confusing same-model assets at
+  other Sites. Linked generated reports are invalidated whenever source evidence
+  changes.
+- The Administrator Audit Log now has full-content, actor, module, action,
+  record-type, outcome, IP, and second-precision date filters. Its clearer list
+  summarizes the activity and links to a dedicated event page showing actor,
+  role, time, IP, user agent, request, outcome, record identity, and recursively
+  formatted before/after changes. Generic request auditing remains append-only.
+- No schema migration is required for this pending feature. The focused gate is
+  green; the local application was restarted on port 8999. Preserve the unrelated
+  untracked root `index.html`.
+- Preventive Maintenance and Maintenance no longer collect the separate
+  Maintenance Notes field in new or edited Data Entry cards. Existing historical
+  notes remain stored during edits. Both filtered-record and saved-report PDFs
+  omit Maintenance Notes, Issue Found, and Recommendations labels whenever the
+  corresponding value is blank; non-empty historical values remain readable.
+- Issue Found is optional for every Preventive Maintenance and Maintenance
+  result, including grouped services and edit workflows. Shared entry-form
+  controls now initialize safely whether JavaScript loads before or after
+  `DOMContentLoaded`, and CSS/JavaScript URLs use a content fingerprint so a
+  deployed browser cannot keep an obsolete form script. The focused correction
+  gate passed `8 passed, 1 warning`; JavaScript syntax, Python compilation, and
+  `git diff --check` pass. Port 8999 was restarted and `/login` returned HTTP
+  200 with the fingerprinted JavaScript asset.
+  A real-browser regression then exposed and fixed the edit-only root cause:
+  saved hierarchy fields are hidden inputs, not selects, and the hierarchy
+  initializer now limits option filtering to actual select controls. Browser
+  clicks successfully increased service, Site, and row counts with no runtime
+  exception.
+- Saved hierarchical report PDFs now apply the configured display-timezone
+  offset to both report `Created at` and record `Performed by ... on`
+  timestamps, matching the Records UI. The extracted-text regression passed
+  and the updated metadata/record layout was visually verified without
+  clipping or overlap. Existing downloaded PDF files remain unchanged, but the
+  saved report can simply be downloaded again to receive the corrected time.
+- Saved hierarchical report PDFs now support large-report navigation. A
+  multi-pass layout generates a clickable Main Project -> Sub Project -> Site
+  -> Record table of contents, plus Report Information, Record & Device Index,
+  Service Data Tables with per-Site entries, and Approvals. Native PDF viewer
+  bookmarks reach every major section and device, and every page has a
+  clickable Back to contents footer. Page references remain accurate when
+  either index spans multiple pages. A 29-page, 46-bookmark multi-project sample and
+  mixed English/Arabic navigation were rendered and visually verified. The
+  focused navigation/report gate passed `3 passed, 1 warning`; compilation and
+  `git diff --check` pass. The broader structured-report run is `16 passed, 4
+  failed`: two unrelated legacy Excel submissions return 422, one older
+  multi-device evidence fixture already failed before this change, and one
+  assertion still expects the retired `Device Data` heading instead of the
+  current `SERVICE DATA TABLES` heading.
+- The customer-facing first page is now a compact executive summary. It omits
+  the Technician list, identifies the customer/reporting period, and counts
+  hierarchy levels, records, devices/services, and all four results. Reports
+  with observations, issues, recommendations, further action, or incomplete
+  work receive a clickable Items Requiring Attention section before the
+  contents; fully successful reports show a short green no-actions message.
+  Footers identify the document as Confidential, and Approvals provide manual
+  Name, Job title, Signature, and Date lines. The focused customer-report gate
+  passed `3 passed, 1 warning`, and the eight-page mixed-result sample was
+  rendered without clipping or overlap.
 
 - Browser-entered per-Site service data
   tables are implemented for Installation, Preventive Maintenance, and
@@ -200,14 +474,13 @@ plus the rules that aren't inferable from the code.
   The focused report/search/i18n gate
   passed `30 passed, 1 warning`, and the compact normal, long-note, single-device,
   and six-page multi-device layouts were rendered and inspected.
-- The latest verified offline installer is `1.1.0-rc33`. Its ignored files are
-  `dist/service-management-offline-1.1.0-rc33.zip` and the adjacent checksum.
-  The ZIP is `535146924` bytes and its SHA-256 is
-  `f494123c624279313dba1613c46367c39790e6485a8f1fccf894d564450b1906`.
-  The focused release-workflow gate passed `20 passed, 1 warning`; both outer
-  and embedded application ZIP CRC checks passed, the package reports Alembic
-  head `c8e4f2a91d73`, the packaged PDF source matches the current source, and
-  protected data/root `index.html` are excluded.
+- The latest verified offline installer is `1.1.0-rc41`. Its ignored files are
+  `dist/service-management-offline-1.1.0-rc41.zip` and the adjacent authoritative
+  `.zip.sha256` checksum. The ZIP is 510.49 MB and its SHA-256 is
+  `b19145becff8f4e1818d89a0b9a2c1b65b2ddf92e4c8a6d1129e71648c5f3eab`.
+  The focused Pricing and release-workflow gate passed `61 passed, 1 warning`;
+  outer and embedded ZIP CRCs, Alembic migration `e7c3a1b95d42`, checksum, and
+  protected-data/root `index.html` exclusions were verified before handoff.
 - The local development server was verified at port `8999`, but a new PC must
   configure its own `.env`, PostgreSQL database, uploads, and port.
 - The root `index.html` remains an unrelated untracked original planner file.

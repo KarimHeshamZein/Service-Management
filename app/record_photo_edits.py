@@ -60,3 +60,40 @@ def new_photo_descriptions(
     if any(len(value) > maximum for value in values):
         return [], f"Keep each photo note under {maximum} characters."
     return values, None
+
+
+def existing_photo_issue_flags(
+    form: Any,
+    photos: Iterable[Any],
+    descriptions: dict[int, str],
+    *,
+    removed_ids: set[int] | None = None,
+) -> tuple[dict[int, bool], str | None]:
+    removed_ids = removed_ids or set()
+    flags: dict[int, bool] = {}
+    for photo in photos:
+        flagged = str(form.get(f"photo_issue_found_{photo.id}") or "").lower() in {
+            "1",
+            "true",
+            "on",
+            "yes",
+        }
+        if flagged and photo.id not in removed_ids and not descriptions.get(photo.id, "").strip():
+            return {}, "Add a description before marking a photo as Issue Found."
+        flags[photo.id] = flagged
+    return flags, None
+
+
+def new_photo_issue_flags(
+    form: Any,
+    field_prefix: str,
+    descriptions: list[str],
+) -> tuple[list[bool], str | None]:
+    flags = [
+        str(form.get(f"{field_prefix}_{position}") or "").lower()
+        in {"1", "true", "on", "yes"}
+        for position in range(len(descriptions))
+    ]
+    if any(flag and not descriptions[position].strip() for position, flag in enumerate(flags)):
+        return flags, "Add a description before marking a photo as Issue Found."
+    return flags, None

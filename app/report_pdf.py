@@ -514,16 +514,25 @@ def build_records_pdf(
             )
             story.append(Spacer(1, 2 * mm))
 
-            narrative: list[Any] = [
-                _paragraph("Notes", styles["label"]),
-                _paragraph(item["notes"], styles["body"]),
-            ]
+            narrative: list[Any] = []
+            if str(item["notes"] or "").strip():
+                narrative.extend(
+                    [
+                        _paragraph(
+                            "Installation notes"
+                            if record["record_type"] == "Installation"
+                            else "Maintenance notes",
+                            styles["label"],
+                        ),
+                        _paragraph(item["notes"], styles["body"]),
+                    ]
+                )
             for label, field in (
                 ("Issue found", "issue_description"),
                 ("Recommendations", "recommendations"),
                 ("Handover notes", "handover_notes"),
             ):
-                if item[field]:
+                if str(item[field] or "").strip():
                     narrative.extend(
                         [
                             Spacer(1, 1.5 * mm),
@@ -531,7 +540,8 @@ def build_records_pdf(
                             _paragraph(item[field], styles["body"]),
                         ]
                     )
-            story.append(KeepTogether(narrative))
+            if narrative:
+                story.append(KeepTogether(narrative))
             story.append(Spacer(1, 2 * mm))
             story.append(_paragraph("Evidence photos", styles["label"]))
             photos, omitted, remaining_photos = _bounded_item_photos(
@@ -865,16 +875,20 @@ def build_technician_audit_pdf(
                     ],
                 )
             )
-            narrative = [
-                _paragraph("Notes", styles["label"]),
-                _paragraph(item["notes"], styles["body"]),
-            ]
+            narrative = []
+            if str(item["notes"] or "").strip():
+                narrative.extend(
+                    [
+                        _paragraph("Notes", styles["label"]),
+                        _paragraph(item["notes"], styles["body"]),
+                    ]
+                )
             for label, field in (
                 ("Issue found", "issue_description"),
                 ("Recommendations", "recommendations"),
                 ("Handover notes", "handover_notes"),
             ):
-                if item[field]:
+                if str(item[field] or "").strip():
                     narrative.extend(
                         [
                             Spacer(1, 1.5 * mm),
@@ -882,7 +896,8 @@ def build_technician_audit_pdf(
                             _paragraph(item[field], styles["body"]),
                         ]
                     )
-            story.append(KeepTogether(narrative))
+            if narrative:
+                story.append(KeepTogether(narrative))
             if include_photos:
                 story.append(Spacer(1, 2 * mm))
                 story.append(_paragraph("Evidence photos", styles["label"]))

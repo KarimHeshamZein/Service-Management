@@ -56,6 +56,18 @@ class UserRole(str, enum.Enum):
         }[self.value]
 
 
+class PurchaseDocumentType(str, enum.Enum):
+    PURCHASE_INVOICE = "purchase_invoice"
+    SUPPLIER_QUOTATION = "supplier_quotation"
+
+    @property
+    def label(self) -> str:
+        return {
+            "purchase_invoice": "Purchase invoice",
+            "supplier_quotation": "Supplier quotation",
+        }[self.value]
+
+
 class MaintenanceResult(str, enum.Enum):
     COMPLETED_SUCCESSFULLY = "completed_successfully"
     COMPLETED_WITH_OBSERVATIONS = "completed_with_observations"
@@ -107,13 +119,6 @@ class ServiceReportType(str, enum.Enum):
             "general_maintenance": "Maintenance",
             "maintenance": "Preventive maintenance",
         }[self.value]
-
-
-NEEDS_ISSUE_DETAIL = {
-    MaintenanceResult.COMPLETED_WITH_OBSERVATIONS,
-    MaintenanceResult.FURTHER_ACTION_REQUIRED,
-    MaintenanceResult.UNABLE_TO_COMPLETE,
-}
 
 
 class User(Base):
@@ -297,6 +302,17 @@ class Site(Base):
         passive_deletes=True,
         order_by="SubProject.name",
     )
+    photo_guidance_setting: Mapped["ProjectPhotoGuidanceSetting | None"] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
+    photo_guidance_profiles: Mapped[list["ProjectPhotoGuidanceRule"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     __table_args__ = (
         UniqueConstraint("name", "customer_name", name="uq_site_name_customer"),
@@ -477,7 +493,6 @@ class WorkSite(Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-
     __table_args__ = (
         CheckConstraint("length(trim(name)) > 0", name="ck_work_site_name_present"),
     )
@@ -604,6 +619,7 @@ class MaintenancePhoto(Base):
     content_type: Mapped[str] = mapped_column(String(60), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    is_issue_found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
@@ -693,7 +709,7 @@ class InstallationRecord(Base):
     )
     installed_device: Mapped["InstalledDevice | None"] = relationship(
         back_populates="installation_record",
-        cascade="all, delete-orphan",
+        cascade="all",
         uselist=False,
     )
     additional_devices: Mapped[list["InstallationRecordAdditionalDevice"]] = relationship(
@@ -769,6 +785,7 @@ class InstallationPhoto(Base):
     content_type: Mapped[str] = mapped_column(String(60), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    is_issue_found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
@@ -964,6 +981,9 @@ class InstallationRecordItem(Base):
     service_type_id: Mapped[int] = mapped_column(
         ForeignKey("service_types.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    photo_guidance_profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_photo_guidance_rules.id", ondelete="SET NULL"), index=True
+    )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     service_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     device_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
@@ -987,6 +1007,7 @@ class InstallationRecordItem(Base):
     record: Mapped[InstallationRecord] = relationship(back_populates="work_items")
     installed_device: Mapped[InstalledDevice] = relationship()
     service_type: Mapped[ServiceType] = relationship()
+    photo_guidance_profile: Mapped["ProjectPhotoGuidanceRule | None"] = relationship()
     photos: Mapped[list["InstallationItemPhoto"]] = relationship(
         back_populates="item",
         cascade="all, delete-orphan",
@@ -1015,6 +1036,7 @@ class InstallationItemPhoto(Base):
         index=True,
     )
     description: Mapped[str | None] = mapped_column(Text)
+    is_issue_found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
@@ -1124,6 +1146,9 @@ class MaintenanceRecordItem(Base):
     service_type_id: Mapped[int] = mapped_column(
         ForeignKey("service_types.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    photo_guidance_profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_photo_guidance_rules.id", ondelete="SET NULL"), index=True
+    )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     service_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     device_id: Mapped[int | None] = mapped_column(
@@ -1150,6 +1175,7 @@ class MaintenanceRecordItem(Base):
     record: Mapped[MaintenanceRecord] = relationship(back_populates="work_items")
     installed_device: Mapped[InstalledDevice | None] = relationship()
     service_type: Mapped[ServiceType] = relationship()
+    photo_guidance_profile: Mapped["ProjectPhotoGuidanceRule | None"] = relationship()
     catalog_device: Mapped[DeviceCatalog] = relationship()
     photos: Mapped[list["MaintenanceItemPhoto"]] = relationship(
         back_populates="item",
@@ -1179,6 +1205,7 @@ class MaintenanceItemPhoto(Base):
         index=True,
     )
     description: Mapped[str | None] = mapped_column(Text)
+    is_issue_found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
@@ -1296,6 +1323,9 @@ class GeneralMaintenanceItem(Base):
     service_type_id: Mapped[int] = mapped_column(
         ForeignKey("service_types.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    photo_guidance_profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_photo_guidance_rules.id", ondelete="SET NULL"), index=True
+    )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     service_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     device_id: Mapped[int | None] = mapped_column(
@@ -1322,6 +1352,7 @@ class GeneralMaintenanceItem(Base):
     record: Mapped[GeneralMaintenanceRecord] = relationship(back_populates="work_items")
     installed_device: Mapped[InstalledDevice | None] = relationship()
     service_type: Mapped[ServiceType] = relationship()
+    photo_guidance_profile: Mapped["ProjectPhotoGuidanceRule | None"] = relationship()
     catalog_device: Mapped[DeviceCatalog | None] = relationship()
     photos: Mapped[list["GeneralMaintenancePhoto"]] = relationship(
         back_populates="item",
@@ -1351,6 +1382,7 @@ class GeneralMaintenancePhoto(Base):
         index=True,
     )
     description: Mapped[str | None] = mapped_column(Text)
+    is_issue_found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
@@ -1641,12 +1673,29 @@ class PricingItemCategory(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False, unique=True, index=True)
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_item_categories.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=utcnow, onupdate=utcnow
     )
 
+    parent: Mapped["PricingItemCategory | None"] = relationship(
+        back_populates="children",
+        remote_side="PricingItemCategory.id",
+    )
+    children: Mapped[list["PricingItemCategory"]] = relationship(
+        back_populates="parent",
+        order_by="PricingItemCategory.name",
+    )
     items: Mapped[list["PricingItem"]] = relationship(back_populates="category")
+
+    @property
+    def display_label(self) -> str:
+        return f"{self.parent.name} › {self.name}" if self.parent else self.name
 
     __table_args__ = (
         CheckConstraint(
@@ -1885,7 +1934,11 @@ class PricingItem(Base):
         cascade="all, delete-orphan",
         order_by="PricingItemPriceHistory.changed_at.desc()",
     )
-
+    purchase_documents: Mapped[list["PurchaseDocument"]] = relationship(
+        secondary="purchase_document_items",
+        viewonly=True,
+        order_by="PurchaseDocument.document_date.desc()",
+    )
     __table_args__ = (
         UniqueConstraint("name", "model", name="uq_pricing_item_name_model"),
         CheckConstraint("length(trim(name)) > 0", name="ck_pricing_item_name_present"),
@@ -1900,6 +1953,124 @@ class PricingItem(Base):
     @property
     def category_name(self) -> str:
         return self.category.name if self.category else ""
+
+    @property
+    def main_category_name(self) -> str:
+        if not self.category:
+            return ""
+        return self.category.parent.name if self.category.parent else self.category.name
+
+    @property
+    def subcategory_name(self) -> str:
+        return self.category.name if self.category and self.category.parent else ""
+
+
+class ProjectPhotoGuidanceSetting(Base):
+    """Installation photo guidance toggle for one Main Project."""
+
+    __tablename__ = "project_photo_guidance_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    project: Mapped[Site] = relationship(back_populates="photo_guidance_setting")
+
+
+class EntryDraft(Base):
+    """Private server-side autosave for long-running field-service forms."""
+
+    __tablename__ = "entry_drafts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    draft_key: Mapped[str] = mapped_column(String(180), nullable=False)
+    page_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow, index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "draft_key", name="uq_entry_drafts_user_key"),
+        CheckConstraint(
+            "length(trim(draft_key)) > 0", name="ck_entry_drafts_key_present"
+        ),
+        CheckConstraint(
+            "length(trim(page_url)) > 0", name="ck_entry_drafts_page_url_present"
+        ),
+    )
+
+class ProjectPhotoGuidanceRule(Base):
+    """An independent, project-scoped photo guidance profile."""
+
+    __tablename__ = "project_photo_guidance_rules"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    before_alert: Mapped[str | None] = mapped_column(Text)
+    after_alert: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    project: Mapped[Site] = relationship(back_populates="photo_guidance_profiles")
+    descriptions: Mapped[list["ProjectPhotoGuidanceDescription"]] = relationship(
+        back_populates="rule",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ProjectPhotoGuidanceDescription.stage, ProjectPhotoGuidanceDescription.position",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_photo_guidance_project_profile_name"),
+        CheckConstraint("length(trim(name)) > 0", name="ck_photo_guidance_profile_name_present"),
+    )
+
+
+class ProjectPhotoGuidanceDescription(Base):
+    """One reusable Before or After photo description."""
+
+    __tablename__ = "project_photo_guidance_descriptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rule_id: Mapped[int] = mapped_column(
+        ForeignKey("project_photo_guidance_rules.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    stage: Mapped[str] = mapped_column(String(10), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    rule: Mapped[ProjectPhotoGuidanceRule] = relationship(back_populates="descriptions")
+
+    __table_args__ = (
+        CheckConstraint("stage IN ('before', 'after')", name="ck_photo_guidance_description_stage"),
+        CheckConstraint(
+            "length(trim(description)) > 0",
+            name="ck_photo_guidance_description_present",
+        ),
+        UniqueConstraint(
+            "rule_id", "stage", "position", name="uq_photo_guidance_description_position"
+        ),
+    )
 
 
 class PricingRelatedItem(Base):
@@ -1925,6 +2096,11 @@ class PricingRelatedItem(Base):
         back_populates="related_item",
         cascade="all, delete-orphan",
         order_by="PricingItemPriceHistory.changed_at.desc()",
+    )
+    purchase_documents: Mapped[list["PurchaseDocument"]] = relationship(
+        secondary="purchase_document_items",
+        viewonly=True,
+        order_by="PurchaseDocument.document_date.desc()",
     )
 
     __table_args__ = (
@@ -1974,6 +2150,125 @@ class PricingItemPriceHistory(Base):
             name="ck_pricing_price_history_one_item",
         ),
         CheckConstraint("new_price >= 0", name="ck_pricing_price_history_nonnegative"),
+    )
+
+
+class PurchaseDocument(Base):
+    """One supplier file set shared by one or more catalogue items."""
+
+    __tablename__ = "purchase_documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_type: Mapped[PurchaseDocumentType] = mapped_column(
+        enum_column(PurchaseDocumentType, 30), nullable=False, index=True
+    )
+    supplier_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    document_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    uploaded_by_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    uploaded_by_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, index=True
+    )
+
+    uploaded_by: Mapped[User] = relationship()
+    item_links: Mapped[list["PurchaseDocumentItem"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="PurchaseDocumentItem.position, PurchaseDocumentItem.id",
+    )
+    files: Mapped[list["PurchaseDocumentFile"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="PurchaseDocumentFile.position, PurchaseDocumentFile.id",
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(supplier_name)) > 0",
+            name="ck_purchase_document_supplier_present",
+        ),
+    )
+
+
+class PurchaseDocumentItem(Base):
+    """One item and its optional unit price inside a shared purchase document."""
+
+    __tablename__ = "purchase_document_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("purchase_documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    pricing_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_items.id", ondelete="CASCADE"), index=True
+    )
+    related_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_related_items.id", ondelete="CASCADE"), index=True
+    )
+    unit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str | None] = mapped_column(String(3))
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    document: Mapped[PurchaseDocument] = relationship(back_populates="item_links")
+    item: Mapped[PricingItem | None] = relationship(foreign_keys=[pricing_item_id])
+    related_item: Mapped[PricingRelatedItem | None] = relationship(foreign_keys=[related_item_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN pricing_item_id IS NULL THEN 0 ELSE 1 END + "
+            "CASE WHEN related_item_id IS NULL THEN 0 ELSE 1 END) = 1",
+            name="ck_purchase_document_item_one_target",
+        ),
+        CheckConstraint(
+            "unit_price IS NULL OR unit_price >= 0",
+            name="ck_purchase_document_item_price_nonnegative",
+        ),
+        CheckConstraint(
+            "(unit_price IS NULL AND currency IS NULL) OR "
+            "(unit_price IS NOT NULL AND length(trim(currency)) = 3)",
+            name="ck_purchase_document_item_price_currency",
+        ),
+        CheckConstraint("position >= 0", name="ck_purchase_document_item_position"),
+        UniqueConstraint(
+            "document_id", "pricing_item_id", name="uq_purchase_document_main_item"
+        ),
+        UniqueConstraint(
+            "document_id", "related_item_id", name="uq_purchase_document_related_item"
+        ),
+        UniqueConstraint(
+            "document_id", "position", name="uq_purchase_document_item_position"
+        ),
+    )
+
+
+class PurchaseDocumentFile(Base):
+    __tablename__ = "purchase_document_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("purchase_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    document: Mapped[PurchaseDocument] = relationship(back_populates="files")
+
+    __table_args__ = (
+        CheckConstraint("file_size > 0", name="ck_purchase_document_file_size_positive"),
+        CheckConstraint("position >= 0", name="ck_purchase_document_file_position"),
+        UniqueConstraint(
+            "document_id", "position", name="uq_purchase_document_file_position"
+        ),
     )
 
 

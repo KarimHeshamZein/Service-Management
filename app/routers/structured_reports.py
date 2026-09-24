@@ -32,6 +32,7 @@ from ..participant_selection import technical_user_choices, validate_participant
 from ..record_views import load_record_views
 from ..security import csrf_valid
 from ..structured_report_pdf import build_structured_report_pdf
+from ..structured_report_preview_pdf import build_structured_report_preview_pdf
 
 
 router = APIRouter()
@@ -744,6 +745,37 @@ def report_preview(
         config,
         include_device_data=include_device_data,
         inline=True,
+    )
+
+
+@router.get(
+    "/reports/{report_slug}/{report_id}/preview-redesign",
+    dependencies=[Depends(require_admin)],
+)
+def report_redesign_preview(
+    report_slug: str,
+    report_id: int,
+    request: Request,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    """Render the isolated design prototype without changing the official PDF."""
+    config = _config(report_slug)
+    report = _load_report(db, user, report_id, config)
+    content = build_structured_report_preview_pdf(
+        report,
+        _report_record_views(db, user, report, config),
+    )
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="{report.report_number}-design-preview-part-1.pdf"'
+            ),
+            "Cache-Control": "no-store",
+            "X-Robots-Tag": "noindex, noarchive",
+        },
     )
 
 
