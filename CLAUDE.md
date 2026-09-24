@@ -4,6 +4,19 @@ Service Management System — a maintenance evidence portal. Read `README.md` fo
 full architecture, entities and known limitations. This file is the short version
 plus the rules that aren't inferable from the code.
 
+## RC45 bilingual PDF hotfix - 2026-09-24
+
+- Saved service-report narratives now render Latin and Arabic text with the
+  correct embedded font instead of assigning the Arabic-only font to a whole
+  bilingual value. This removes missing Latin letters that previously appeared
+  as scattered punctuation in Attention and Issue Found.
+- Entered paragraphs choose left or right alignment from their first strong
+  language character. The fix covers Issue Found, Recommendations, maintenance
+  and installation notes, and handover notes in the official structured PDF.
+- The isolated hotfix gate is `6 passed`; page 2 and the record-detail page were
+  rendered and inspected with English, Arabic, numbers, and an English product
+  term inside Arabic text. No dependency or schema migration was added.
+
 ## RC44 PDF hotfix - 2026-09-24
 
 - Pending release on `fix/rc42-report-pdf`: saved service-report PDFs no longer
