@@ -32,7 +32,7 @@
       <div class="card-head"><h2>{{ t('nav.maintenance') }} {{ loop.index }} · {{ item.device_name }}</h2>{{ ui.result_badge(item.result) }}</div>
       <div class="card-body">
         <dl class="kv"><dt>{{ t('ui.service') }}</dt><dd>{{ item.service_name }}</dd><dt>{{ t('ui.device.title') }}</dt><dd>{{ item.device_name }} — {{ item.device_model }}</dd><dt>{{ t('ui.serial.number') }}</dt><dd class="mono">{{ item.serial_number or '—' }}</dd></dl>
-        <p class="section-title">{{ t('ui.maintenance.notes') }}</p><p class="prose">{{ item.notes }}</p>
+        {% if item.notes %}<p class="section-title">{{ t('ui.maintenance.notes') }}</p><p class="prose">{{ item.notes }}</p>{% endif %}
         {% if item.issue_description %}<p class="section-title">{{ t('ui.issue.found') }}</p><p class="prose">{{ item.issue_description }}</p>{% endif %}
         {% if item.recommendations %}<p class="section-title">{{ t('ui.recommendations') }}</p><p class="prose">{{ item.recommendations }}</p>{% endif %}
         {{ ui.staged_evidence(item.photos, "/media/maintenance-item-photo") }}
@@ -40,12 +40,12 @@
     </div>
     {% endfor %}
     {% else %}
-    <div class="card">
+    {% if record.notes %}<div class="card">
       <div class="card-head"><h2>{{ t('ui.preventive.maintenance.notes') }}</h2></div>
       <div class="card-body">
         <p class="prose" style="margin:0;">{{ record.notes }}</p>
       </div>
-    </div>
+    </div>{% endif %}
 
     {% if record.issue_description %}
     <div class="card">
@@ -132,7 +132,6 @@
   </div>
 </div>
 
-{% include "partials/record_revisions.html" %}
 
 {% if record.photos or record.work_items %}
 <div class="lightbox" data-lightbox hidden role="dialog" aria-modal="true" aria-label="{{ t('ui.proof.photo.viewer') }}">

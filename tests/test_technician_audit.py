@@ -39,8 +39,10 @@ def test_technician_activity_is_administrator_only_and_hidden(client):
     logout(client)
     login(client, *ADMIN)
     reports = client.get("/reports")
-    assert "/reports/technician-audit" in reports.text
-    assert client.get("/reports/technician-audit").status_code == 200
+    assert "/reports/technician-audit" not in reports.text
+    assert "/management/logs-report" in reports.text
+    assert client.get("/reports/technician-audit").status_code == 307
+    assert client.get("/management/logs-report?view=technician").status_code == 200
 
 
 def test_activity_counts_led_assisted_devices_photos_and_edits(client, db):
@@ -88,7 +90,7 @@ def test_activity_counts_led_assisted_devices_photos_and_edits(client, db):
 
     logout(client)
     login(client, *ADMIN)
-    leader_page = client.get("/reports/technician-audit?technician_id=2")
+    leader_page = client.get("/management/logs-report?view=technician&searched=1&technician_id=2")
     assert leader_page.status_code == 200
     assert "Technician audit installation evidence." in leader_page.text
     assert "Technician audit preventive evidence." in leader_page.text
@@ -100,13 +102,13 @@ def test_activity_counts_led_assisted_devices_photos_and_edits(client, db):
     assert "Notes" in leader_page.text
 
     preventive_page = client.get(
-        "/reports/technician-audit?technician_id=2&type=maintenance"
+        "/management/logs-report?view=technician&searched=1&technician_id=2&type=maintenance"
     )
     assert "Record edits</span><strong>1</strong>" in preventive_page.text
     assert preventive.record_number in preventive_page.text
     assert installation.record_number not in preventive_page.text
 
-    assistant_page = client.get("/reports/technician-audit?technician_id=3")
+    assistant_page = client.get("/management/logs-report?view=technician&searched=1&technician_id=3")
     assert assistant_page.status_code == 200
     assert "Visits led</span><strong>0</strong>" in assistant_page.text
     assert "Visits assisted</span><strong>2</strong>" in assistant_page.text
@@ -130,15 +132,15 @@ def test_activity_filters_and_pdf_include_full_history_and_optional_photos(clien
     login(client, *ADMIN)
 
     page = client.get(
-        "/reports/technician-audit"
-        "?technician_id=2&type=installation&project_id=1"
+        "/management/logs-report"
+        "?view=technician&searched=1&technician_id=2&type=installation&project_id=1"
     )
     assert page.status_code == 200
     assert "AUDIT-PDF-INSTALL" in page.text
     assert "Preventive notes excluded" not in page.text
 
     response = client.get(
-        "/reports/technician-audit/pdf"
+        "/management/logs-report/technician.pdf"
         "?technician_id=2&type=installation&project_id=1&include_photos=1"
     )
     assert response.status_code == 200
@@ -157,8 +159,8 @@ def test_activity_filters_and_pdf_include_full_history_and_optional_photos(clien
 
 def test_technician_pdf_rejects_missing_or_non_technical_user(client):
     login(client, *ADMIN)
-    assert client.get("/reports/technician-audit/pdf").status_code == 404
+    assert client.get("/management/logs-report/technician.pdf").status_code == 404
     assert (
-        client.get("/reports/technician-audit/pdf?technician_id=1").status_code
+        client.get("/management/logs-report/technician.pdf?technician_id=1").status_code
         == 404
     )

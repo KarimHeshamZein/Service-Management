@@ -69,14 +69,38 @@
   </div>
 
   <dialog class="pricing-item-picker" data-pricing-item-picker aria-labelledby="pricing-item-picker-title">
-    <div class="pricing-item-picker-head"><div><span class="eyebrow">{{ t('nav.pricing.items') }}</span><h2 id="pricing-item-picker-title">{{ t('ui.choose.main.item') }}</h2></div><button type="button" class="btn btn-quiet btn-sm" data-close-pricing-item-picker>{{ t('ui.close') }}</button></div>
+    <div class="pricing-item-picker-head"><div><span class="eyebrow">{{ t('nav.pricing.items') }}</span><h2 id="pricing-item-picker-title" data-pricing-picker-view-title data-default-title="{{ t('ui.choose.main.item') }}" data-search-title="{{ t('ui.search.results') }}">{{ t('ui.choose.main.item') }}</h2></div><div class="pricing-picker-head-actions"><button type="button" class="btn btn-secondary btn-sm" data-pricing-picker-back hidden>{{ t('ui.back.to.categories') }}</button><button type="button" class="btn btn-quiet btn-sm" data-close-pricing-item-picker>{{ t('ui.close') }}</button></div></div>
     <div class="field"><label for="pricing-item-picker-search">{{ t('ui.search') }}</label><input id="pricing-item-picker-search" type="search" placeholder="{{ t('ui.search.name.or.model') }}" autocomplete="off" data-pricing-item-picker-search></div>
     <div class="pricing-item-picker-grid" data-pricing-item-picker-grid>
-      {% for category_group in catalogue|groupby('category_name') %}
-      <section class="pricing-item-picker-category">
-        <h3>{{ category_group.grouper or t('ui.uncategorized') }}</h3>
+      <div class="pricing-category-folder-grid pricing-picker-folder-grid" data-pricing-picker-category-list>
+      {% for category in catalogue_tree %}
+        <button type="button" class="pricing-category-folder pricing-picker-folder" data-pricing-picker-category="quotation-picker-{{ category.key }}" data-category-label="{{ category.name or t('ui.uncategorized') }}">
+          <span class="pricing-category-folder-icon" aria-hidden="true"></span>
+          <span class="pricing-category-folder-copy"><strong>{{ category.name or t('ui.uncategorized') }}</strong><span>{{ category.item_count }} {{ t('ui.item') if category.item_count == 1 else t('ui.items.lowercase') }}</span></span>
+          <span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span>
+        </button>
+      {% endfor %}
+      </div>
+      {% for category in catalogue_tree %}
+      <section class="pricing-item-picker-category" id="quotation-picker-{{ category.key }}" data-pricing-picker-category-panel data-category-label="{{ category.name or t('ui.uncategorized') }}" hidden>
+        <h3>{{ category.name or t('ui.uncategorized') }}</h3>
+        {% if category.subcategories %}<div class="pricing-category-folder-grid pricing-subcategory-folder-grid pricing-picker-subfolders">
+          {% for subcategory in category.subcategories %}<button type="button" class="pricing-category-folder pricing-subcategory-folder pricing-picker-folder" data-pricing-picker-subcategory="quotation-picker-{{ subcategory.key }}" data-parent-panel="quotation-picker-{{ category.key }}" data-category-label="{{ subcategory.name }}"><span class="pricing-category-folder-icon" aria-hidden="true"></span><span class="pricing-category-folder-copy"><strong>{{ subcategory.name }}</strong><span>{{ subcategory["items"]|length }} {{ t('ui.item') if subcategory["items"]|length == 1 else t('ui.items.lowercase') }}</span></span><span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span></button>{% endfor %}
+        </div>{% endif %}
+        {% if category["items"] %}<div class="pricing-item-picker-category-grid pricing-picker-direct-items">
+        {% for item in category["items"] %}
+        <button type="button" class="pricing-item-picker-choice" data-pricing-picker-item data-item-id="{{ item.id }}" data-search-text="{{ (item.label ~ ' ' ~ item.category_name ~ ' ' ~ item.price ~ ' ' ~ item.currency)|lower }}">
+          {% if item.image_url %}<img src="{{ item.image_url }}" alt="">{% else %}<span class="pricing-item-picker-placeholder" aria-hidden="true">{{ item.label[:1] }}</span>{% endif %}
+          <span><strong>{{ item.label }}</strong><small>{{ item.price|money }} {{ item.currency }}</small></span>
+        </button>
+        {% endfor %}
+        </div>{% endif %}
+      </section>
+      {% for subcategory in category.subcategories %}
+      <section class="pricing-item-picker-category" id="quotation-picker-{{ subcategory.key }}" data-pricing-picker-subcategory-panel data-parent-panel="quotation-picker-{{ category.key }}" data-category-label="{{ subcategory.name }}" hidden>
+        <h3>{{ subcategory.name }}</h3>
         <div class="pricing-item-picker-category-grid">
-        {% for item in category_group.list %}
+        {% for item in subcategory["items"] %}
         <button type="button" class="pricing-item-picker-choice" data-pricing-picker-item data-item-id="{{ item.id }}" data-search-text="{{ (item.label ~ ' ' ~ item.category_name ~ ' ' ~ item.price ~ ' ' ~ item.currency)|lower }}">
           {% if item.image_url %}<img src="{{ item.image_url }}" alt="">{% else %}<span class="pricing-item-picker-placeholder" aria-hidden="true">{{ item.label[:1] }}</span>{% endif %}
           <span><strong>{{ item.label }}</strong><small>{{ item.price|money }} {{ item.currency }}</small></span>
@@ -84,6 +108,7 @@
         {% endfor %}
         </div>
       </section>
+      {% endfor %}
       {% endfor %}
     </div>
     <p class="hint" data-pricing-item-picker-empty hidden>{{ t('ui.no.matching.items') }}</p>

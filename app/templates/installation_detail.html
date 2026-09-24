@@ -27,7 +27,7 @@
   <div>
     {% if record.work_items %}
     {% for item in record.work_items %}
-    {% if loop.first or item.scope_position != loop.previtem.scope_position %}<div class="card site-section-banner"><div class="card-body"><span class="eyebrow">{{ t('ui.site') }} {{ (item.scope_position or 0) + 1 }}</span><h2>{{ item.project_name or record.customer_name }} → {{ item.sub_project_name or record.sub_project_name or 'General' }} → {{ item.work_site_name or record.site_name }}</h2>{% if user.can_access_pricing and (item.quotation_number or record.quotation_number) %}<span class="tag mono">{{ item.quotation_number or record.quotation_number }}</span>{% endif %}</div></div>{% endif %}
+    {% if loop.first or item.scope_position != loop.previtem.scope_position %}<div class="card site-section-banner"><div class="card-body"><span class="eyebrow">{{ t('ui.site') }} {{ (item.scope_position or 0) + 1 }}</span><h2>{{ item.project_name or record.customer_name }} → {{ item.sub_project_name or record.sub_project_name or 'General' }} → {{ item.work_site_name or record.site_name }}</h2>{% if can('quotations.view') and (item.quotation_number or record.quotation_number) %}<span class="tag mono">{{ item.quotation_number or record.quotation_number }}</span>{% endif %}</div></div>{% endif %}
     <div class="card">
       <div class="card-head"><h2>{{ t('ui.installation') }} {{ loop.index }} · {{ item.device_name }}</h2>{{ ui.result_badge(item.result) }}</div>
       <div class="card-body">
@@ -92,7 +92,7 @@
           <dt>{{ t('ui.site') }}</dt><dd>{{ record.site_name }}</dd>
           <dt>{{ t('ui.location') }}</dt><dd>{{ record.site_address or '—' }}</dd>
           <dt>{{ t('nav.management.devices') }}</dt><dd>{{ record.work_items|length if record.work_items else 1 + record.additional_devices|length }}</dd>
-          {% if user.can_access_pricing and record.quotation_number %}<dt>{{ t('ui.quotation.id') }}</dt><dd class="mono">{{ record.quotation_number }}</dd>{% endif %}
+          {% if can('quotations.view') and record.quotation_number %}<dt>{{ t('ui.quotation.id') }}</dt><dd class="mono">{{ record.quotation_number }}</dd>{% endif %}
           <dt>{{ t('ui.submitted.by') }}</dt><dd>{{ record.team_leader_name }}</dd>
           <dt>{{ t('ui.submitted') }}</dt><dd class="mono">{{ record.submitted_at | datetime }} ({{ display_tz_label }})</dd>
         </dl>
@@ -112,7 +112,6 @@
   </div>
 </div>
 
-{% include "partials/record_revisions.html" %}
 
 {% if record.photos or record.work_items %}
 <div class="lightbox" data-lightbox hidden role="dialog" aria-modal="true" aria-label="{{ t('ui.installation.photo.viewer') }}">

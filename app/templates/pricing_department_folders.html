@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}{{ t('pricing.departments.items.title') if kind == 'items' else t('pricing.departments.quotations.title') }}{% endblock %}
+{% block topbar_title %}{{ t('nav.pricing.items') if kind == 'items' else t('nav.pricing.quotations') }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">{{ t('nav.group.pricing') }}</span>
+    <h1>{{ t('pricing.departments.items.title') if kind == 'items' else t('pricing.departments.quotations.title') }}</h1>
+    <p class="lede">{{ t('pricing.departments.items.help') if kind == 'items' else t('pricing.departments.quotations.help') }}</p>
+  </div>
+  {% if user.is_admin %}<a class="btn btn-secondary" href="/departments">{{ t('pricing.departments.manage') }}</a>{% endif %}
+</div>
+
+<div class="workspace-card-grid pricing-department-grid">
+  {% for row in rows %}
+  <form method="post" action="/workspace" class="workspace-card-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="department_id" value="{{ row.department.id }}">
+    <input type="hidden" name="next_url" value="{{ next_url }}">
+    <button class="workspace-card pricing-department-card" type="submit">
+      <span class="workspace-card-icon" aria-hidden="true">{{ row.department.code[:2] }}</span>
+      <span class="workspace-card-content">
+        <strong>{{ row.department.name }}</strong>
+        <small>{{ row.department.code }}</small>
+        <span>{% if row.count is not none %}{{ row.count }} {{ t('pricing.departments.items.count') if kind == 'items' else t('pricing.departments.quotations.count') }}{% else %}{{ t('pricing.departments.open') }}{% endif %}</span>
+      </span>
+      <span class="pricing-department-arrow" aria-hidden="true">&#8250;</span>
+    </button>
+  </form>
+  {% else %}
+  <div class="empty-state"><h2>{{ t('pricing.departments.none') }}</h2></div>
+  {% endfor %}
+</div>
+{% endblock %}

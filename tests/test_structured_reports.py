@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from openpyxl import load_workbook
 from pypdf import PdfReader
@@ -237,6 +237,10 @@ def test_saved_installation_report_has_fixed_creator_and_customer_scope(client, 
     assert report.record_links[0].installation_record_id == record_id
     assert report.record_links[0].sub_project_name == "General"
 
+    report.created_at = datetime(2026, 8, 17, 7, 15)
+    db.get(InstallationRecord, record_id).submitted_at = datetime(2026, 8, 17, 8, 30)
+    db.commit()
+
     detail = client.get(response.headers["location"])
     assert detail.status_code == 200
     assert "Gate camera commissioning" in detail.text
@@ -245,8 +249,33 @@ def test_saved_installation_report_has_fixed_creator_and_customer_scope(client, 
     assert pdf.status_code == 200
     assert pdf.headers["content-type"].startswith("application/pdf")
     assert pdf.content.startswith(b"%PDF")
-    pdf_pages = [page.extract_text() or "" for page in PdfReader(io.BytesIO(pdf.content)).pages]
+    pdf_reader = PdfReader(io.BytesIO(pdf.content))
+    pdf_pages = [page.extract_text() or "" for page in pdf_reader.pages]
     pdf_text = "\n".join(pdf_pages)
+    assert "TABLE OF CONTENTS" in pdf_text
+    assert "RECORD & DEVICE INDEX" in pdf_text
+    assert "EXECUTIVE SUMMARY" in pdf_pages[0]
+    assert "No items require attention." in pdf_pages[0]
+    assert "Technicians" not in pdf_pages[0]
+    assert "Confidential | Page 1" in pdf_pages[0]
+    record_number = db.get(InstallationRecord, record_id).record_number
+    assert f"Record {record_number} | Camera Service" in pdf_text
+    assert "IP Camera" in pdf_text
+    outline_text = str(pdf_reader.outline)
+    assert "Report Information" in outline_text
+    assert "Record & Device Index" in outline_text
+    assert "Main Project | Tower A" in outline_text
+    assert "Sub Project | General" in outline_text
+    assert "Site | Gate 1" in outline_text
+    assert f"Record {record_number} | Camera Service" in outline_text
+    assert "Approvals" in outline_text
+    assert any(
+        annotation.get_object().get("/Subtype") == "/Link"
+        for page in pdf_reader.pages
+        for annotation in (page.get("/Annots") or [])
+    )
+    assert "2026-08-17 10:15" in pdf_text
+    assert "Performed by Leader One on 2026-08-17 11:30" in pdf_text
     assert "installation.jpg" not in pdf_text
     assert "Installation notes" in pdf_text
     assert "Mounted, connected, configured and commissioned the equipment." in pdf_text
@@ -256,7 +285,10 @@ def test_saved_installation_report_has_fixed_creator_and_customer_scope(client, 
     assert "Customer Representative" in pdf_text
     assert "Afaqy Representative" in pdf_text
     assert "Project Manager" in pdf_text
-    assert pdf_text.count("Signature & Stamp") == 3
+    assert pdf_text.count("Name:") == 3
+    assert pdf_text.count("Job title:") == 3
+    assert pdf_text.count("Signature:") == 3
+    assert pdf_text.count("Date:") >= 3
     detail_page = next(index for index, text in enumerate(pdf_pages) if "Installation notes" in text)
     evidence_page = next(index for index, text in enumerate(pdf_pages) if "Before Installation" in text)
     assert evidence_page > detail_page
@@ -271,6 +303,62 @@ def test_saved_installation_report_has_fixed_creator_and_customer_scope(client, 
     logout(client)
     login(client, *CUSTOMER_B)
     assert client.get(f"/reports/installation/{report.id}").status_code == 404
+
+
+def test_admin_can_open_isolated_report_redesign_preview_without_changing_official_pdf(client, db):
+    login(client, *LEADER_A)
+    assert submit_installation(
+        client,
+        serial_number="DESIGN-PREVIEW-001",
+        photos=[
+            ("before_photos_0", ("issue.jpg", make_image((120, 30, 30)), "image/jpeg")),
+        ],
+        before_photo_descriptions_0="Damaged cable beside the camera.",
+        before_photo_issue_found_0_0="1",
+    ).status_code == 303
+    record_id = _record_id(db)
+    created = client.post(
+        "/reports/installation",
+        data=_report_payload(client, record_id),
+    )
+    assert created.status_code == 303
+    report = db.query(ServiceReport).one()
+    detail_url = f"/reports/installation/{report.id}"
+    preview_url = f"{detail_url}/preview-redesign"
+
+    technical_detail = client.get(detail_url)
+    assert preview_url not in technical_detail.text
+    assert client.get(preview_url).status_code == 403
+
+    logout(client)
+    login(client, *ADMIN)
+    admin_detail = client.get(detail_url)
+    assert preview_url in admin_detail.text
+
+    official = client.get(f"{detail_url}/pdf")
+    preview = client.get(preview_url)
+    assert official.status_code == 200
+    assert preview.status_code == 200
+    assert preview.headers["content-disposition"].startswith("inline;")
+    assert "design-preview-part-1.pdf" in preview.headers["content-disposition"]
+
+    official_text = "\n".join(
+        page.extract_text() or ""
+        for page in PdfReader(io.BytesIO(official.content)).pages
+    )
+    preview_reader = PdfReader(io.BytesIO(preview.content))
+    preview_pages = [page.extract_text() or "" for page in preview_reader.pages]
+    preview_text = "\n".join(preview_pages)
+    assert len(preview_pages) == 3
+    assert "TABLE OF CONTENTS" in official_text
+    assert "DESIGN PREVIEW - NOT FINAL" not in official_text
+    assert "PART 1 PREVIEW" in preview_pages[0]
+    assert "EXECUTIVE SUMMARY" in preview_pages[1]
+    assert "MAIN PROJECT OVERVIEW" in preview_pages[1]
+    assert "PHOTO ISSUES SUMMARY" in preview_pages[2]
+    assert "Damaged cable beside the camera." in preview_pages[2]
+    assert "Before" in preview_pages[2]
+    assert "DESIGN PREVIEW - NOT FINAL" in preview_text
 
 
 def test_entry_excel_download_preview_and_installation_asset_creation(client, db):
@@ -408,14 +496,18 @@ def test_report_includes_browser_entered_site_table(client, db):
         f"/reports/installation/{report.id}/pdf?include_device_data=true"
     )
     assert response.status_code == 200
+    reader = PdfReader(io.BytesIO(response.content))
     text = "\n".join(
         page.extract_text() or ""
-        for page in PdfReader(io.BytesIO(response.content)).pages
+        for page in reader.pages
     )
     assert "SERVICE DATA TABLES" in text
     assert "Entrance Camera" in text
     assert "TABLE-SN-001" in text
     assert "SITE | Gate 1" in text
+    outline_text = str(reader.outline)
+    assert "Service Data Tables" in outline_text
+    assert "Site Table | Tower A > General > Gate 1" in outline_text
 
 
 def test_installation_photo_descriptions_and_order_are_saved(client, db):
@@ -522,10 +614,16 @@ def test_saved_report_workflow_is_shared_by_both_maintenance_types(client, db):
         page.extract_text() or ""
         for page in PdfReader(io.BytesIO(maintenance_pdf.content)).pages
     )
+    assert "ITEMS REQUIRING ATTENTION" in preventive_text
+    assert "ITEMS REQUIRING ATTENTION" in maintenance_text
     for label in ("Issue found", "Recommendations"):
         assert label in preventive_text
         assert label in maintenance_text
-    for label in ("Maintenance notes", "Model", "Serial number"):
+    assert "Maintenance notes" in preventive_text
+    assert "Maintenance notes" in maintenance_text
+    assert "Preventive notes for PDF." in preventive_text
+    assert "Completed corrective maintenance." in maintenance_text
+    for label in ("Model", "Serial number"):
         assert label not in preventive_text
         assert label not in maintenance_text
     assert "Preventive issue for PDF." in preventive_text
@@ -534,21 +632,31 @@ def test_saved_report_workflow_is_shared_by_both_maintenance_types(client, db):
     assert "Corrective recommendation for PDF." in maintenance_text
 
 
-def test_multi_device_pdf_keeps_each_device_with_its_own_evidence(client, db):
-    second = InstalledDevice(
-        site_id=1,
-        device_id=1,
-        customer_name="Tower A",
-        site_name="Gate 1",
-        device_name="Gate Barrier",
-        manufacturer="Barrier Co",
-        device_model="GB-200",
-        serial_number="MULTI-PDF-002",
+def test_saved_maintenance_report_omits_blank_optional_narrative_rows(client, db):
+    login(client, *LEADER_A)
+    assert submit_record(
+        client, notes="", issue_description="", recommendations=""
+    ).status_code == 303
+    record = db.query(MaintenanceRecord).one()
+    response = client.post(
+        "/reports/preventive-maintenance",
+        data={**_report_payload(client, record.id), "name": "Blank optional fields"},
     )
-    second.work_site_evidence = InstalledDeviceSite(site_id=1, site_name="Gate 1")
-    db.add(second)
-    db.commit()
+    assert response.status_code == 303
+    db.expire_all()
+    report = db.query(ServiceReport).one()
 
+    pdf = client.get(f"/reports/preventive-maintenance/{report.id}/pdf")
+    text = "\n".join(
+        page.extract_text() or ""
+        for page in PdfReader(io.BytesIO(pdf.content)).pages
+    )
+    assert "Issue found" not in text
+    assert "Recommendations" not in text
+    assert "Maintenance notes" not in text
+
+
+def test_multi_service_pdf_keeps_each_service_with_its_own_evidence(client, db):
     login(client, *LEADER_A)
     page = client.get("/general-maintenance")
     response = client.post(
@@ -559,7 +667,7 @@ def test_multi_device_pdf_keeps_each_device_with_its_own_evidence(client, db):
             "project_id": "1",
             "work_site_id": "1",
             "service_type_id": ["1", "1"],
-            "installed_device_id": ["1", str(second.id)],
+            "item_scope_index": ["0", "0"],
             "result_0": "completed_successfully",
             "result_1": "completed_successfully",
             "notes": ["First device notes.", "Second device notes."],
@@ -588,7 +696,7 @@ def test_multi_device_pdf_keeps_each_device_with_its_own_evidence(client, db):
     first_evidence = next(
         index
         for index, text in enumerate(pages)
-        if index > first_detail and "PHOTO EVIDENCE" in text and "IP Camera" in text
+        if index > first_detail and "PHOTO EVIDENCE" in text and "Camera Service" in text
     )
     first_after = next(
         index for index, text in enumerate(pages) if index >= first_evidence and "After Maintenance" in text
@@ -597,7 +705,7 @@ def test_multi_device_pdf_keeps_each_device_with_its_own_evidence(client, db):
     second_evidence = next(
         index
         for index, text in enumerate(pages)
-        if index > second_detail and "PHOTO EVIDENCE" in text and "Gate Barrier" in text
+        if index > second_detail and "PHOTO EVIDENCE" in text and "Camera Service" in text
     )
     second_after = next(
         index for index, text in enumerate(pages) if index >= second_evidence and "After Maintenance" in text
@@ -608,13 +716,14 @@ def test_multi_device_pdf_keeps_each_device_with_its_own_evidence(client, db):
     assert "First device notes." not in pages[second_detail]
     assert f"Record {record.record_number}" in pages[first_detail]
     assert f"Record {record.record_number}" in pages[second_detail]
-    assert sum(text.count(f"Record {record.record_number}") for text in pages) == 2
+    # One occurrence per service detail, plus the clickable contents entry.
+    assert sum(text.count(f"Record {record.record_number}") for text in pages) == 3
     assert "MAIN PROJECT" in pages[first_detail]
     assert "SUB PROJECT" in pages[first_detail]
     assert "SITE" in pages[first_detail]
 
 
-def test_preventive_excel_requires_confirmation_before_replacing_asset_values(client, db):
+def test_preventive_browser_table_does_not_mutate_installed_assets(client, db):
     general = SubProject(project_id=1, name="General")
     general.site_assignments = [SubProjectSite(site_id=1)]
     asset = db.get(InstalledDevice, 1)
@@ -623,48 +732,26 @@ def test_preventive_excel_requires_confirmation_before_replacing_asset_values(cl
     db.add(general)
     db.commit()
     login(client, *LEADER_A)
-    csrf = csrf_of(client, "/maintenance/submit")
-    preview = client.post(
-        "/data-entry/preventive-maintenance/device-import-preview",
-        data={
-            "csrf_token": csrf,
-            "project_id": "1",
-            "sub_project_id": str(general.id),
-            "work_site_id": "1",
-        },
-        files={"device_file": ("completed.xlsx", _device_workbook(db, serial="BASE-SN-001", remarks="Updated remarks"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
-    assert preview.status_code == 200
-    payload = preview.json()
-    assert payload["has_asset_conflicts"] is True
-
-    rejected = submit_record(
-        client,
-        installed_device_id="catalog:1",
-        sub_project_id=str(general.id),
-        device_import_token=payload["token"],
-    )
-    assert rejected.status_code == 422
     accepted = submit_record(
         client,
-        installed_device_id="catalog:1",
         sub_project_id=str(general.id),
-        device_import_token=payload["token"],
-        confirm_asset_overwrites="1",
+        data_scope_index="0",
+        data_item_name="Camera cleaning",
+        data_quantity="2",
+        data_notes="Updated remarks",
     )
     assert accepted.status_code == 303
     db.expire_all()
     asset = db.get(InstalledDevice, 1)
     assert asset.phone_number == "0500000000"
-    assert asset.remarks == "Updated remarks"
-    item = db.query(MaintenanceRecord).one().work_items[0]
-    assert item.installed_device_id == asset.id
-    assert item.imei == "490154203237518"
-    assert item.iccid == "899660123456789012"
-    assert item.imported_from_excel is True
+    assert asset.remarks == "Old remarks"
+    record = db.query(MaintenanceRecord).one()
+    assert record.work_items[0].installed_device_id is None
+    assert record.device_data_rows[0].item_name == "Camera cleaning"
+    assert record.device_data_rows[0].quantity == 2
 
 
-def test_normal_maintenance_excel_stores_unmatched_device_snapshot(client, db):
+def test_normal_maintenance_browser_table_stores_service_rows_without_item_link(client, db):
     general = SubProject(project_id=1, name="General")
     general.site_assignments = [SubProjectSite(site_id=1)]
     db.add(general)
@@ -673,13 +760,6 @@ def test_normal_maintenance_excel_stores_unmatched_device_snapshot(client, db):
     page = client.get("/general-maintenance")
     csrf = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
     form_token = re.search(r'name="form_token" value="([^"]+)"', page.text).group(1)
-    preview = client.post(
-        "/data-entry/maintenance/device-import-preview",
-        data={"csrf_token": csrf, "project_id": "1", "sub_project_id": str(general.id), "work_site_id": "1"},
-        files={"device_file": ("completed.xlsx", _device_workbook(db, serial="MAINT-SNAPSHOT-001"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
-    assert preview.status_code == 200
-    import_payload = preview.json()
     response = client.post(
         "/general-maintenance/submit",
         data={
@@ -687,24 +767,23 @@ def test_normal_maintenance_excel_stores_unmatched_device_snapshot(client, db):
             "form_token": form_token,
             "project_id": "1",
             "sub_project_id": str(general.id),
-            "quotation_number": ensure_service_quotation("1"),
             "work_site_id": "1",
             "service_type_id": "1",
-            "installed_device_id": "catalog:1",
             "result_0": "completed_successfully",
             "notes": "Completed normal maintenance.",
-            "device_import_token": import_payload["token"],
+            "data_scope_index": "0",
+            "data_item_name": "Barrier service",
+            "data_quantity": "3",
+            "data_notes": "Completed normal maintenance.",
         },
         files={"photos_0": ("proof.jpg", make_image(), "image/jpeg")},
     )
     assert response.status_code == 303
     db.expire_all()
-    item = db.query(GeneralMaintenanceRecord).one().work_items[0]
-    assert item.serial_number == "MAINT-SNAPSHOT-001"
-    assert item.installed_device_id is None
-    assert item.sim_type == "stc"
-    assert item.location_name == "Gate 1"
-    assert item.imported_from_excel is True
+    record = db.query(GeneralMaintenanceRecord).one()
+    assert record.work_items[0].installed_device_id is None
+    assert record.device_data_rows[0].item_name == "Barrier service"
+    assert record.device_data_rows[0].quantity == 3
 
 
 def test_one_installation_submission_keeps_cross_project_sites_under_one_record(client, db):
@@ -718,23 +797,6 @@ def test_one_installation_submission_keeps_cross_project_sites_under_one_record(
     page = client.get("/installations/submit")
     csrf = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
     form_token = re.search(r'name="form_token" value="([^"]+)"', page.text).group(1)
-    import_tokens = []
-    for project_id, sub_project_id, site_id, serial, imei, iccid in (
-        ("1", str(first_sub.id), "1", "BATCH-INSTALL-001", "111111111111111", "111111111111111111"),
-        ("3", str(second_sub.id), "2", "BATCH-INSTALL-002", "222222222222222", "222222222222222222"),
-    ):
-        preview = client.post(
-            "/data-entry/installation/device-import-preview",
-            data={
-                "csrf_token": csrf,
-                "project_id": project_id,
-                "sub_project_id": sub_project_id,
-                "work_site_id": site_id,
-            },
-                files={"device_file": ("completed.xlsx", _device_workbook(db, serial=serial, imei=imei, iccid=iccid), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-        )
-        assert preview.status_code == 200
-        import_tokens.append(preview.json()["token"])
     response = client.post(
         "/installations/submit",
         data={
@@ -753,7 +815,14 @@ def test_one_installation_submission_keeps_cross_project_sites_under_one_record(
             "result_1": "completed_successfully",
             "notes": ["First site installation.", "Second site installation."],
             "handover_notes": ["", ""],
-            "device_import_token": import_tokens,
+            "data_scope_index": ["0", "1"],
+            "data_item_name": ["Entrance camera", "Gate camera"],
+            "data_model": ["P3265-LV", "P3265-LV"],
+            "data_serial_number": ["BATCH-INSTALL-001", "BATCH-INSTALL-002"],
+            "data_imei": ["111111111111111", "222222222222222"],
+            "data_iccid": ["111111111111111111", "222222222222222222"],
+            "data_sim_type": ["STC", "Zain"],
+            "data_remarks": ["First site", "Second site"],
         },
         files=[
             ("photos_0", ("first.jpg", make_image(), "image/jpeg")),
@@ -772,7 +841,7 @@ def test_one_installation_submission_keeps_cross_project_sites_under_one_record(
         (3, second_sub.id, 2),
     ]
     assert [item.scope_position for item in record.work_items] == [0, 1]
-    assert all(item.imported_from_excel for item in record.work_items)
+    assert [row.scope_position for row in record.device_data_rows] == [0, 1]
     assert all(len(item.photos) == 1 for item in record.work_items)
     report_response = client.post(
         "/reports/installation",
@@ -787,7 +856,10 @@ def test_one_installation_submission_keeps_cross_project_sites_under_one_record(
     report = db.query(ServiceReport).one()
     pdf = client.get(f"/reports/installation/{report.id}/pdf?include_device_data=true")
     pdf_text = "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(pdf.content)).pages)
-    assert pdf_text.count("Device Data") == 2
+    assert pdf_text.count("SITE |") >= 2
+    assert "SERVICE DATA TABLES" in pdf_text
+    assert "Entrance camera" in pdf_text
+    assert "Gate camera" in pdf_text
     assert "Tower A" in pdf_text
     assert "Tower B" in pdf_text
 

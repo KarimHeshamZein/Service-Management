@@ -50,12 +50,18 @@ def _photo_view(photo: Any) -> dict[str, str | None]:
         "original_filename": photo.original_filename,
         "stage": stage.value if stage is not None else "legacy",
         "description": getattr(photo, "description", None),
+        "is_issue_found": bool(getattr(photo, "is_issue_found", False)),
         "position": getattr(photo, "position", 0),
     }
 
 
 def _device_label(name: str, model: str, serial: str) -> str:
-    return f"{name} - {model} | {serial}"
+    label = name or "-"
+    if model:
+        label = f"{label} - {model}"
+    if serial:
+        label = f"{label} | {serial}"
+    return label
 
 
 def _device_data(item: Any, *, location_fallback: str = "") -> dict[str, Any]:
@@ -269,8 +275,13 @@ def _common_conditions(
     project_id: int | None = None,
 ) -> list[Any]:
     conditions: list[Any] = []
-    if user.is_customer:
-        conditions.append(model.site_id.in_(user.assigned_project_ids))
+    if not user.is_admin:
+        conditions.append(
+            or_(
+                model.submitted_by_id == user.id,
+                model.site_id.in_(user.assigned_project_ids),
+            )
+        )
     if technician_id is not None:
         conditions.append(
             or_(
@@ -292,12 +303,15 @@ def _maintenance_conditions(user: User, q: str, **extra) -> list[Any]:
         user,
         **extra,
     )
-    if user.is_customer:
+    if not user.is_admin:
         conditions.append(
-            ~MaintenanceRecord.work_items.any(
-                and_(
-                    MaintenanceRecordItem.project_id.is_not(None),
-                    MaintenanceRecordItem.project_id.notin_(user.assigned_project_ids),
+            or_(
+                MaintenanceRecord.submitted_by_id == user.id,
+                ~MaintenanceRecord.work_items.any(
+                    and_(
+                        MaintenanceRecordItem.project_id.is_not(None),
+                        MaintenanceRecordItem.project_id.notin_(user.assigned_project_ids),
+                    )
                 )
             )
         )
@@ -356,12 +370,15 @@ def _installation_conditions(user: User, q: str, **extra) -> list[Any]:
         user,
         **extra,
     )
-    if user.is_customer:
+    if not user.is_admin:
         conditions.append(
-            ~InstallationRecord.work_items.any(
-                and_(
-                    InstallationRecordItem.project_id.is_not(None),
-                    InstallationRecordItem.project_id.notin_(user.assigned_project_ids),
+            or_(
+                InstallationRecord.submitted_by_id == user.id,
+                ~InstallationRecord.work_items.any(
+                    and_(
+                        InstallationRecordItem.project_id.is_not(None),
+                        InstallationRecordItem.project_id.notin_(user.assigned_project_ids),
+                    )
                 )
             )
         )
@@ -425,12 +442,15 @@ def _general_conditions(user: User, q: str, **extra) -> list[Any]:
         user,
         **extra,
     )
-    if user.is_customer:
+    if not user.is_admin:
         conditions.append(
-            ~GeneralMaintenanceRecord.work_items.any(
-                and_(
-                    GeneralMaintenanceItem.project_id.is_not(None),
-                    GeneralMaintenanceItem.project_id.notin_(user.assigned_project_ids),
+            or_(
+                GeneralMaintenanceRecord.submitted_by_id == user.id,
+                ~GeneralMaintenanceRecord.work_items.any(
+                    and_(
+                        GeneralMaintenanceItem.project_id.is_not(None),
+                        GeneralMaintenanceItem.project_id.notin_(user.assigned_project_ids),
+                    )
                 )
             )
         )

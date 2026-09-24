@@ -2,7 +2,7 @@ import io
 
 from pypdf import PdfReader
 
-from app.models import InstallationRecord, MaintenanceRecord
+from app.models import InstallationRecord, MaintenanceRecord, User, UserDepartmentPermission
 from tests.conftest import (
     CUSTOMER_A,
     ADMIN,
@@ -110,6 +110,26 @@ def test_pdf_labels_before_and_after_evidence(client):
     assert "After:" in text
 
 
+def test_filtered_maintenance_pdf_omits_blank_optional_narrative_rows(client, db):
+    login(client, *LEADER_A)
+    response = submit_record(
+        client,
+        notes="",
+        issue_description="",
+        recommendations="",
+    )
+    assert response.status_code == 303
+    record = db.query(MaintenanceRecord).one()
+
+    pdf = client.get(f"/reports/pdf?q={record.record_number}")
+
+    assert pdf.status_code == 200
+    text = _pdf_text(pdf)
+    assert "Issue found" not in text
+    assert "Recommendations" not in text
+    assert "Maintenance notes" not in text
+
+
 def test_report_pdf_embeds_an_arabic_font_for_user_entered_text(client):
     login(client, *LEADER_A)
     submit_installation(
@@ -124,6 +144,11 @@ def test_report_pdf_embeds_an_arabic_font_for_user_entered_text(client):
 
 
 def test_quotation_id_is_only_in_pdf_when_authorized_and_selected(client, db):
+    leader = db.query(User).filter(User.username == LEADER_A[0]).one()
+    permission = db.get(UserDepartmentPermission, (leader.id, 1, "quotations.view"))
+    assert permission is not None
+    permission.allowed = False
+    db.commit()
     login(client, *LEADER_A)
     submit_installation(client, serial_number="QUOTATION-PDF-CHECK")
     quotation_number = db.query(InstallationRecord).one().quotation_number

@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import settings
+from ..access_control import accessible_project_ids, require_permission
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_record_submitter
 from ..helpers import entity_id, flash, parse_date, render, to_display, to_utc_from_display
@@ -32,6 +33,7 @@ from ..participant_selection import technical_user_choices, validate_participant
 from ..record_views import load_record_views
 from ..security import csrf_valid
 from ..structured_report_pdf import build_structured_report_pdf
+from ..structured_report_preview_pdf import build_structured_report_preview_pdf
 
 
 router = APIRouter()
@@ -447,13 +449,24 @@ def _reports_for_user(db: Session, user: User, report_type: ServiceReportType) -
             .order_by(ServiceReport.created_at.desc(), ServiceReport.id.desc())
         )
     )
-    if user.is_customer:
-        allowed = user.assigned_project_ids
+    if not user.is_admin:
+        allowed = accessible_project_ids(db, user, capability="can_view_reports") or set()
         reports = [
             report
             for report in reports
-            if report.record_links
-            and {link.main_project_id for link in report.record_links} <= allowed
+            if report.created_by_id == user.id
+            or (
+                report.record_links
+                and {link.main_project_id for link in report.record_links} <= allowed
+            )
+            or (
+                report.record_links
+                and all(
+                    (link.installation_record or link.maintenance_record or link.preventive_record).submitted_by_id
+                    == user.id
+                    for link in report.record_links
+                )
+            )
         ]
     return reports
 
@@ -472,11 +485,19 @@ def _load_report(db: Session, user: User, report_id: int, config: dict[str, Any]
     )
     if report is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found.")
-    if user.is_customer and not {
-        link.main_project_id for link in report.record_links
-    } <= user.assigned_project_ids:
+    owns_source_records = bool(report.record_links) and all(
+        (link.installation_record or link.maintenance_record or link.preventive_record).submitted_by_id == user.id
+        for link in report.record_links
+    )
+    if (
+        not user.is_admin
+        and report.created_by_id != user.id
+        and not owns_source_records
+        and not {link.main_project_id for link in report.record_links}
+        <= (accessible_project_ids(db, user, capability="can_view_reports") or set())
+    ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found.")
-    if user.is_customer:
+    if not user.is_admin:
         linked_ids = {
             value
             for link in report.record_links
@@ -523,6 +544,8 @@ def report_list(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if not user.is_customer:
+        require_permission(request, db, user, "reports.view")
     config = _config(report_slug)
     return render(
         request,
@@ -543,6 +566,7 @@ def new_report(
     user: User = Depends(require_record_submitter),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "reports.create")
     return render(
         request,
         "structured_report_form.html",
@@ -557,6 +581,7 @@ async def create_report(
     user: User = Depends(require_record_submitter),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "reports.create")
     config = _config(report_slug)
     form = await request.form()
     request.state.submitted_form = form
@@ -639,6 +664,8 @@ def report_detail(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if not user.is_customer:
+        require_permission(request, db, user, "reports.view")
     config = _config(report_slug)
     report = _load_report(db, user, report_id, config)
     report_records = [
@@ -672,17 +699,15 @@ def report_detail(
     )
 
 
-@router.post(
-    "/reports/{report_slug}/{report_id}/delete",
-    dependencies=[Depends(require_admin)],
-)
+@router.post("/reports/{report_slug}/{report_id}/delete")
 async def delete_report(
     report_slug: str,
     report_id: int,
     request: Request,
-    user: User = Depends(require_admin),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "reports.delete")
     config = _config(report_slug)
     form = await request.form()
     if not csrf_valid(request, form.get("csrf_token")):
@@ -735,6 +760,8 @@ def report_preview(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if not user.is_customer:
+        require_permission(request, db, user, "reports.download")
     config = _config(report_slug)
     report = _load_report(db, user, report_id, config)
     return _pdf_response(
@@ -747,6 +774,37 @@ def report_preview(
     )
 
 
+@router.get(
+    "/reports/{report_slug}/{report_id}/preview-redesign",
+    dependencies=[Depends(require_admin)],
+)
+def report_redesign_preview(
+    report_slug: str,
+    report_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Render the isolated design prototype without changing the official PDF."""
+    config = _config(report_slug)
+    report = _load_report(db, user, report_id, config)
+    content = build_structured_report_preview_pdf(
+        report,
+        _report_record_views(db, user, report, config),
+    )
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="{report.report_number}-design-preview-part-1.pdf"'
+            ),
+            "Cache-Control": "no-store",
+            "X-Robots-Tag": "noindex, noarchive",
+        },
+    )
+
+
 @router.get("/reports/{report_slug}/{report_id}/pdf")
 def report_pdf(
     report_slug: str,
@@ -756,6 +814,8 @@ def report_pdf(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if not user.is_customer:
+        require_permission(request, db, user, "reports.download")
     config = _config(report_slug)
     report = _load_report(db, user, report_id, config)
     return _pdf_response(

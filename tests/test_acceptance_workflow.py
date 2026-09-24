@@ -59,12 +59,28 @@ def test_full_acceptance_workflow(client, db):
             "username": "omar@acceptance.local",
             "password": "Onsite@2026",
             "role": "technical",
+            "department_ids": "1",
             "phone": "+966 55 402 8811",
             "csrf_token": admin_token,
         },
     ).status_code == 303
     leader = db.query(User).filter(User.username == "omar@acceptance.local").one()
     assert leader.password_hash.startswith("$2")
+
+    access_token = csrf_of(client, f"/users/{leader.id}/access")
+    assert client.post(
+        f"/users/{leader.id}/access",
+        data={
+            "department_id": "1",
+            "primary_department_id": "1",
+            "project:1": str(site.id),
+            "permission:1:dashboard.view": "1",
+            "permission:1:records.create_preventive": "1",
+            "permission:1:records.edit": "1",
+            "scope:1:records": "selected",
+            "csrf_token": access_token,
+        },
+    ).status_code == 303
 
     client.post("/logout", data={"csrf_token": admin_token})
 
@@ -144,7 +160,8 @@ def test_full_acceptance_workflow(client, db):
     assert record.record_number in history.text
 
     leader_dashboard = client.get("/dashboard").text
-    assert "All submitted field-service evidence" in leader_dashboard
+    assert "Your recent submissions" in leader_dashboard
+    assert record.record_number in leader_dashboard
 
     logout(client)
 

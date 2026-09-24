@@ -10,11 +10,14 @@ from ..deps import get_current_user, require_dashboard_access
 from ..helpers import display_today_bounds, render
 from ..models import (
     GeneralMaintenancePhoto,
+    GeneralMaintenanceItem,
     GeneralMaintenanceRecord,
     InstallationItemPhoto,
+    InstallationRecordItem,
     InstallationPhoto,
     InstallationRecord,
     MaintenanceItemPhoto,
+    MaintenanceRecordItem,
     MaintenancePhoto,
     MaintenanceRecord,
     MaintenanceResult,
@@ -38,9 +41,15 @@ PHOTO_MODELS = (
 )
 
 
-def _result_counts(db: Session) -> dict[str, int]:
+def _result_counts(db: Session, user: User) -> dict[str, int]:
+    project_ids = user.assigned_project_ids
     combined = union_all(
-        *(select(model.result.label("result")) for model in RECORD_MODELS)
+        *(
+            select(model.result.label("result")).where(model.site_id.in_(project_ids))
+            if not user.is_admin
+            else select(model.result.label("result"))
+            for model in RECORD_MODELS
+        )
     ).subquery()
     stmt = select(combined.c.result, func.count()).group_by(combined.c.result)
     raw = {row[0]: row[1] for row in db.execute(stmt).all()}
@@ -73,11 +82,18 @@ def _grouped(db: Session, column_name: str) -> list[tuple[str, int]]:
     return [(row[0], int(row[1])) for row in db.execute(stmt).all()]
 
 
-def _photo_total(db: Session) -> int:
-    return sum(
-        int(db.scalar(select(func.count(model.id))) or 0)
-        for model in PHOTO_MODELS
+def _photo_total(db: Session, user: User) -> int:
+    if user.is_admin:
+        return sum(int(db.scalar(select(func.count(model.id))) or 0) for model in PHOTO_MODELS)
+    project_ids = user.assigned_project_ids
+    statements = (
+        select(func.count(MaintenancePhoto.id)).join(MaintenanceRecord).where(MaintenanceRecord.site_id.in_(project_ids)),
+        select(func.count(MaintenanceItemPhoto.id)).join(MaintenanceRecordItem).join(MaintenanceRecord).where(MaintenanceRecord.site_id.in_(project_ids)),
+        select(func.count(InstallationPhoto.id)).join(InstallationRecord).where(InstallationRecord.site_id.in_(project_ids)),
+        select(func.count(InstallationItemPhoto.id)).join(InstallationRecordItem).join(InstallationRecord).where(InstallationRecord.site_id.in_(project_ids)),
+        select(func.count(GeneralMaintenancePhoto.id)).join(GeneralMaintenanceItem).join(GeneralMaintenanceRecord).where(GeneralMaintenanceRecord.site_id.in_(project_ids)),
     )
+    return sum(int(db.scalar(statement) or 0) for statement in statements)
 
 
 @router.get("/")
@@ -103,8 +119,8 @@ def dashboard(
         end_before=day_end,
     )
 
-    counts = _result_counts(db)
-    photo_total = _photo_total(db)
+    counts = _result_counts(db, user)
+    photo_total = _photo_total(db, user)
 
     context = {
         "active_nav": "dashboard",

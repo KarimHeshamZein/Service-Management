@@ -26,6 +26,7 @@ from app.models import (
     PricingRelatedItem,
     PricingSettings,
     User,
+    UserDepartmentPermission,
 )
 from app.pricing import quotation_totals
 from app.quotation_planner import validate_installation_plan_state
@@ -259,6 +260,10 @@ def test_quotation_add_item_control_opens_catalogue_picker_at_end(client, db):
     assert page.status_code == 200
     assert 'data-pricing-item-picker' in page.text
     assert 'data-pricing-item-picker-search' in page.text
+    assert 'data-pricing-picker-category-list' in page.text
+    assert 'data-pricing-picker-category="quotation-picker-uncategorized"' in page.text
+    assert 'data-pricing-picker-category-panel' in page.text
+    assert 'data-pricing-picker-back' in page.text
     assert 'data-choose-pricing-item' in page.text
     assert f'data-item-id="{camera.id}"' in page.text
     assert f'data-item-id="{recorder.id}"' in page.text
@@ -271,6 +276,10 @@ def test_quotation_add_item_control_opens_catalogue_picker_at_end(client, db):
     assert page.text.index('data-pricing-lines') < page.text.index(
         'class="pricing-add-line-footer"'
     )
+    script = client.get("/static/js/app.js")
+    assert script.status_code == 200
+    assert "showPricingPickerCategories()" in script.text
+    assert "showPricingPickerCategory(folder.dataset.pricingPickerCategory" in script.text
 
 
 def test_quotation_quantity_steppers_use_whole_units_without_changing_prices(client, db):
@@ -697,30 +706,25 @@ def test_pricing_pages_are_protected_and_admin_pages_render(client):
 
 
 def test_pricing_permission_is_configurable_for_technical_users(client, db):
+    target = db.query(User).filter(User.username == LEADER_A[0]).one()
+    for permission_key in ("pricing_items.view", "quotations.view"):
+        db.get(UserDepartmentPermission, (target.id, 1, permission_key)).allowed = False
+    db.commit()
     login(client, *LEADER_A)
     assert client.get("/pricing/items").status_code == 403
-    assert 'data-nav-section="pricing"' not in client.get("/dashboard").text
+    denied_nav = client.get("/dashboard").text
+    assert 'href="/pricing/items"' not in denied_nav
+    assert 'href="/pricing/quotations"' not in denied_nav
 
     logout(client)
-    login(client, *ADMIN)
-    target = db.query(User).filter(User.username == LEADER_A[0]).one()
-    token = csrf_of(client, "/users")
-    response = client.post(
-        f"/users/{target.id}/edit",
-        data={
-            "csrf_token": token,
-            "full_name": target.full_name,
-            "username": target.username,
-            "role": "technical",
-            "pricing_access": "1",
-            "phone": "",
-        },
-    )
-    assert response.status_code == 303
-    db.refresh(target)
-    assert target.pricing_access is True
+    for override in db.query(UserDepartmentPermission).filter(
+        UserDepartmentPermission.user_id == target.id,
+        UserDepartmentPermission.department_id == 1,
+        UserDepartmentPermission.permission_key.in_(["pricing_items.view", "quotations.view"]),
+    ):
+        override.allowed = True
+    db.commit()
 
-    logout(client)
     login(client, *LEADER_A)
     assert client.get("/pricing/items").status_code == 200
     assert client.get("/pricing/quotations").status_code == 200
@@ -780,7 +784,7 @@ def test_item_and_related_item_crud_obeys_delete_rules(client, db):
         data={"csrf_token": token},
     ).status_code == 403
 
-    page = client.get("/pricing/items").text
+    page = client.get("/pricing/items?category=uncategorized").text
     assert "Data SIM" in page
     assert "Delete" not in page
 
@@ -820,6 +824,26 @@ def test_item_categories_assign_existing_items_and_group_item_pickers(client, db
     assert assigned.status_code == 303
     db.refresh(camera)
     assert camera.category_id == category.id
+
+    overview = client.get("/pricing/items")
+    assert overview.status_code == 200
+    assert "data-category-overview" in overview.text
+    assert f'href="/pricing/items?category={category.id}"' in overview.text
+    assert 'href="/pricing/items?category=uncategorized"' in overview.text
+    assert f'data-pricing-item-row="{camera.id}"' not in overview.text
+
+    category_page = client.get(f"/pricing/items?category={category.id}")
+    assert category_page.status_code == 200
+    assert "data-category-detail" in category_page.text
+    assert 'href="/pricing/items">Back</a>' in category_page.text
+    assert f'data-pricing-item-row="{camera.id}"' in category_page.text
+    assert f'data-pricing-item-row="{_recorder.id}"' not in category_page.text
+
+    uncategorized_page = client.get("/pricing/items?category=uncategorized")
+    assert uncategorized_page.status_code == 200
+    assert f'data-pricing-item-row="{_recorder.id}"' in uncategorized_page.text
+    assert f'data-pricing-item-row="{camera.id}"' not in uncategorized_page.text
+    assert client.get("/pricing/items?category=999999").status_code == 404
 
     page = client.get("/pricing/items?q=Cameras")
     assert page.status_code == 200
@@ -879,6 +903,85 @@ def test_item_categories_assign_existing_items_and_group_item_pickers(client, db
     category_id = category.id
     db.expire_all()
     assert db.get(PricingItemCategory, category_id) is None
+
+
+def test_main_and_subcategory_navigation_keeps_direct_items_separate(client, db):
+    camera, recorder = _create_catalogue(db)
+    login(client, *ADMIN)
+    token = csrf_of(client, "/pricing/items")
+    client.post(
+        "/pricing/categories",
+        data={"csrf_token": token, "name": "Cameras", "parent_category_id": ""},
+    )
+    main = db.query(PricingItemCategory).filter_by(name="Cameras").one()
+    client.post(
+        "/pricing/categories",
+        data={
+            "csrf_token": token,
+            "name": "Hikvision Cameras",
+            "parent_category_id": str(main.id),
+        },
+    )
+    subcategory = db.query(PricingItemCategory).filter_by(
+        name="Hikvision Cameras"
+    ).one()
+    for item, category in ((camera, main), (recorder, subcategory)):
+        response = client.post(
+            f"/pricing/items/{item.id}/edit",
+            data={
+                "csrf_token": token,
+                "name": item.name,
+                "model": item.model,
+                "unit_price": str(item.unit_price),
+                "currency": item.currency,
+                "category_id": str(category.id),
+                "service_enabled": "1",
+            },
+        )
+        assert response.status_code == 303
+
+    main_page = client.get(f"/pricing/items?category={main.id}")
+    assert main_page.status_code == 200
+    assert "data-subcategory-overview" in main_page.text
+    assert "data-pricing-category-assignment-picker" in main_page.text
+    assert (
+        f'data-open-pricing-category="pricing-category-choice-{main.id}"'
+        in main_page.text
+    )
+    assert (
+        f'data-select-pricing-category data-category-id="{subcategory.id}"'
+        in main_page.text
+    )
+    assert f'id="pict{camera.id}" name="category_id" value="{main.id}"' in main_page.text
+    assert '<select id="pi-category" name="category_id">' not in main_page.text
+    assert "data-pricing-category-back" in main_page.text
+    assert f'href="/pricing/items?category={subcategory.id}"' in main_page.text
+    assert f'data-pricing-item-row="{camera.id}"' in main_page.text
+    assert f'data-pricing-item-row="{recorder.id}"' not in main_page.text
+
+    subcategory_page = client.get(f"/pricing/items?category={subcategory.id}")
+    assert subcategory_page.status_code == 200
+    assert f'href="/pricing/items?category={main.id}"' in subcategory_page.text
+    assert f'data-pricing-item-row="{recorder.id}"' in subcategory_page.text
+    assert f'data-pricing-item-row="{camera.id}"' not in subcategory_page.text
+
+    nested = client.post(
+        "/pricing/categories",
+        data={
+            "csrf_token": token,
+            "name": "Nested folders are not allowed",
+            "parent_category_id": str(subcategory.id),
+        },
+    )
+    assert nested.status_code == 303
+    assert db.query(PricingItemCategory).count() == 2
+
+    quotation = client.get("/pricing/quotations/new")
+    assert quotation.status_code == 200
+    assert f'data-pricing-picker-category="quotation-picker-category-{main.id}"' in quotation.text
+    assert f'data-pricing-picker-subcategory="quotation-picker-subcategory-{subcategory.id}"' in quotation.text
+    assert f'data-item-id="{camera.id}"' in quotation.text
+    assert f'data-item-id="{recorder.id}"' in quotation.text
 
 
 def test_main_item_image_is_validated_protected_and_removed(client, db):
@@ -1558,6 +1661,14 @@ def test_admin_can_delete_quotations_from_list_and_in_bulk(client, db):
         assert f'formaction="/pricing/quotations/{quotation.id}/delete"' in page.text
 
     _grant_pricing(db)
+    technical = db.query(User).filter(User.username == LEADER_A[0]).one()
+    delete_permission = db.get(
+        UserDepartmentPermission,
+        (technical.id, 1, "quotations.delete"),
+    )
+    assert delete_permission is not None
+    delete_permission.allowed = False
+    db.commit()
     logout(client)
     login(client, *LEADER_A)
     technical_page = client.get("/pricing/quotations")
@@ -1702,7 +1813,7 @@ def test_quotation_custom_addressee_is_snapshotted_and_printed(client, db):
     detail = client.get(f"/pricing/quotations/{quotation.id}")
     assert detail.status_code == 200
     assert "Noura Al Saud" in detail.text
-    items_page = client.get("/pricing/items")
+    items_page = client.get("/pricing/items?category=uncategorized")
     assert items_page.status_code == 200
     assert f'data-context="{quotation.quotation_number}"' in items_page.text
     assert 'data-price="100.00 SAR"' in items_page.text
@@ -1749,7 +1860,7 @@ def test_catalogue_price_edit_creates_history_and_audit_event(client, db):
     assert history.old_price == Decimal("100.00")
     assert history.new_price == Decimal("125.50")
     assert history.changed_by_name == "Test Admin"
-    price_page = client.get("/pricing/items")
+    price_page = client.get("/pricing/items?category=uncategorized")
     assert price_page.status_code == 200
     assert 'data-value="125.50"' in price_page.text
     assert 'data-price="125.50 SAR"' in price_page.text
@@ -1762,7 +1873,15 @@ def test_catalogue_price_edit_creates_history_and_audit_event(client, db):
         "before": "100.00 SAR",
         "after": "125.50 SAR",
     }
-    page = client.get("/admin/audit-log")
+    page = client.get("/management/logs-report", params={"searched": "1", "q": "125.50 SAR"})
     assert page.status_code == 200
     assert "Test Admin" in page.text
     assert "125.50 SAR" in page.text
+    assert client.get(
+        "/management/logs-report", params={"searched": "1", "q": "125.50 SAR", "entity_type": "pricing_item", "status": "success"}
+    ).status_code == 200
+    detail = client.get(f"/management/logs-report/events/{event.id}")
+    assert detail.status_code == 200
+    assert "Who and when" in detail.text
+    assert "100.00 SAR" in detail.text
+    assert "125.50 SAR" in detail.text

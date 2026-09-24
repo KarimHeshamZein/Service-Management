@@ -66,6 +66,12 @@
 {% set survey_input_id = 'quotation-site-survey-images' %}
 {% include '_quotation_site_survey_images.html' %}
 
+<div class="card"><div class="card-head"><div><h2>{{ t('technical.quotation.package') }}</h2><p class="hint">{{ t('technical.quotation.help') }}</p></div>{% if technical_attachments %}<a class="btn btn-primary" href="/pricing/quotations/{{ quotation.id }}/technical-package.zip">{{ t('technical.download.with.quote') }}</a>{% endif %}</div><div class="card-body"><form method="post" action="/pricing/quotations/{{ quotation.id }}/technical-attachments"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {% for doc in technical_documents %}{% set selected = technical_attachments|selectattr('source_document_id','equalto',doc.id)|list %}<label class="choice"><input type="checkbox" name="technical_document_ids" value="{{ doc.id }}" {{ 'checked' if selected }}><span><strong>{{ doc.title }}</strong> · {{ doc.original_filename }}</span></label>{% endfor %}
+  {% for rec in technical_recommendations %}{% set kind='main' if rec.pricing_item_id else 'related' %}{% set target_id=rec.pricing_item_id or rec.related_item_id %}{% set selected = technical_attachments|selectattr('target_kind','equalto',kind)|selectattr('target_id','equalto',target_id)|selectattr('recommendation_snapshot')|list %}<label class="choice"><input type="checkbox" name="technical_recommendations" value="{{ kind }}:{{ target_id }}" {{ 'checked' if selected }}><span>{{ t('technical.recommendation') }} · {{ rec.recommendation[:100] }}</span></label>{% endfor %}
+  {% if not technical_documents and not technical_recommendations %}<p class="empty-state">{{ t('technical.quote.none') }}</p>{% else %}<button class="btn btn-secondary" type="submit">{{ t('technical.save.selection') }}</button>{% endif %}
+</form></div></div>
+
 <div class="card">
   <div class="card-head"><div><h2>{{ t('ui.purchase.invoice.proof') }}</h2><p class="hint" style="margin:4px 0 0;">{{ t('ui.purchase.invoice.proof.help') }}</p></div></div>
   <div class="card-body">

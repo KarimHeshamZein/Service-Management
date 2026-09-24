@@ -2,11 +2,11 @@
 
 A service evidence portal for a field service team. Technical users file installation and maintenance proof; Administrators manage the system; Customers read records for their assigned Projects.
 
-**Maintenance, Preventive Maintenance, New Installations, Reports and Pricing are implemented.** Reports reuse the All Records filters and export the full matching evidence set as PDF. Administrators have both per-user Technician Activity reporting and a filterable append-only Audit Log for mutations, authentication, and sensitive downloads. Pricing provides the single imaged equipment/item catalogue, immutable catalogue price history, separate quoted-price snapshots, optional quotation addressees, mandatory charges, explicit optional-item decisions, search, and PDF export. Mixed-currency quotations intentionally show no aggregate total.
+**Department workspaces, direct per-user permissions, resource scopes, cross-Department Project teams, Tasks and notifications, Maintenance, Preventive Maintenance, New Installations, Product Evaluations and Testing, Reports, Pricing, Store, technical information, and Wiring Diagrams are implemented.** Each internal user may belong to multiple Departments and works in one active workspace. Administrators assign action permissions directly to the User in each Department. View scopes are None, Own, Selected, or All Department; Create access preserves the user's own work. A shared selected-Project list scopes Project data across records, reports, quotations, and Tasks, while Pricing also supports selected Categories or individual Items and Store uses selected Warehouses. Administrators can cross every workspace. Reports reuse the All Records filters and export the full matching evidence set as PDF. Administrators use one search-first **Management -> Logs Report** for append-only user/system activity and per-user Technician Activity. Product Evaluations and Testing is an independent request, approval, receipt, assignment and repeat-evaluation workflow. Pricing provides a two-level folder catalogue, quotation snapshots, Purchase Documents, and Data Sheet. Store is an independent warehouse/custody ledger. Wiring Diagrams remains independent from Projects, quotations, Pricing Items, Data Sheet, and Store.
 
 ## What this system is not
 
-It does not schedule, assign, approve, or track maintenance tasks. There are no calendars, no start/stop actions, no task statuses, no approval chains and no notifications. It records work that has already been done. Submitted records are permanently read-only — that is the point of an evidence portal.
+It does not provide a maintenance calendar, route planning, technician GPS, or start/stop time clock. The generic Department task board assigns and tracks internal work, but it does not automatically schedule field-service visits. Submitted service evidence remains controlled and audited; authorized edits create revisions rather than silently rewriting history.
 
 ---
 
@@ -31,15 +31,21 @@ Chosen for a small maintainable app: one process, one dependency file, no micros
 Browser ──form post / XHR──> FastAPI (single process)
                                │
                                ├─ SessionMiddleware      signed cookie: user_id, role, csrf token
-                               ├─ Routers                auth · dashboard · maintenance · records · reports · settings · admin
-                               ├─ Dependency guards      get_current_user / require_admin / require_record_submitter
+                               ├─ Routers                departments · tasks · projects · records · reports · pricing · store
+                               ├─ Dependency guards      login · active Department · direct permission · resource scope
                                ├─ SQLAlchemy ORM ──────> PostgreSQL
                                └─ Upload service ──────> data/uploads/YYYY/MM/<uuid>.jpg
                                                          served only via /media/photo/{id}
                                                          after an ownership check
 ```
 
-Authorization lives in FastAPI dependencies, never in templates. Administrators have full access; Technical users cannot manage users or deactivate catalog data; Customers can only read records, reports and media for assigned Projects. Pricing is additionally controlled by a per-user permission: Administrators always have access, while each Technical account may be granted or denied access from Users.
+Authorization lives in FastAPI dependencies, never in templates. Administrators have full access. Internal users need membership in the active Department plus a direct permission for the action. Data visibility then follows the module's None, Own, Selected, or All Department scope. Selected Project membership identifies resources; it does not independently grant an action. Customers only read records, reports and media for assigned Projects. Department-owned libraries are automatically scoped in the ORM so a missed page filter cannot expose another workspace.
+
+Store authorization is independent from Pricing. Department permissions control
+view, receive, issue, transfer, custody, management and reports; warehouse
+assignments further limit which warehouses a user can operate. Data Sheet,
+Purchase Documents, Wiring Diagrams and Product Evaluations each have their own
+view/manage permissions.
 
 The administration UI calls work locations **Projects** and manages them at
 `/projects`. Each project has a project name, address or location, city, contact
@@ -49,7 +55,9 @@ edited projects its legacy `customer_name` value is kept equal to the project
 name. Projects act as **Main Projects** and contain **Sub Projects**. Sub
 Projects receive scoped assignments to the existing Site catalog, forming the
 Main Project → Sub Project → Site hierarchy without changing existing Project
-IDs or Customer Project assignments.
+IDs or Customer Project assignments. A newly created Main Project receives an
+empty `General` Sub Project; Sites are assigned explicitly afterward, and any Sub
+Project may validly have all Site assignments cleared.
 
 Installation, normal-maintenance, and preventive-maintenance entries may submit
 multiple hierarchy branches under one atomic parent record and record number.
@@ -77,9 +85,11 @@ app/
   security.py     bcrypt hashing, sessions, CSRF, single-use form tokens
   deps.py         authentication and role dependencies
   uploads.py      image validation, storage, thumbnails, path safety
+  purchase_documents.py  purchase-file validation/storage, PDF preview and price report
+  technical_documents.py safe Data Sheet storage, recommendation PDF and packages
   helpers.py      record numbering, timezone display, template rendering
   main.py         app factory, middleware, error handlers
-  routers/        auth · dashboard · maintenance · records · reports · settings · admin
+  routers/        auth · dashboard · maintenance · records · reports · pricing · store · admin
   templates/      11 pages + shared macros
   static/         app.css · app.js
 seed.py           schema creation and development data
@@ -96,8 +106,12 @@ service_types ──┤
                 └──< installation_records >─┬──< installation_participants
                                             └──< installation_photos
 pricing_items ── 1:1 compatibility ── device_catalog ──< installed_devices ──< maintenance_record_devices
+purchase_documents ──< purchase_document_files
+purchase_documents ──< purchase_document_items >── pricing_items / pricing_related_items
 work_sites ──< installation_record_sites >── installation_records
 sites ──< sub_projects ──< sub_project_sites >── work_sites
+sites ── 1:1 project_photo_guidance_settings
+sites + pricing_items ──< project_photo_guidance_rules ──< project_photo_guidance_descriptions
 service_reports ──< service_report_records >── installation/maintenance records
 service_reports ──< installed_devices (optional confirmed Excel import)
 record_counters               (backs PM-YYYY-NNNNN)
@@ -298,7 +312,7 @@ The seeded photos are synthetic placeholder images generated by Pillow, not real
 
 ## Testing
 
-356 tests across the PostgreSQL regression suite:
+449 tests across the PostgreSQL regression suite:
 
 - `test_auth_and_access.py` — valid and invalid login, inactive users blocked, protected pages, role enforcement on GET and POST, session invalidation, nav hiding, hashes never exposed.
 - `test_admin_management.py` — creating and editing sites, service types and users; deactivation removing them from the form; search; password reset; duplicate names; CSRF enforcement; admins cannot deactivate themselves.
@@ -353,9 +367,14 @@ The workflow was exercised against the running server at desktop and mobile widt
 - **No pagination on the admin lists.** Sites, service types and users render in full. Fine at a few hundred rows; add pagination beyond that.
 - **PostgreSQL is a required external service.** The application and test databases must be available before the app or test suite starts.
 - **Uploads are stored unencrypted at rest** and are not virus-scanned. They are access-controlled but not scanned for malicious payloads.
-- **Audit events are application-level.** The combined Administrator Audit Log
+- **Audit events are application-level.** The combined Administrator Logs Report
   records application mutations, authentication, and sensitive downloads, but
-  direct database changes made outside the application are not observable.
+  direct database changes made outside the application are not observable. The
+  log supports full-content, actor, module, action, record-type, outcome, IP and
+  second-precision time filters, plus a dedicated event view with request and
+  recursive field-level change details. Installation, Preventive Maintenance,
+  and Maintenance record pages intentionally do not render their revision
+  history; Administrators review those changes only in Logs Report.
 - **Arabic UI support is implemented.** Language persistence, RTL layout, HTML pages
   and server messages use the English/Arabic catalogs. PDF labels stay English, while
   user-entered Arabic is shaped and rendered with an embedded Noto Sans Arabic font.
@@ -375,6 +394,16 @@ Site, and quotation scopes, assigns each service item to one scope, then
 registers each serialized unit
 through a hidden legacy compatibility row. Project, Sub Project, Site, device,
 model and serial are available to structured report selection.
+
+**Photo Guidance Profiles** — each Main Project has an Administrator-only
+configuration page with an optional feature switch. Profiles are named concepts
+such as `Solar Solution` and are deliberately independent from Pricing Items and
+Installed Assets. Before and After stages independently provide a guidance alert
+and reusable descriptions. Installation, Preventive Maintenance, and Maintenance
+Create/Edit offer one optional profile per device/service and validate that it
+belongs to the selected Main Project. Selecting a standard description fills the
+ordinary editable photo-description field, so only the technician's final text is
+saved and printed. Profile names and alerts are guidance, not report evidence.
 
 **Reports** — `/reports` remains the read-only filtered preview over the same
 normalized record set used by `/records`. `/reports/installation`,
@@ -396,4 +425,46 @@ and Pricing-authorized Technical users see it on record details or may opt to
 include it in a standard Reports PDF; it is otherwise omitted from lists,
 searches, customer views and audit exports.
 
-**Audited corrections** — the specification asks for records to stay read-only, and they are. If corrections become necessary, do not add an edit form. Add a `record_corrections` table holding the record reference, the correcting user, a timestamp, a reason and the before/after values, and show corrections as an appended trail on the detail page. The original evidence stays untouched.
+**Audited record editing** — Installation, Preventive Maintenance, and
+Maintenance records have a nested Edit workflow matching creation. Users who
+may edit a record can update saved results, workflow details, evidence descriptions,
+photos, participants and per-Site browser tables, and can add another complete
+service/device or Site without changing the record number. Administrators may
+also remove saved devices/services, Sites, photos, and table rows. Every
+material change creates a structured revision and audit context; generated
+reports linked to changed evidence are removed and must be regenerated.
+Browser-added rows count as save intent even before a Service is selected, so an
+incomplete addition stays on the same Edit page with its exact cause instead of
+being reported as an unchanged record. Create/Edit preflight highlights the
+field and its Site/service card, focuses the first error, and preserves the
+in-progress form and selected files while the technician corrects it; the same
+rules are validated again by the server before any database mutation.
+Preventive Maintenance and Maintenance collect Issue Found and Recommendations
+as optional fields without a separate Maintenance Notes input. Historical
+maintenance notes remain stored, while report renderers omit every optional
+narrative row whose value is blank.
+
+**Long-entry autosave** — Installation, Preventive Maintenance, and Maintenance
+Create/Edit forms save changed hierarchy, services/devices, results, notes, and
+browser-table values to a private server-side draft after five seconds. Drafts
+are scoped to the authenticated user, limited in size/count, listed under `My
+drafts`, and expire after seven days. Selected photos are cached in IndexedDB on
+the same browser so they can be restored without uploading the same large files
+every few seconds. They therefore do not follow a draft to another browser or
+device. Entry pages refresh the signed session every four minutes; if connectivity
+still fails, the last successful draft remains recoverable after sign-in. Final
+record submission remains transactional and separate from autosave.
+Saved report PDF timestamps use the same configured display timezone as the
+Records interface. A saved report is rendered on download, so downloading it
+again applies current rendering rules; an older PDF file already downloaded to
+disk remains unchanged.
+Large saved reports include a clickable hierarchical table of contents, a
+searchable Record & Device Index, native PDF bookmarks, and a Back to contents
+link in every page footer. Contents also links Report Information, per-Site
+Service Data Tables, and Approvals. The PDF is laid out in multiple passes so
+page references remain accurate even when the navigation sections span many pages.
+The first page is customer-focused: customer/reporting-period metadata and an
+executive summary replace the Technician list. Any observation, issue,
+recommendation, further-action result, or incomplete result is promoted into a
+clickable Items Requiring Attention table before the contents. Approval cards
+provide blank Name, Job title, Signature, and Date lines for manual completion.

@@ -29,19 +29,27 @@ from app.config import settings  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import (  # noqa: E402
+    AccessScope,
     CustomerProjectAssignment,
+    Department,
+    DepartmentPermission,
     DeviceCatalog,
     InstalledDevice,
     InstalledDeviceSite,
     MaintenanceResult,
     PricingItem,
     PricingQuotation,
+    ProjectTeamMember,
     ServiceType,
     Site,
     User,
+    UserDepartment,
+    UserDepartmentPermission,
+    UserDepartmentScope,
     UserRole,
     WorkSite,
 )
+from app.permissions import PERMISSIONS, SCOPED_PERMISSION_GROUPS  # noqa: E402
 from app.security import hash_password  # noqa: E402
 
 ADMIN = ("admin", "admin123")
@@ -78,6 +86,7 @@ def fresh_database():
     try:
         db.add_all(
             [
+                Department(id=1, name="General", code="GENERAL", is_general=True),
                 User(full_name="Test Admin", username=ADMIN[0],
                      password_hash=hash_password(ADMIN[1]), role=UserRole.ADMIN),
                 User(full_name="Leader One", username=LEADER_A[0],
@@ -108,6 +117,61 @@ def fresh_database():
                 WorkSite(name="Gate 1"),
                 WorkSite(name="Gate 2"),
                 WorkSite(name="Gate 3"),
+            ]
+        )
+        db.flush()
+        db.add_all(
+            [
+                DepartmentPermission(
+                    department_id=1, permission_key=permission.key, allowed=True
+                )
+                for permission in PERMISSIONS
+            ]
+            + [
+                UserDepartment(
+                    user_id=user_id, department_id=1, is_primary=True
+                )
+                for user_id in (1, 2, 3, 4)
+            ]
+        )
+        db.flush()
+        db.add_all(
+            [
+                UserDepartmentPermission(
+                    user_id=user_id,
+                    department_id=1,
+                    permission_key=permission.key,
+                    allowed=True,
+                )
+                for user_id in (2, 3, 4)
+                for permission in PERMISSIONS
+            ]
+            + [
+                UserDepartmentScope(
+                    user_id=user_id,
+                    department_id=1,
+                    module_key=module_key,
+                    scope=AccessScope.DEPARTMENT,
+                )
+                for user_id in (2, 3, 4)
+                for module_key in SCOPED_PERMISSION_GROUPS
+            ]
+        )
+        db.flush()
+        db.add_all(
+            [
+                ProjectTeamMember(
+                    project_id=project_id,
+                    user_id=user_id,
+                    department_id=1,
+                    can_view_records=True,
+                    can_create_records=True,
+                    can_view_reports=True,
+                    can_view_quotations=True,
+                    can_manage_tasks=True,
+                )
+                for project_id in (1, 2, 3)
+                for user_id in (1, 2, 3)
             ]
         )
         db.flush()

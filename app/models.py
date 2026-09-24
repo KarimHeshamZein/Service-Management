@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     Enum as SAEnum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     JSON,
@@ -54,6 +55,89 @@ class UserRole(str, enum.Enum):
             "technical": "Technical",
             "customer": "Customer",
         }[self.value]
+
+
+class AccessScope(str, enum.Enum):
+    """How far one user's view permission reaches inside a Department."""
+
+    NONE = "none"
+    OWN = "own"
+    SELECTED = "selected"
+    DEPARTMENT = "department"
+
+
+class TaskStatus(str, enum.Enum):
+    NEW = "new"
+    IN_PROGRESS = "in_progress"
+    BLOCKED = "blocked"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class TaskPriority(str, enum.Enum):
+    NORMAL = "normal"
+    IMPORTANT = "important"
+    URGENT = "urgent"
+
+
+class NotificationEmailStatus(str, enum.Enum):
+    NOT_REQUESTED = "not_requested"
+    PENDING = "pending"
+    SENT = "sent"
+    FAILED = "failed"
+
+
+class PurchaseDocumentType(str, enum.Enum):
+    PURCHASE_INVOICE = "purchase_invoice"
+    SUPPLIER_QUOTATION = "supplier_quotation"
+
+    @property
+    def label(self) -> str:
+        return {
+            "purchase_invoice": "Purchase invoice",
+            "supplier_quotation": "Supplier quotation",
+        }[self.value]
+
+
+class StoreWarehouseType(str, enum.Enum):
+    MAIN = "main"
+    BRANCH = "branch"
+
+
+class StoreMovementType(str, enum.Enum):
+    OPENING = "opening"
+    PURCHASE = "purchase"
+    PROJECT_ISSUE = "project_issue"
+    WAREHOUSE_TRANSFER = "warehouse_transfer"
+    CUSTODY_ISSUE = "custody_issue"
+    CUSTODY_RETURN = "custody_return"
+    CUSTODY_PROJECT_ISSUE = "custody_project_issue"
+    ADJUSTMENT = "adjustment"
+    REVERSAL = "reversal"
+
+
+class ProductEvaluationStatus(str, enum.Enum):
+    PENDING_APPROVAL = "pending_approval"
+    CHANGES_REQUESTED = "changes_requested"
+    REJECTED = "rejected"
+    WAITING_FOR_DEVICE = "waiting_for_device"
+    DEVICE_RECEIVED = "device_received"
+    EVALUATION_SCHEDULED = "evaluation_scheduled"
+    EVALUATION_IN_PROGRESS = "evaluation_in_progress"
+    EVALUATION_COMPLETED = "evaluation_completed"
+
+
+class ProductEvaluationSessionStatus(str, enum.Enum):
+    SCHEDULED = "scheduled"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+
+
+class ProductEvaluationDecision(str, enum.Enum):
+    APPROVED = "approved"
+    APPROVED_WITH_CONDITIONS = "approved_with_conditions"
+    NEEDS_MORE_TESTING = "needs_more_testing"
+    REJECTED = "rejected"
 
 
 class MaintenanceResult(str, enum.Enum):
@@ -109,11 +193,142 @@ class ServiceReportType(str, enum.Enum):
         }[self.value]
 
 
-NEEDS_ISSUE_DETAIL = {
-    MaintenanceResult.COMPLETED_WITH_OBSERVATIONS,
-    MaintenanceResult.FURTHER_ACTION_REQUIRED,
-    MaintenanceResult.UNABLE_TO_COMPLETE,
-}
+class Department(Base):
+    """An isolated operational workspace; Administrators may cross workspaces."""
+
+    __tablename__ = "departments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False, unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(40), nullable=False, unique=True, index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    is_general: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+    memberships: Mapped[list["UserDepartment"]] = relationship(
+        back_populates="department", cascade="all, delete-orphan", order_by="UserDepartment.user_id"
+    )
+    default_permissions: Mapped[list["DepartmentPermission"]] = relationship(
+        back_populates="department", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(trim(name)) > 0", name="ck_departments_name_present"),
+        CheckConstraint("length(trim(code)) > 0", name="ck_departments_code_present"),
+        Index(
+            "uq_departments_one_general",
+            "is_general",
+            unique=True,
+            postgresql_where=(is_general.is_(True)),
+            sqlite_where=(is_general.is_(True)),
+        ),
+    )
+
+
+class UserDepartment(Base):
+    """One user's membership and job identity inside one Department."""
+
+    __tablename__ = "user_departments"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id", ondelete="CASCADE"), primary_key=True)
+    job_title: Mapped[str | None] = mapped_column(String(160))
+    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    added_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    user: Mapped["User"] = relationship(back_populates="department_memberships", foreign_keys=[user_id])
+    department: Mapped[Department] = relationship(back_populates="memberships")
+    permissions: Mapped[list["UserDepartmentPermission"]] = relationship(
+        back_populates="membership", cascade="all, delete-orphan"
+    )
+    scopes: Mapped[list["UserDepartmentScope"]] = relationship(
+        back_populates="membership", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        CheckConstraint("job_title IS NULL OR length(trim(job_title)) > 0", name="ck_user_department_job_title_present"),
+        Index(
+            "uq_user_departments_one_primary",
+            "user_id",
+            unique=True,
+            postgresql_where=(is_primary.is_(True)),
+            sqlite_where=(is_primary.is_(True)),
+        ),
+    )
+
+
+class UserDepartmentPermission(Base):
+    """Explicit per-user permission within a Department membership."""
+
+    __tablename__ = "user_department_permissions"
+
+    user_id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(primary_key=True)
+    permission_key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "department_id"],
+            ["user_departments.user_id", "user_departments.department_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("length(trim(permission_key)) > 0", name="ck_department_permission_key_present"),
+    )
+
+    membership: Mapped[UserDepartment] = relationship(back_populates="permissions")
+
+
+class UserDepartmentScope(Base):
+    """Per-user data visibility for one module in one Department."""
+
+    __tablename__ = "user_department_scopes"
+
+    user_id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(primary_key=True)
+    module_key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    scope: Mapped[AccessScope] = mapped_column(
+        enum_column(AccessScope, 20), nullable=False, default=AccessScope.NONE
+    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "department_id"],
+            ["user_departments.user_id", "user_departments.department_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("length(trim(module_key)) > 0", name="ck_user_department_scope_module_present"),
+    )
+
+    membership: Mapped[UserDepartment] = relationship(back_populates="scopes")
+
+
+class DepartmentPermission(Base):
+    """The default capability granted to all members of one Department."""
+
+    __tablename__ = "department_permissions"
+
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE"), primary_key=True
+    )
+    permission_key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    department: Mapped[Department] = relationship(back_populates="default_permissions")
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(permission_key)) > 0",
+            name="ck_department_default_permission_key_present",
+        ),
+    )
 
 
 class User(Base):
@@ -126,9 +341,26 @@ class User(Base):
     language: Mapped[str] = mapped_column(String(5), nullable=False, default="en")
     role: Mapped[UserRole] = mapped_column(enum_column(UserRole, 20), nullable=False, index=True)
     phone: Mapped[str | None] = mapped_column(String(40))
+    email: Mapped[str | None] = mapped_column(String(254), unique=True, index=True)
+    email_notifications: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     pricing_access: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, index=True
     )
+    technical_documents_manage: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    wiring_diagrams_manage: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    store_access: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    store_receive: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    store_issue: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    store_transfer: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    store_custody_transfer: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    store_manage_items: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    store_manage_warehouses: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    store_adjust: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    store_reports: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -143,6 +375,18 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
         order_by="CustomerProjectAssignment.project_id",
+    )
+    project_team_memberships: Mapped[list["ProjectTeamMember"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="ProjectTeamMember.user_id",
+        order_by="ProjectTeamMember.project_id",
+    )
+    department_memberships: Mapped[list[UserDepartment]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="UserDepartment.user_id",
+        order_by="UserDepartment.department_id",
     )
 
     __table_args__ = (
@@ -172,21 +416,51 @@ class User(Base):
 
     @property
     def can_view_all_records(self) -> bool:
-        return self.role in {UserRole.ADMIN, UserRole.TECHNICAL}
+        return self.role == UserRole.ADMIN
 
     @property
     def can_access_pricing(self) -> bool:
         return self.is_admin or (self.is_technical and self.pricing_access)
 
     @property
+    def can_manage_technical_documents(self) -> bool:
+        return self.is_admin or (
+            self.is_technical and self.pricing_access and self.technical_documents_manage
+        )
+
+    @property
+    def can_manage_wiring_diagrams(self) -> bool:
+        return self.is_admin or (
+            self.is_technical and self.pricing_access and self.wiring_diagrams_manage
+        )
+
+    @property
+    def can_access_store(self) -> bool:
+        # Technical users always retain a read-only view of their own custody.
+        return self.is_admin or self.is_technical
+
+    @property
     def assigned_project_ids(self) -> set[int]:
+        scoped = getattr(self, "_scoped_project_ids", None)
+        if scoped is not None:
+            return set(scoped)
         return {
             assignment.project_id
             for assignment in self.customer_project_assignments
+        } | {
+            membership.project_id
+            for membership in self.project_team_memberships
+            if membership.can_view_records
         }
 
     def can_access_project(self, project_id: int) -> bool:
-        return self.can_view_all_records or project_id in self.assigned_project_ids
+        return self.is_admin or project_id in self.assigned_project_ids
+
+    def can_create_project_records(self, project_id: int) -> bool:
+        return self.is_admin or any(
+            membership.project_id == project_id and membership.can_create_records
+            for membership in self.project_team_memberships
+        )
 
 
 class UserAuthState(Base):
@@ -291,11 +565,25 @@ class Site(Base):
     customer_assignments: Mapped[list["CustomerProjectAssignment"]] = relationship(
         back_populates="project"
     )
+    team_memberships: Mapped[list["ProjectTeamMember"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan", order_by="ProjectTeamMember.user_id"
+    )
     sub_projects: Mapped[list["SubProject"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
         passive_deletes=True,
         order_by="SubProject.name",
+    )
+    photo_guidance_setting: Mapped["ProjectPhotoGuidanceSetting | None"] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
+    photo_guidance_profiles: Mapped[list["ProjectPhotoGuidanceRule"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     __table_args__ = (
@@ -483,6 +771,36 @@ class WorkSite(Base):
     )
 
 
+class ProjectTeamMember(Base):
+    """Explicit internal Project access, including the Department represented."""
+
+    __tablename__ = "project_team_members"
+
+    project_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    department_id: Mapped[int] = mapped_column(ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, index=True)
+    project_role: Mapped[str | None] = mapped_column(String(160))
+    can_view_records: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    can_create_records: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    can_view_reports: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    can_view_quotations: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    can_manage_tasks: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    added_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    project: Mapped[Site] = relationship(back_populates="team_memberships")
+    user: Mapped[User] = relationship(back_populates="project_team_memberships", foreign_keys=[user_id])
+    department: Mapped[Department] = relationship()
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "department_id"],
+            ["user_departments.user_id", "user_departments.department_id"],
+            ondelete="CASCADE",
+            name="fk_project_team_user_department",
+        ),
+        CheckConstraint("project_role IS NULL OR length(trim(project_role)) > 0", name="ck_project_team_role_present"),
+    )
 class MaintenanceRecord(Base):
     """Immutable evidence of maintenance that has already been performed."""
 
@@ -604,6 +922,7 @@ class MaintenancePhoto(Base):
     content_type: Mapped[str] = mapped_column(String(60), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    is_issue_found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
@@ -693,7 +1012,7 @@ class InstallationRecord(Base):
     )
     installed_device: Mapped["InstalledDevice | None"] = relationship(
         back_populates="installation_record",
-        cascade="all, delete-orphan",
+        cascade="all",
         uselist=False,
     )
     additional_devices: Mapped[list["InstallationRecordAdditionalDevice"]] = relationship(
@@ -769,6 +1088,7 @@ class InstallationPhoto(Base):
     content_type: Mapped[str] = mapped_column(String(60), nullable=False)
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     description: Mapped[str | None] = mapped_column(Text)
+    is_issue_found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
@@ -964,6 +1284,9 @@ class InstallationRecordItem(Base):
     service_type_id: Mapped[int] = mapped_column(
         ForeignKey("service_types.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    photo_guidance_profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_photo_guidance_rules.id", ondelete="SET NULL"), index=True
+    )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     service_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     device_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
@@ -987,6 +1310,7 @@ class InstallationRecordItem(Base):
     record: Mapped[InstallationRecord] = relationship(back_populates="work_items")
     installed_device: Mapped[InstalledDevice] = relationship()
     service_type: Mapped[ServiceType] = relationship()
+    photo_guidance_profile: Mapped["ProjectPhotoGuidanceRule | None"] = relationship()
     photos: Mapped[list["InstallationItemPhoto"]] = relationship(
         back_populates="item",
         cascade="all, delete-orphan",
@@ -1015,6 +1339,7 @@ class InstallationItemPhoto(Base):
         index=True,
     )
     description: Mapped[str | None] = mapped_column(Text)
+    is_issue_found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
@@ -1124,6 +1449,9 @@ class MaintenanceRecordItem(Base):
     service_type_id: Mapped[int] = mapped_column(
         ForeignKey("service_types.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    photo_guidance_profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_photo_guidance_rules.id", ondelete="SET NULL"), index=True
+    )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     service_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     device_id: Mapped[int | None] = mapped_column(
@@ -1150,6 +1478,7 @@ class MaintenanceRecordItem(Base):
     record: Mapped[MaintenanceRecord] = relationship(back_populates="work_items")
     installed_device: Mapped[InstalledDevice | None] = relationship()
     service_type: Mapped[ServiceType] = relationship()
+    photo_guidance_profile: Mapped["ProjectPhotoGuidanceRule | None"] = relationship()
     catalog_device: Mapped[DeviceCatalog] = relationship()
     photos: Mapped[list["MaintenanceItemPhoto"]] = relationship(
         back_populates="item",
@@ -1179,6 +1508,7 @@ class MaintenanceItemPhoto(Base):
         index=True,
     )
     description: Mapped[str | None] = mapped_column(Text)
+    is_issue_found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
@@ -1296,6 +1626,9 @@ class GeneralMaintenanceItem(Base):
     service_type_id: Mapped[int] = mapped_column(
         ForeignKey("service_types.id", ondelete="RESTRICT"), nullable=False, index=True
     )
+    photo_guidance_profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("project_photo_guidance_rules.id", ondelete="SET NULL"), index=True
+    )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     service_name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     device_id: Mapped[int | None] = mapped_column(
@@ -1322,6 +1655,7 @@ class GeneralMaintenanceItem(Base):
     record: Mapped[GeneralMaintenanceRecord] = relationship(back_populates="work_items")
     installed_device: Mapped[InstalledDevice | None] = relationship()
     service_type: Mapped[ServiceType] = relationship()
+    photo_guidance_profile: Mapped["ProjectPhotoGuidanceRule | None"] = relationship()
     catalog_device: Mapped[DeviceCatalog | None] = relationship()
     photos: Mapped[list["GeneralMaintenancePhoto"]] = relationship(
         back_populates="item",
@@ -1351,6 +1685,7 @@ class GeneralMaintenancePhoto(Base):
         index=True,
     )
     description: Mapped[str | None] = mapped_column(Text)
+    is_issue_found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
 
@@ -1640,19 +1975,99 @@ class PricingItemCategory(Base):
     __tablename__ = "pricing_item_categories"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(120), nullable=False, unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
+    visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="department")
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_item_categories.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    created_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=utcnow, onupdate=utcnow
     )
 
+    parent: Mapped["PricingItemCategory | None"] = relationship(
+        back_populates="children",
+        remote_side="PricingItemCategory.id",
+    )
+    children: Mapped[list["PricingItemCategory"]] = relationship(
+        back_populates="parent",
+        order_by="PricingItemCategory.name",
+    )
     items: Mapped[list["PricingItem"]] = relationship(back_populates="category")
+    department: Mapped[Department] = relationship()
+    user_access: Mapped[list["PricingCategoryUserAccess"]] = relationship(
+        back_populates="category", cascade="all, delete-orphan"
+    )
+
+    @property
+    def display_label(self) -> str:
+        return f"{self.parent.name} › {self.name}" if self.parent else self.name
 
     __table_args__ = (
         CheckConstraint(
             "length(trim(name)) > 0", name="ck_pricing_item_category_name_present"
         ),
+        CheckConstraint(
+            "visibility IN ('department', 'selected_users')",
+            name="ck_pricing_category_visibility",
+        ),
+        Index(
+            "uq_pricing_category_root_department_name",
+            "department_id",
+            "name",
+            unique=True,
+            postgresql_where=(parent_id.is_(None)),
+            sqlite_where=(parent_id.is_(None)),
+        ),
+        Index(
+            "uq_pricing_category_child_department_name",
+            "department_id",
+            "parent_id",
+            "name",
+            unique=True,
+            postgresql_where=(parent_id.is_not(None)),
+            sqlite_where=(parent_id.is_not(None)),
+        ),
     )
+
+
+class PricingCategoryUserAccess(Base):
+    __tablename__ = "pricing_category_user_access"
+
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("pricing_item_categories.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    granted_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    category: Mapped[PricingItemCategory] = relationship(back_populates="user_access")
+    user: Mapped[User] = relationship(foreign_keys=[user_id])
+
+
+class PricingItemUserAccess(Base):
+    __tablename__ = "pricing_item_user_access"
+
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("pricing_items.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    granted_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    user: Mapped[User] = relationship(foreign_keys=[user_id])
 
 
 class SubProject(Base):
@@ -1715,6 +2130,9 @@ class ServiceReport(Base):
     report_type: Mapped[ServiceReportType] = mapped_column(
         enum_column(ServiceReportType, 30), nullable=False, index=True
     )
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     created_by_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
@@ -1736,6 +2154,7 @@ class ServiceReport(Base):
         DateTime, nullable=False, default=utcnow, onupdate=utcnow
     )
 
+    department: Mapped[Department] = relationship()
     created_by: Mapped[User] = relationship(foreign_keys=[created_by_id])
     team_leader: Mapped[User] = relationship(foreign_keys=[team_leader_id])
     technicians: Mapped[list["ServiceReportTechnician"]] = relationship(
@@ -1854,6 +2273,9 @@ class PricingItem(Base):
     service_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, index=True
     )
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
     category_id: Mapped[int | None] = mapped_column(
         ForeignKey("pricing_item_categories.id", ondelete="SET NULL"), index=True
     )
@@ -1877,6 +2299,7 @@ class PricingItem(Base):
         order_by="PricingRelatedItem.name",
     )
     category: Mapped[PricingItemCategory | None] = relationship(back_populates="items")
+    department: Mapped[Department] = relationship()
     legacy_device: Mapped[DeviceCatalog | None] = relationship(
         back_populates="pricing_item"
     )
@@ -1885,9 +2308,16 @@ class PricingItem(Base):
         cascade="all, delete-orphan",
         order_by="PricingItemPriceHistory.changed_at.desc()",
     )
-
+    created_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    purchase_documents: Mapped[list["PurchaseDocument"]] = relationship(
+        secondary="purchase_document_items",
+        viewonly=True,
+        order_by="PurchaseDocument.document_date.desc()",
+    )
     __table_args__ = (
-        UniqueConstraint("name", "model", name="uq_pricing_item_name_model"),
+        UniqueConstraint("department_id", "name", "model", name="uq_pricing_item_department_name_model"),
         CheckConstraint("length(trim(name)) > 0", name="ck_pricing_item_name_present"),
         CheckConstraint("unit_price >= 0", name="ck_pricing_item_price_nonnegative"),
         CheckConstraint("length(trim(currency)) = 3", name="ck_pricing_item_currency"),
@@ -1901,6 +2331,124 @@ class PricingItem(Base):
     def category_name(self) -> str:
         return self.category.name if self.category else ""
 
+    @property
+    def main_category_name(self) -> str:
+        if not self.category:
+            return ""
+        return self.category.parent.name if self.category.parent else self.category.name
+
+    @property
+    def subcategory_name(self) -> str:
+        return self.category.name if self.category and self.category.parent else ""
+
+
+class ProjectPhotoGuidanceSetting(Base):
+    """Installation photo guidance toggle for one Main Project."""
+
+    __tablename__ = "project_photo_guidance_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    project: Mapped[Site] = relationship(back_populates="photo_guidance_setting")
+
+
+class EntryDraft(Base):
+    """Private server-side autosave for long-running field-service forms."""
+
+    __tablename__ = "entry_drafts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    draft_key: Mapped[str] = mapped_column(String(180), nullable=False)
+    page_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow, index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "draft_key", name="uq_entry_drafts_user_key"),
+        CheckConstraint(
+            "length(trim(draft_key)) > 0", name="ck_entry_drafts_key_present"
+        ),
+        CheckConstraint(
+            "length(trim(page_url)) > 0", name="ck_entry_drafts_page_url_present"
+        ),
+    )
+
+class ProjectPhotoGuidanceRule(Base):
+    """An independent, project-scoped photo guidance profile."""
+
+    __tablename__ = "project_photo_guidance_rules"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    before_alert: Mapped[str | None] = mapped_column(Text)
+    after_alert: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    project: Mapped[Site] = relationship(back_populates="photo_guidance_profiles")
+    descriptions: Mapped[list["ProjectPhotoGuidanceDescription"]] = relationship(
+        back_populates="rule",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="ProjectPhotoGuidanceDescription.stage, ProjectPhotoGuidanceDescription.position",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("project_id", "name", name="uq_photo_guidance_project_profile_name"),
+        CheckConstraint("length(trim(name)) > 0", name="ck_photo_guidance_profile_name_present"),
+    )
+
+
+class ProjectPhotoGuidanceDescription(Base):
+    """One reusable Before or After photo description."""
+
+    __tablename__ = "project_photo_guidance_descriptions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    rule_id: Mapped[int] = mapped_column(
+        ForeignKey("project_photo_guidance_rules.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    stage: Mapped[str] = mapped_column(String(10), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    rule: Mapped[ProjectPhotoGuidanceRule] = relationship(back_populates="descriptions")
+
+    __table_args__ = (
+        CheckConstraint("stage IN ('before', 'after')", name="ck_photo_guidance_description_stage"),
+        CheckConstraint(
+            "length(trim(description)) > 0",
+            name="ck_photo_guidance_description_present",
+        ),
+        UniqueConstraint(
+            "rule_id", "stage", "position", name="uq_photo_guidance_description_position"
+        ),
+    )
+
 
 class PricingRelatedItem(Base):
     """Optional priced item that can accompany one main pricing item."""
@@ -1908,6 +2456,9 @@ class PricingRelatedItem(Base):
     __tablename__ = "pricing_related_items"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
     main_item_id: Mapped[int] = mapped_column(
         ForeignKey("pricing_items.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -1925,6 +2476,11 @@ class PricingRelatedItem(Base):
         back_populates="related_item",
         cascade="all, delete-orphan",
         order_by="PricingItemPriceHistory.changed_at.desc()",
+    )
+    purchase_documents: Mapped[list["PurchaseDocument"]] = relationship(
+        secondary="purchase_document_items",
+        viewonly=True,
+        order_by="PurchaseDocument.document_date.desc()",
     )
 
     __table_args__ = (
@@ -1974,6 +2530,129 @@ class PricingItemPriceHistory(Base):
             name="ck_pricing_price_history_one_item",
         ),
         CheckConstraint("new_price >= 0", name="ck_pricing_price_history_nonnegative"),
+    )
+
+
+class PurchaseDocument(Base):
+    """One supplier file set shared by one or more catalogue items."""
+
+    __tablename__ = "purchase_documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
+    document_type: Mapped[PurchaseDocumentType] = mapped_column(
+        enum_column(PurchaseDocumentType, 30), nullable=False, index=True
+    )
+    supplier_name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    document_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    uploaded_by_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    uploaded_by_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, index=True
+    )
+
+    uploaded_by: Mapped[User] = relationship()
+    department: Mapped[Department] = relationship()
+    item_links: Mapped[list["PurchaseDocumentItem"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="PurchaseDocumentItem.position, PurchaseDocumentItem.id",
+    )
+    files: Mapped[list["PurchaseDocumentFile"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="PurchaseDocumentFile.position, PurchaseDocumentFile.id",
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(trim(supplier_name)) > 0",
+            name="ck_purchase_document_supplier_present",
+        ),
+    )
+
+
+class PurchaseDocumentItem(Base):
+    """One item and its optional unit price inside a shared purchase document."""
+
+    __tablename__ = "purchase_document_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("purchase_documents.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    pricing_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_items.id", ondelete="CASCADE"), index=True
+    )
+    related_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_related_items.id", ondelete="CASCADE"), index=True
+    )
+    unit_price: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    currency: Mapped[str | None] = mapped_column(String(3))
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    document: Mapped[PurchaseDocument] = relationship(back_populates="item_links")
+    item: Mapped[PricingItem | None] = relationship(foreign_keys=[pricing_item_id])
+    related_item: Mapped[PricingRelatedItem | None] = relationship(foreign_keys=[related_item_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "(CASE WHEN pricing_item_id IS NULL THEN 0 ELSE 1 END + "
+            "CASE WHEN related_item_id IS NULL THEN 0 ELSE 1 END) = 1",
+            name="ck_purchase_document_item_one_target",
+        ),
+        CheckConstraint(
+            "unit_price IS NULL OR unit_price >= 0",
+            name="ck_purchase_document_item_price_nonnegative",
+        ),
+        CheckConstraint(
+            "(unit_price IS NULL AND currency IS NULL) OR "
+            "(unit_price IS NOT NULL AND length(trim(currency)) = 3)",
+            name="ck_purchase_document_item_price_currency",
+        ),
+        CheckConstraint("position >= 0", name="ck_purchase_document_item_position"),
+        UniqueConstraint(
+            "document_id", "pricing_item_id", name="uq_purchase_document_main_item"
+        ),
+        UniqueConstraint(
+            "document_id", "related_item_id", name="uq_purchase_document_related_item"
+        ),
+        UniqueConstraint(
+            "document_id", "position", name="uq_purchase_document_item_position"
+        ),
+    )
+
+
+class PurchaseDocumentFile(Base):
+    __tablename__ = "purchase_document_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("purchase_documents.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    document: Mapped[PurchaseDocument] = relationship(back_populates="files")
+
+    __table_args__ = (
+        CheckConstraint("file_size > 0", name="ck_purchase_document_file_size_positive"),
+        CheckConstraint("position >= 0", name="ck_purchase_document_file_position"),
+        UniqueConstraint(
+            "document_id", "position", name="uq_purchase_document_file_position"
+        ),
     )
 
 
@@ -2057,6 +2736,9 @@ class PricingQuotation(Base):
     quotation_number: Mapped[str] = mapped_column(
         String(30), nullable=False, unique=True, index=True
     )
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
     project_id: Mapped[int] = mapped_column(
         ForeignKey("sites.id", ondelete="RESTRICT"), nullable=False, index=True
     )
@@ -2106,6 +2788,7 @@ class PricingQuotation(Base):
         DateTime, nullable=False, default=utcnow, onupdate=utcnow
     )
 
+    department: Mapped[Department] = relationship()
     lines: Mapped[list["PricingQuotationLine"]] = relationship(
         back_populates="quotation",
         cascade="all, delete-orphan",
@@ -2365,3 +3048,545 @@ class PricingQuotationCounter(Base):
 
     year: Mapped[int] = mapped_column(Integer, primary_key=True)
     last_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class StoreWarehouse(Base):
+    __tablename__ = "store_warehouses"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    warehouse_type: Mapped[StoreWarehouseType] = mapped_column(
+        enum_column(StoreWarehouseType, 20), nullable=False, index=True
+    )
+    location: Mapped[str | None] = mapped_column(String(255))
+    notes: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+    department: Mapped[Department] = relationship()
+
+    __table_args__ = (
+        CheckConstraint("length(trim(name)) > 0", name="ck_store_warehouse_name_present"),
+        Index(
+            "uq_store_one_main_warehouse",
+            "department_id",
+            "warehouse_type",
+            unique=True,
+            postgresql_where=(warehouse_type == StoreWarehouseType.MAIN),
+            sqlite_where=(warehouse_type == StoreWarehouseType.MAIN),
+        ),
+        UniqueConstraint("department_id", "name", name="uq_store_warehouse_department_name"),
+    )
+
+
+class StoreUserWarehouse(Base):
+    __tablename__ = "store_user_warehouses"
+
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    warehouse_id: Mapped[int] = mapped_column(ForeignKey("store_warehouses.id", ondelete="CASCADE"), primary_key=True)
+
+
+class StoreItem(Base):
+    __tablename__ = "store_items"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    model: Mapped[str | None] = mapped_column(String(160), index=True)
+    serial_number: Mapped[str | None] = mapped_column(String(160), index=True)
+    code: Mapped[str | None] = mapped_column(String(80), index=True)
+    unit: Mapped[str] = mapped_column(String(40), nullable=False, default="piece")
+    minimum_stock: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+    image_storage_key: Mapped[str | None] = mapped_column(String(255), unique=True)
+    image_original_filename: Mapped[str | None] = mapped_column(String(255))
+    notes: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+    department: Mapped[Department] = relationship()
+
+    __table_args__ = (
+        CheckConstraint("length(trim(name)) > 0", name="ck_store_item_name_present"),
+        CheckConstraint("minimum_stock >= 0", name="ck_store_item_minimum_nonnegative"),
+        UniqueConstraint("department_id", "code", name="uq_store_item_department_code"),
+    )
+
+
+class StoreStockBalance(Base):
+    __tablename__ = "store_stock_balances"
+
+    warehouse_id: Mapped[int] = mapped_column(ForeignKey("store_warehouses.id", ondelete="CASCADE"), primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("store_items.id", ondelete="CASCADE"), primary_key=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(16, 2), nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (CheckConstraint("quantity >= 0", name="ck_store_stock_nonnegative"),)
+
+
+class StoreCustodyBalance(Base):
+    __tablename__ = "store_custody_balances"
+
+    technician_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("store_items.id", ondelete="CASCADE"), primary_key=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(16, 2), nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (CheckConstraint("quantity >= 0", name="ck_store_custody_nonnegative"),)
+
+
+class StoreMovement(Base):
+    __tablename__ = "store_movements"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
+    movement_number: Mapped[str] = mapped_column(String(40), nullable=False, unique=True, index=True)
+    movement_type: Mapped[StoreMovementType] = mapped_column(enum_column(StoreMovementType, 40), nullable=False, index=True)
+    source_warehouse_id: Mapped[int | None] = mapped_column(ForeignKey("store_warehouses.id", ondelete="RESTRICT"), index=True)
+    destination_warehouse_id: Mapped[int | None] = mapped_column(ForeignKey("store_warehouses.id", ondelete="RESTRICT"), index=True)
+    technician_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), index=True)
+    project_name: Mapped[str | None] = mapped_column(String(200), index=True)
+    reason: Mapped[str | None] = mapped_column(Text)
+    reversed_movement_id: Mapped[int | None] = mapped_column(ForeignKey("store_movements.id", ondelete="RESTRICT"), unique=True)
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    created_by_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, index=True)
+
+
+class StoreMovementLine(Base):
+    __tablename__ = "store_movement_lines"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    movement_id: Mapped[int] = mapped_column(ForeignKey("store_movements.id", ondelete="CASCADE"), nullable=False, index=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("store_items.id", ondelete="RESTRICT"), nullable=False, index=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(16, 2), nullable=False)
+    source_before: Mapped[Decimal | None] = mapped_column(Numeric(16, 2))
+    source_after: Mapped[Decimal | None] = mapped_column(Numeric(16, 2))
+    destination_before: Mapped[Decimal | None] = mapped_column(Numeric(16, 2))
+    destination_after: Mapped[Decimal | None] = mapped_column(Numeric(16, 2))
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_store_movement_line_quantity_positive"),
+        UniqueConstraint("movement_id", "position", name="uq_store_movement_line_position"),
+    )
+
+
+class TechnicalDocument(Base):
+    __tablename__ = "technical_documents"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
+    pricing_item_id: Mapped[int | None] = mapped_column(ForeignKey("pricing_items.id", ondelete="CASCADE"), index=True)
+    related_item_id: Mapped[int | None] = mapped_column(ForeignKey("pricing_related_items.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    uploaded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    uploaded_by_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (
+        CheckConstraint("(CASE WHEN pricing_item_id IS NULL THEN 0 ELSE 1 END + CASE WHEN related_item_id IS NULL THEN 0 ELSE 1 END) = 1", name="ck_technical_document_one_target"),
+        CheckConstraint("file_size > 0", name="ck_technical_document_file_size_positive"),
+    )
+
+
+class TechnicalRecommendation(Base):
+    __tablename__ = "technical_recommendations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
+    pricing_item_id: Mapped[int | None] = mapped_column(ForeignKey("pricing_items.id", ondelete="CASCADE"), unique=True, index=True)
+    related_item_id: Mapped[int | None] = mapped_column(ForeignKey("pricing_related_items.id", ondelete="CASCADE"), unique=True, index=True)
+    recommendation: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    updated_by_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (
+        CheckConstraint("(CASE WHEN pricing_item_id IS NULL THEN 0 ELSE 1 END + CASE WHEN related_item_id IS NULL THEN 0 ELSE 1 END) = 1", name="ck_technical_recommendation_one_target"),
+        CheckConstraint("length(trim(recommendation)) > 0", name="ck_technical_recommendation_present"),
+    )
+
+
+class QuotationTechnicalAttachment(Base):
+    __tablename__ = "quotation_technical_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    quotation_id: Mapped[int] = mapped_column(ForeignKey("pricing_quotations.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_document_id: Mapped[int | None] = mapped_column(ForeignKey("technical_documents.id", ondelete="SET NULL"), index=True)
+    target_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    item_name: Mapped[str] = mapped_column(String(180), nullable=False)
+    title: Mapped[str] = mapped_column(String(180), nullable=False)
+    storage_key: Mapped[str | None] = mapped_column(String(255))
+    original_filename: Mapped[str | None] = mapped_column(String(255))
+    content_type: Mapped[str | None] = mapped_column(String(60))
+    recommendation_snapshot: Mapped[str | None] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    __table_args__ = (
+        CheckConstraint("target_kind IN ('main', 'related')", name="ck_quote_technical_target_kind"),
+        CheckConstraint("storage_key IS NOT NULL OR recommendation_snapshot IS NOT NULL", name="ck_quote_technical_has_content"),
+        UniqueConstraint("quotation_id", "position", name="uq_quote_technical_position"),
+    )
+
+
+class WiringDiagramCategory(Base):
+    """Independent two-level folder hierarchy for wiring diagrams."""
+
+    __tablename__ = "wiring_diagram_categories"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wiring_diagram_categories.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    parent: Mapped["WiringDiagramCategory | None"] = relationship(
+        remote_side="WiringDiagramCategory.id", back_populates="children"
+    )
+    children: Mapped[list["WiringDiagramCategory"]] = relationship(
+        back_populates="parent", cascade="all, delete-orphan", order_by="WiringDiagramCategory.name"
+    )
+    department: Mapped[Department] = relationship()
+
+    __table_args__ = (
+        CheckConstraint("length(trim(name)) > 0", name="ck_wiring_category_name_present"),
+    )
+
+
+class WiringDiagram(Base):
+    __tablename__ = "wiring_diagrams"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
+    category_id: Mapped[int | None] = mapped_column(
+        ForeignKey("wiring_diagram_categories.id", ondelete="SET NULL"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
+    project_name: Mapped[str | None] = mapped_column(String(200), index=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+    uploaded_by_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    uploaded_by_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    department: Mapped[Department] = relationship()
+    category: Mapped[WiringDiagramCategory | None] = relationship()
+    files: Mapped[list["WiringDiagramFile"]] = relationship(
+        back_populates="diagram", cascade="all, delete-orphan", order_by="WiringDiagramFile.position"
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(trim(name)) > 0", name="ck_wiring_diagram_name_present"),
+    )
+
+
+class WiringDiagramFile(Base):
+    __tablename__ = "wiring_diagram_files"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    diagram_id: Mapped[int] = mapped_column(
+        ForeignKey("wiring_diagrams.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    diagram: Mapped[WiringDiagram] = relationship(back_populates="files")
+
+    __table_args__ = (
+        CheckConstraint("file_size > 0", name="ck_wiring_diagram_file_size_positive"),
+        UniqueConstraint("diagram_id", "position", name="uq_wiring_diagram_file_position"),
+    )
+
+
+class ProductEvaluationCounter(Base):
+    __tablename__ = "product_evaluation_counters"
+
+    year: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class ProductEvaluationRequest(Base):
+    __tablename__ = "product_evaluation_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, default=1, index=True
+    )
+    request_number: Mapped[str] = mapped_column(String(40), nullable=False, unique=True, index=True)
+    device_name: Mapped[str] = mapped_column(String(180), nullable=False, index=True)
+    manufacturer: Mapped[str | None] = mapped_column(String(160), index=True)
+    model: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    serial_number: Mapped[str | None] = mapped_column(String(180), index=True)
+    customer_project_name: Mapped[str] = mapped_column(String(220), nullable=False, index=True)
+    sales_contact_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    sales_contact_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    after_sales_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    after_sales_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    assigned_admin_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    assigned_admin_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    requirements: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[ProductEvaluationStatus] = mapped_column(enum_column(ProductEvaluationStatus, 40), nullable=False, index=True)
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    created_by_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+    approved_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    approved_by_name: Mapped[str | None] = mapped_column(String(120))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime)
+    admin_notes: Mapped[str | None] = mapped_column(Text)
+    received_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    received_by_name: Mapped[str | None] = mapped_column(String(120))
+    received_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    sessions: Mapped[list["ProductEvaluationSession"]] = relationship(back_populates="evaluation_request", cascade="all, delete-orphan", order_by="ProductEvaluationSession.sequence")
+    attachments: Mapped[list["ProductEvaluationRequestAttachment"]] = relationship(back_populates="evaluation_request", cascade="all, delete-orphan", order_by="ProductEvaluationRequestAttachment.position")
+    department: Mapped[Department] = relationship()
+
+    __table_args__ = (
+        CheckConstraint("length(trim(device_name)) > 0", name="ck_product_eval_device_name_present"),
+        CheckConstraint("length(trim(model)) > 0", name="ck_product_eval_model_present"),
+        CheckConstraint("length(trim(customer_project_name)) > 0", name="ck_product_eval_customer_present"),
+        CheckConstraint("length(trim(reason)) > 0", name="ck_product_eval_reason_present"),
+    )
+
+
+class ProductEvaluationRequestAttachment(Base):
+    __tablename__ = "product_evaluation_request_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("product_evaluation_requests.id", ondelete="CASCADE"), nullable=False, index=True)
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    evaluation_request: Mapped[ProductEvaluationRequest] = relationship(back_populates="attachments")
+
+    __table_args__ = (
+        CheckConstraint("file_size > 0", name="ck_product_eval_request_file_positive"),
+        UniqueConstraint("request_id", "position", name="uq_product_eval_request_file_position"),
+    )
+
+
+class ProductEvaluationSession(Base):
+    __tablename__ = "product_evaluation_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("product_evaluation_requests.id", ondelete="CASCADE"), nullable=False, index=True)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    assigned_user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True)
+    assigned_user_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    assigned_by_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"), nullable=False)
+    assigned_by_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    scheduled_start_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    location: Mapped[str | None] = mapped_column(String(220))
+    instructions: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[ProductEvaluationSessionStatus] = mapped_column(enum_column(ProductEvaluationSessionStatus, 30), nullable=False, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    tests_performed: Mapped[str | None] = mapped_column(Text)
+    results: Mapped[str | None] = mapped_column(Text)
+    strengths: Mapped[str | None] = mapped_column(Text)
+    weaknesses: Mapped[str | None] = mapped_column(Text)
+    issues_found: Mapped[str | None] = mapped_column(Text)
+    compatibility: Mapped[str | None] = mapped_column(Text)
+    recommendation: Mapped[str | None] = mapped_column(Text)
+    performance_rating: Mapped[int | None] = mapped_column(Integer)
+    quality_rating: Mapped[int | None] = mapped_column(Integer)
+    installation_rating: Mapped[int | None] = mapped_column(Integer)
+    compatibility_rating: Mapped[int | None] = mapped_column(Integer)
+    value_rating: Mapped[int | None] = mapped_column(Integer)
+    decision: Mapped[ProductEvaluationDecision | None] = mapped_column(enum_column(ProductEvaluationDecision, 40))
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    evaluation_request: Mapped[ProductEvaluationRequest] = relationship(back_populates="sessions")
+    attachments: Mapped[list["ProductEvaluationSessionAttachment"]] = relationship(back_populates="session", cascade="all, delete-orphan", order_by="ProductEvaluationSessionAttachment.position")
+
+    __table_args__ = (
+        UniqueConstraint("request_id", "sequence", name="uq_product_eval_session_sequence"),
+        CheckConstraint("performance_rating IS NULL OR performance_rating BETWEEN 1 AND 5", name="ck_product_eval_performance_rating"),
+        CheckConstraint("quality_rating IS NULL OR quality_rating BETWEEN 1 AND 5", name="ck_product_eval_quality_rating"),
+        CheckConstraint("installation_rating IS NULL OR installation_rating BETWEEN 1 AND 5", name="ck_product_eval_installation_rating"),
+        CheckConstraint("compatibility_rating IS NULL OR compatibility_rating BETWEEN 1 AND 5", name="ck_product_eval_compatibility_rating"),
+        CheckConstraint("value_rating IS NULL OR value_rating BETWEEN 1 AND 5", name="ck_product_eval_value_rating"),
+    )
+
+
+class ProductEvaluationSessionAttachment(Base):
+    __tablename__ = "product_evaluation_session_attachments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("product_evaluation_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(60), nullable=False)
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    session: Mapped[ProductEvaluationSession] = relationship(back_populates="attachments")
+
+    __table_args__ = (
+        CheckConstraint("file_size > 0", name="ck_product_eval_session_file_positive"),
+        UniqueConstraint("session_id", "position", name="uq_product_eval_session_file_position"),
+    )
+
+
+class WorkTaskCounter(Base):
+    __tablename__ = "work_task_counters"
+
+    year: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class WorkTask(Base):
+    """A Department task optionally tied to one explicitly shared Project."""
+
+    __tablename__ = "work_tasks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_number: Mapped[str] = mapped_column(
+        String(40), nullable=False, unique=True, index=True
+    )
+    department_id: Mapped[int] = mapped_column(
+        ForeignKey("departments.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    project_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sites.id", ondelete="SET NULL"), index=True
+    )
+    title: Mapped[str] = mapped_column(String(220), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    priority: Mapped[TaskPriority] = mapped_column(
+        enum_column(TaskPriority, 20), nullable=False, default=TaskPriority.NORMAL, index=True
+    )
+    status: Mapped[TaskStatus] = mapped_column(
+        enum_column(TaskStatus, 20), nullable=False, default=TaskStatus.NEW, index=True
+    )
+    assigned_to_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    assigned_to_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_by_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    created_by_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime, index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, default=utcnow, onupdate=utcnow
+    )
+
+    department: Mapped[Department] = relationship()
+    project: Mapped[Site | None] = relationship()
+    assigned_to: Mapped[User] = relationship(foreign_keys=[assigned_to_id])
+    created_by: Mapped[User] = relationship(foreign_keys=[created_by_id])
+    comments: Mapped[list["WorkTaskComment"]] = relationship(
+        back_populates="task", cascade="all, delete-orphan", order_by="WorkTaskComment.created_at"
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(trim(title)) > 0", name="ck_work_task_title_present"),
+    )
+
+
+class WorkTaskComment(Base):
+    __tablename__ = "work_task_comments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(
+        ForeignKey("work_tasks.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    author_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    author_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow)
+
+    task: Mapped[WorkTask] = relationship(back_populates="comments")
+    author: Mapped[User] = relationship()
+
+    __table_args__ = (
+        CheckConstraint("length(trim(body)) > 0", name="ck_work_task_comment_body_present"),
+    )
+
+
+class UserNotification(Base):
+    """An in-app notification with observable optional SMTP delivery state."""
+
+    __tablename__ = "user_notifications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    department_id: Mapped[int | None] = mapped_column(
+        ForeignKey("departments.id", ondelete="CASCADE"), index=True
+    )
+    task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("work_tasks.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(220), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    target_url: Mapped[str | None] = mapped_column(String(500))
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime)
+    email_status: Mapped[NotificationEmailStatus] = mapped_column(
+        enum_column(NotificationEmailStatus, 30),
+        nullable=False,
+        default=NotificationEmailStatus.NOT_REQUESTED,
+        index=True,
+    )
+    email_attempted_at: Mapped[datetime | None] = mapped_column(DateTime)
+    email_sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    email_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utcnow, index=True)
+
+    user: Mapped[User] = relationship()
+    department: Mapped[Department | None] = relationship()
+    task: Mapped[WorkTask | None] = relationship()
+
+    __table_args__ = (
+        CheckConstraint("length(trim(kind)) > 0", name="ck_notification_kind_present"),
+        CheckConstraint("length(trim(title)) > 0", name="ck_notification_title_present"),
+        CheckConstraint("length(trim(message)) > 0", name="ck_notification_message_present"),
+    )

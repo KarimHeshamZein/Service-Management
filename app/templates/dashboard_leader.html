@@ -11,9 +11,9 @@
     <p class="lede">{{ t('ui.finished.a.visit.file.the.evidence.while.you.are.still.on.site') }}</p>
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
-    <a class="btn btn-primary" href="/installations">{{ t('ui.new.installation') }}</a>
-    <a class="btn btn-secondary" href="/maintenance">{{ t('ui.new.preventive.maintenance') }}</a>
-    <a class="btn btn-secondary" href="/general-maintenance">{{ t('ui.new.maintenance') }}</a>
+    {% if can('records.create_installation') %}<a class="btn btn-primary" href="/installations">{{ t('ui.new.installation') }}</a>{% endif %}
+    {% if can('records.create_preventive') %}<a class="btn btn-secondary" href="/maintenance">{{ t('ui.new.preventive.maintenance') }}</a>{% endif %}
+    {% if can('records.create_maintenance') %}<a class="btn btn-secondary" href="/general-maintenance">{{ t('ui.new.maintenance') }}</a>{% endif %}
   </div>
 </div>
 

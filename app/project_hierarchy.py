@@ -5,13 +5,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from .helpers import entity_id
-from .models import Site, SubProject, SubProjectSite, WorkSite
+from .models import ProjectTeamMember, Site, SubProject, SubProjectSite, WorkSite
 
 
 def active_project_hierarchy(db: Session) -> list[Site]:
-    return list(
-        db.scalars(
-            select(Site)
+    statement = (
+        select(Site)
             .options(
                 selectinload(Site.sub_projects)
                 .selectinload(SubProject.site_assignments)
@@ -19,8 +18,10 @@ def active_project_hierarchy(db: Session) -> list[Site]:
             )
             .where(Site.is_active.is_(True))
             .order_by(Site.name)
-        )
     )
+    if not db.info.get("is_admin"):
+        statement = statement.where(Site.id.in_(db.info.get("project_ids") or set()))
+    return list(db.scalars(statement).unique())
 
 
 def hierarchy_json(projects: list[Site]) -> list[dict]:

@@ -1,6 +1,234 @@
 # Service Management System — Project Handoff
 
-Updated: 2026-08-12
+Updated: 2026-08-31
+
+## Pending review: direct user permissions and resource scopes
+
+Work remains on `feature/department-workspaces`. Permissions are now assigned
+directly to each User inside each Department; Department defaults no longer
+grant or deny access. Internal User creation requires an active Department and
+then opens User Roles & Permissions. That page controls Department memberships,
+the primary Department, direct action permissions, view scopes (None, Own,
+Selected, All Department), selected Projects, Pricing Categories/Items, and
+Warehouses. Create permission always preserves access to the user's own work.
+The shared selected-Project list scopes Projects, records, reports, quotations,
+and Tasks, but each module still needs its own permission. Project Team only
+maintains that selected list; its old per-project capability toggles are gone.
+Store custody choices are limited to active Technical users in the current
+Department.
+
+Migration `d4f9c2a61b30` is the single head. With approval, the development
+database was backed up to
+`tmp/phase2-dev-backups/service_management-before-d4f9c2a61b30-20260831-140631.dump`,
+migrated to the head, passed `alembic check`, and restarted successfully on
+`127.0.0.1:8999`. Administrator live checks passed for Login, Users, and User
+Roles & Permissions. No ZIP was built. Full isolated regression: `449 passed, 9 warnings`. Alembic round-trip/schema drift:
+`6 passed`. Python compilation, JavaScript syntax, all Jinja templates, and
+`git diff --check` pass.
+
+## Superseded design note: Department workspaces, permissions, Projects and Tasks
+
+Work is on `feature/department-workspaces`. Internal users may belong to several
+Departments and choose one active workspace; Administrators can enter every
+active Department. A permission matrix supplies Department defaults and
+per-user allow/deny overrides for every major module/action. Department-owned
+Pricing, documents, wiring, Store, Product Evaluations and Tasks are centrally
+isolated, while Pricing Categories can be restricted to selected Department
+users. Existing data/users migrate into General.
+
+Projects are shared only through explicit cross-Department team memberships
+with separate record, report, quotation and task capabilities. The task board
+supports assignment/reassignment, Project, priority, due time, status, comments,
+in-app notifications and optional SMTP delivery. Project-team additions notify
+the user. Notifications switch to the relevant workspace before opening their
+target. Department, permission, Project-team and task mutations write detailed
+Logs Report context. The screens use card layouts and one-open-at-a-time
+accordions to reduce page clutter.
+
+Migration `c1e8a4f72d90` is the single head and passed the isolated six-test
+Alembic round trip/schema check. With approval, the development database was
+backed up to
+`tmp/phase2-dev-backups/service_management-before-c1e8a4f72d90-20260830-171325.dump`,
+migrated to `c1e8a4f72d90`, passed `alembic check`, and restarted successfully on
+port `8999`; `/login` returned HTTP 200. No ZIP has been performed. Focused passing gates:
+auth `39`, Departments/Tasks `9`, reports `30`, maintenance `59`,
+installations/admin `64`, Pricing/Store/documents/evaluations `55`, and
+i18n/logs/Departments `38`.
+
+## Pending review: Product Evaluations and Testing
+
+Create Order now contains an independent device request, Admin approval, receipt,
+assignment and repeat-evaluation workflow. Serial Number identifies the physical
+device for later search; every test session retains its assigned user, timing,
+results, five ratings, decision, evidence and PDF, while a combined PDF shows the
+full device history. Sales and After Sales may be internal users or free-text
+external names. Add to Pricing Items only pre-fills the existing item form and
+does not link the records. Migration `b9d4f6a21c80` is the single head and passes
+the isolated round trip. It was applied to the development database after backup
+`tmp/phase2-dev-backups/service_management-before-b9d4f6a21c80-20260829-133829.dump`
+and passes `alembic check`. Focused gates: workflow `2 passed`, migrations `6
+passed`, and i18n `24 passed`.
+
+## Pending review: Wiring Diagrams
+
+Pricing now includes an independent Wiring Diagrams library with separate Main
+and Subcategory folders, optional free-text Project name and notes, multiple
+validated PDF/image files, combined preview, individual downloads and ZIP
+download. Pricing access permits viewing; a separate permission permits
+Technical-user management; only Administrators delete complete diagrams. Its
+migration is `a8c5e2f41d70`, applied after a local backup and verified through a
+downgrade/upgrade round trip and `alembic check`.
+
+## Pending review: Store and Data Sheet modules
+
+Store is a separate inventory ledger with Main/Branch warehouses, independent
+items, multi-item purchases/issues/transfers, Technical-user custody, strict
+non-negative balances, immutable movements with reasoned reversal, scoped
+action permissions, and on-screen/PDF/Excel reports. Pricing now has a
+folder-first Data Sheet library for Main and Related Items, multiple validated
+files, branded recommendation PDF, Technical Package ZIP, and optional immutable
+quotation snapshots. Migration `f2b7c4d91e63` is applied after backup
+`tmp/phase2-dev-backups/service_management-before-f2b7c4d91e63-20260827-102015.dump`;
+its downgrade/upgrade round trip and ORM drift check pass. Focused gates: `26
+passed` for Store/Data Sheet/i18n and `95 passed` for existing
+Pricing/Purchase/Admin/i18n behavior.
+
+## Pending review: actionable Create/Edit validation
+
+Installation, Preventive Maintenance, and Maintenance now treat a browser-added
+row as an attempted addition even when its Service was left blank. The Edit
+workflow therefore stays on the same record and reports the exact missing field
+instead of redirecting with `No changes were made`. A client preflight marks the
+field and its Site/service cards in red, shows a contextual English/Arabic reason,
+focuses the first problem, and retains the entered fields and selected photos for
+correction. Server-side validation remains the final authority and keeps the
+saved record atomic. The focused Edit/Append/Autosave gate is `16 passed, 1
+warning`; JavaScript syntax and Python compilation pass. No migration or restart
+was performed, and browser visual verification is still pending because the
+in-app browser connection was unavailable.
+
+## Pending review: shared Purchase Documents and price analysis
+
+Pricing now includes Purchase Documents directly beneath Items. It uses the
+same Main Category/Subcategory folders and item images. One purchase invoice or
+supplier quotation may contain multiple validated files and link to multiple
+Main or Related Items selected across folders without storing duplicate files.
+Each linked Item has an independent optional unit price and currency; Item pages
+filter the archive and provide hoverable, currency-separated trends plus an
+in-tool PDF analysis export. Combined PDF preview, individual download, ZIP
+download, role controls, detailed audit events, and safe orphan cleanup are
+covered by focused tests. Migration `c6a4e8f21d90` is created but has not been
+applied to the development database, and the service has not been restarted.
+The focused cross-feature gate is `42 passed, 1 warning`; compile, JavaScript
+syntax, migration round-trip/metadata drift, and diff checks pass. In-app
+browser visual verification was unavailable in this session.
+
+## Pending review: isolated customer-report redesign Part 1
+
+Administrators now see an `Open design preview` action beside the unchanged
+official PDF actions. The isolated Part 1 PDF contains only a redesigned cover
+and executive summary built from the saved report's real data. It uses the
+existing horizontal AFAQY logo plus a light AFAQY watermark on both pages and is
+clearly marked as a non-final design preview. The official renderer and routes
+are untouched. No dependency, database, or migration change was made. The
+focused access/PDF/i18n gate is `25 passed, 1 warning`; both pages were rendered
+to PNG and visually inspected.
+
+## Pending review: Pricing Item folder assignment
+
+Add/Edit Pricing Item uses a shared Category folder picker instead of a flat
+dropdown. It shows every Main Category as a folder, opens one Main Category to
+show its smaller teal Subcategory folders, and provides Back, direct Main
+Category selection, and Uncategorized. The selected path is shown on the form
+and is persisted only when Create/Save is submitted; editing therefore uses the
+same UI to move an existing Item between folders. No migration is required. The
+full Pricing gate is `41 passed, 1 warning`; the focused hierarchy/i18n gate is
+`25 passed, 1 warning`, and JavaScript syntax passes.
+
+## Pending review: two-level Pricing categories
+
+Pricing supports Main Categories with one level of smaller teal Subcategory
+folders. Existing Categories remain Main Categories. In Items, a Main Category
+shows its Subfolders first and its directly assigned items below; a Subcategory
+shows only its own items. Create Quotation uses the same hierarchy in a compact
+picker with one-level Back navigation. Migration e7c3a1b95d42 adds only a
+nullable self-reference and does not move existing data. The focused Pricing
+and Alembic round-trip/ORM-drift gate is 42 passed, 1 warning. The development
+database was backed up to
+`tmp/phase2-dev-backups/service_management-before-e7c3a1b95d42-20260825-133148.dump`,
+migrated to `e7c3a1b95d42`, and restarted successfully on port 8999 on
+2026-08-25. All three existing Categories and all four Pricing Items were
+verified after migration.
+
+## Pending Pricing Items category browser
+
+Pricing Items now opens with responsive folder-style Category cards rather than
+rendering every item in one long table. Opening a Category displays only its
+items; Back to categories returns to the folder grid, and Uncategorized has its
+own folder. Searches work across all Categories from the overview and remain
+scoped when started inside a Category. Existing management and price-history
+features remain intact. Create Quotation uses the same folder-first navigation
+inside its item-selection dialog, including Back to categories and cross-folder
+search. No migration is required. The focused Pricing/i18n gate is `64 passed,
+1 warning`; the quotation-picker gate is `27 passed, 1 warning`.
+
+## Pending unified Logs Report
+
+Work now continues on `feature/logs-report`. Administrators have one
+Management -> Logs Report page combining application/user audit searches and
+Technician Activity. Both views remain blank until the Administrator supplies a
+search criterion and selects Search. Activity filters use second-precision
+display-time bounds and can export the complete match to PDF or Excel;
+Technician Activity retains PDF and adds a three-sheet Excel export. The old
+Audit Log and Technician Activity navigation entries were removed and their
+page URLs redirect to the new location. Change history is no longer rendered on
+Installation, Preventive Maintenance, or Maintenance record details; revisions
+remain stored and are available only through Logs Report. No migration is
+required. The focused gate is `45 passed, 37 deselected, 1 warning`, plus
+`9 passed, 1 warning` for record-detail visibility.
+
+## Pending long-entry autosave and Edit correction
+
+Work now continues on `fix/record-edit-autosave-drafts`. Installation,
+Preventive Maintenance, and Maintenance Create/Edit forms autosave private
+server-side drafts for seven days, retain selected photos in same-browser
+IndexedDB, expose a Data Entry -> My drafts page, and renew the authenticated
+session every four minutes. Edit-table clones preserve their saved Site position,
+fixing the observed `Table row ... is not assigned to a valid Site` rejection.
+Failed additions keep the original record unchanged.
+
+Migration `d8f4a6c21e90` adds `entry_drafts`. The focused workflow, access, i18n,
+and Alembic gate is `169 passed, 1 warning`. Source validation is green. With
+approval, the development database was backed up to
+`tmp/phase2-dev-backups/service_management-before-d8f4a6c21e90-20260823-165434.dump`,
+migrated to `d8f4a6c21e90`, and restarted on port 8999. Authenticated HTTP checks
+passed for Preventive Maintenance, My drafts, and the draft API.
+
+## Pending Photo Guidance Profiles feature
+
+The current `feature/project-photo-guidance-profiles` worktree redesigns Photo
+Guidance as independent, named, Main-Project-scoped profiles such as `Solar
+Solution`. Profiles no longer select or depend on Pricing Items or Installed
+Assets. Each device/service card in Installation, Preventive Maintenance, and
+Maintenance Create/Edit has one optional profile selector. Before/After alerts
+and reusable descriptions guide the technician, while only the final editable
+photo description is saved as evidence and printed in reports.
+
+Alembic revision `b4e8d3c71a26` migrates the older item-linked rules into named
+profiles and adds nullable saved-profile references to all three work-item types.
+The migration and focused workflow gate pass. With approval, the development
+database was backed up to
+`tmp/phase2-dev-backups/service_management-before-b4e8d3c71a26-20260819-032403.dump`,
+migrated to `b4e8d3c71a26`, and restarted on port 8999 with reload disabled.
+Authenticated HTTP checks passed for the profile-management page and all three
+data-entry pages.
+
+The same branch also changes newly created Main Projects so their automatic
+`General` Sub Project begins without Site assignments. Each Sub Project has a
+`Deselect all Sites` action followed by the existing explicit Save action. A
+global Back control appears on all authenticated pages with safe Dashboard/All
+Records fallback. No migration was required; the focused gate is `62 passed, 1
+warning`, and port 8999 was restarted and checked successfully.
 
 This file is the portable context for continuing development on another PC or
 with another Codex account. It is committed with the source. A new agent must
@@ -80,6 +308,16 @@ Core locations:
 ### Project hierarchy and saved service reports
 
 - The hierarchical reporting work is merged into `main` and approved.
+- Pending on `feature/full-record-editing`, saved report PDFs add large-report
+  navigation: clickable hierarchical contents, a searchable Record & Device
+  Index, Report Information, per-Site Service Data Tables, Approvals, native
+  viewer bookmarks down to devices, and Back to contents links. ReportLab uses
+  multi-pass layout so displayed page references stay accurate.
+- Customer reports now lead with a compact executive summary and omit the
+  Technician list. A clickable Items Requiring Attention section is generated
+  only when a result/issue/recommendation needs review; fully successful reports
+  show a short no-actions message. Footers say Confidential, and manual
+  approvals collect Name, Job title, Signature, and Date.
 - The existing Project model and URLs are preserved as Main Projects.
 - Main Projects now have optional description, start date, and end date.
 - Additive Sub Projects organize assignments to the existing global Site
@@ -144,7 +382,10 @@ Core locations:
   retains the searchable image-card picker. Preventive Maintenance and
   Maintenance intentionally have no Item selector; their work cards begin with
   Service Performed and do not create an installed-asset link.
-- Grouped multi-item records retain per-item results, notes, and evidence.
+- Grouped multi-item records retain per-item results and evidence. Installation
+  retains its notes; maintenance workflows collect optional Issue Found and
+  Recommendations without a separate Maintenance Notes input. Historical notes
+  stay stored.
 - Each Installation Site has an add/remove-row device table with Item/Device
   Name, Model, Serial Number, IMEI, SIM Serial Number, SIM Type, immutable
   Main/Sub/Site scope labels, and Remarks. Selecting an Installation Item
@@ -160,13 +401,21 @@ Core locations:
   Add another item/service operates inside a Site; Add another Site creates
   another complete section. The atomic save produces one record/ID for the full
   visit.
+- Add another item/service, Add another Site, and Add row use an idempotent
+  shared JavaScript initializer. Static CSS/JavaScript URLs carry a content
+  fingerprint so deployments do not reuse an obsolete cached form script.
 - Optional report data tables use browser-entered rows and are separated by a
   single-line `MAIN PROJECT | ... SUB PROJECT | ... SITE | ...` header.
   Historical Excel-imported snapshots remain a fallback. The report picker
   supports inclusive From/To submission-time filtering down to seconds.
-- Preventive Maintenance and Maintenance PDF cards intentionally omit Model,
-  Serial number, and Maintenance notes. They retain Service, Result, Issue
-  found, Recommendations, and photo evidence. Installation PDFs are unchanged.
+- Saved report PDF `Created at` and record `Performed by ... on` timestamps are
+  converted from stored UTC to the configured display timezone, matching the
+  Records interface. Saved reports render on download, so downloading again is
+  sufficient; previously downloaded PDF files remain unchanged.
+- Preventive Maintenance and Maintenance PDF cards intentionally omit Model and
+  Serial number. They retain Service, Result, photo evidence, and any non-empty
+  historical Maintenance Notes, Issue Found, and Recommendations rows; empty
+  optional labels are not printed. Installation PDFs are unchanged.
 - Completed records remain controlled snapshots with append-only revision audit
   behavior as documented in `CLAUDE.md`.
 
@@ -231,13 +480,15 @@ objects.
 
 ## Latest offline deployment artifact
 
-- Version: `1.1.0-rc33`
-- Local ignored filename: `dist/service-management-offline-1.1.0-rc33.zip`
-- SHA-256:
-  `f494123c624279313dba1613c46367c39790e6485a8f1fccf894d564450b1906`
-- Size: `535146924` bytes (about 510 MB)
-- Outer and embedded ZIP CRCs passed. The package reports Alembic head
-  `c8e4f2a91d73`, its PDF source matches the repository, and `.env`, databases,
+- Version: `1.1.0-rc43`
+- Local ignored filename: `dist/service-management-offline-1.1.0-rc43.zip`
+- The authoritative SHA-256 is stored in the adjacent ignored
+  `service-management-offline-1.1.0-rc43.zip.sha256` file. Its value is
+  `07dd093a7e493c5683bc008959d0811e333424f8cc946c9363152e6de91fb55e`.
+- Size: 510.57 MB (`535373941` bytes).
+- The focused Pricing and release-workflow gate passed `61 passed, 1 warning`.
+  Outer and embedded ZIP CRCs passed. The package includes Alembic migration
+  `e7c3a1b95d42`, and `.env`, databases,
   uploads, `dist` history, and root `index.html` are absent.
 
 The ZIP is not in GitHub source history. Copy it separately if it is needed on

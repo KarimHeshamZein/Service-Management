@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
-  <link rel="stylesheet" href="/static/css/app.css">
+  <link rel="stylesheet" href="/static/css/app.css?v={{ settings.static_asset_version }}">
   <link rel="icon" href="/static/img/logo.ico" type="image/x-icon">
 </head>
 <body>
@@ -24,19 +24,26 @@
 
     <nav class="nav" aria-label="{{ t('nav.main') }}">
       {% if user and not user.is_customer %}
-      <a href="/dashboard" class="nav-home {{ 'active' if active_nav == 'dashboard' }}"><span class="nav-item-icon" aria-hidden="true">⌂</span>{{ t('nav.dashboard') }}</a>
-      <div class="nav-section" data-nav-section="data-entry" data-active="{{ 'true' if active_nav in ['installation_submit', 'maintenance', 'general_maintenance'] else 'false' }}">
+      {% if can('dashboard.view') %}<a href="/dashboard" class="nav-home {{ 'active' if active_nav == 'dashboard' }}"><span class="nav-item-icon" aria-hidden="true">⌂</span>{{ t('nav.dashboard') }}</a>{% endif %}
+      {% if can('tasks.view') %}<a href="/tasks" class="nav-home {{ 'active' if active_nav == 'tasks' }}"><span class="nav-item-icon" aria-hidden="true">✓</span>{{ 'المهام' if lang == 'ar' else 'Tasks' }}</a>{% endif %}
+      {% set can_enter_data = can('records.create_installation') or can('records.create_preventive') or can('records.create_maintenance') or can('product_evaluations.view') %}
+      {% if can_enter_data %}
+      <div class="nav-section" data-nav-section="data-entry" data-active="{{ 'true' if active_nav in ['installation_submit', 'maintenance', 'general_maintenance', 'entry_drafts', 'product_evaluations'] else 'false' }}">
         <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-data-entry">
           <span class="nav-group-label"><span class="nav-item-icon" aria-hidden="true">＋</span>{{ t('nav.group.data_entry') }}</span><span class="nav-chevron" aria-hidden="true"></span>
         </button>
         <div class="nav-group-panel" id="nav-data-entry">
-          <a href="/installations" class="sub {{ 'active' if active_nav == 'installation_submit' }}">{{ t('nav.installations') }}</a>
-          <a href="/maintenance" class="sub {{ 'active' if active_nav == 'maintenance' }}">{{ t('nav.preventive_maintenance') }}</a>
-          <a href="/general-maintenance" class="sub {{ 'active' if active_nav == 'general_maintenance' }}">{{ t('nav.maintenance') }}</a>
+          {% if can('records.create_installation') %}<a href="/installations" class="sub {{ 'active' if active_nav == 'installation_submit' }}">{{ t('nav.installations') }}</a>{% endif %}
+          {% if can('records.create_preventive') %}<a href="/maintenance" class="sub {{ 'active' if active_nav == 'maintenance' }}">{{ t('nav.preventive_maintenance') }}</a>{% endif %}
+          {% if can('records.create_maintenance') %}<a href="/general-maintenance" class="sub {{ 'active' if active_nav == 'general_maintenance' }}">{{ t('nav.maintenance') }}</a>{% endif %}
+          {% if can('product_evaluations.view') %}<a href="/product-evaluations" class="sub {{ 'active' if active_nav == 'product_evaluations' }}">{{ t('product.title') }}</a>{% endif %}
+          {% if can('records.create_installation') or can('records.create_preventive') or can('records.create_maintenance') %}<a href="/drafts" class="sub {{ 'active' if active_nav == 'entry_drafts' }}">{{ t('ui.my.drafts') }}</a>{% endif %}
         </div>
       </div>
       {% endif %}
+      {% endif %}
 
+      {% if user and (user.is_customer or can('records.view')) %}
       <div class="nav-section" data-nav-section="records" data-active="{{ 'true' if active_nav in ['all_records', 'installation_records', 'records', 'general_maintenance_records'] else 'false' }}">
         <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-records">
           <span class="nav-group-label"><span class="nav-item-icon" aria-hidden="true">▤</span>{{ t('nav.group.records') }}</span><span class="nav-chevron" aria-hidden="true"></span>
@@ -48,8 +55,10 @@
           <a href="/general-maintenance/records" class="sub {{ 'active' if active_nav == 'general_maintenance_records' }}">{{ t('nav.records.maintenance') }}</a>
         </div>
       </div>
+      {% endif %}
 
-      <div class="nav-section" data-nav-section="reports" data-active="{{ 'true' if active_nav in ['installation_reports', 'maintenance_reports', 'preventive_maintenance_reports', 'technician_audit'] else 'false' }}">
+      {% if user and (user.is_customer or can('reports.view')) %}
+      <div class="nav-section" data-nav-section="reports" data-active="{{ 'true' if active_nav in ['installation_reports', 'maintenance_reports', 'preventive_maintenance_reports'] else 'false' }}">
         <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-reports">
           <span class="nav-group-label"><span class="nav-item-icon" aria-hidden="true">▣</span>{{ t('nav.group.reports') }}</span><span class="nav-chevron" aria-hidden="true"></span>
         </button>
@@ -57,20 +66,22 @@
           <a href="/reports/installation" class="sub {{ 'active' if active_nav == 'installation_reports' }}">{{ t('nav.reports.installation') }}</a>
           <a href="/reports/preventive-maintenance" class="sub {{ 'active' if active_nav == 'preventive_maintenance_reports' }}">{{ t('nav.reports.preventive_maintenance') }}</a>
           <a href="/reports/maintenance" class="sub {{ 'active' if active_nav == 'maintenance_reports' }}">{{ t('nav.reports.maintenance') }}</a>
-          {% if user and user.is_admin %}
-          <a href="/reports/technician-audit" class="sub {{ 'active' if active_nav == 'technician_audit' }}">{{ t('nav.reports.technician_activity') }}</a>
-          {% endif %}
         </div>
       </div>
+      {% endif %}
 
-      {% if user and user.can_access_pricing %}
-      <div class="nav-section" data-nav-section="pricing" data-active="{{ 'true' if active_nav in ['pricing_quotations', 'pricing_items', 'pricing_settings'] else 'false' }}">
+      {% set can_open_pricing = can('quotations.view') or can('pricing_items.view') or can('purchase_documents.view') or can('technical_documents.view') or can('wiring.view') %}
+      {% if user and can_open_pricing %}
+      <div class="nav-section" data-nav-section="pricing" data-active="{{ 'true' if active_nav in ['pricing_quotations', 'pricing_items', 'purchase_documents', 'technical_documents', 'wiring_diagrams', 'pricing_settings'] else 'false' }}">
         <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-pricing">
           <span class="nav-group-label"><span class="nav-item-icon" aria-hidden="true">¤</span>{{ t('nav.group.pricing') }}</span><span class="nav-chevron" aria-hidden="true"></span>
         </button>
         <div class="nav-group-panel" id="nav-pricing">
-          <a href="/pricing/quotations" class="sub {{ 'active' if active_nav == 'pricing_quotations' }}">{{ t('nav.pricing.quotations') }}</a>
-          <a href="/pricing/items" class="sub {{ 'active' if active_nav == 'pricing_items' }}">{{ t('nav.pricing.items') }}</a>
+          {% if can('quotations.view') %}<a href="/pricing/quotations/departments" class="sub {{ 'active' if active_nav == 'pricing_quotations' }}">{{ t('nav.pricing.quotations') }}</a>{% endif %}
+          {% if can('pricing_items.view') %}<a href="/pricing/items/departments" class="sub {{ 'active' if active_nav == 'pricing_items' }}">{{ t('nav.pricing.items') }}</a>{% endif %}
+          {% if can('purchase_documents.view') %}<a href="/pricing/purchase-documents" class="sub {{ 'active' if active_nav == 'purchase_documents' }}">{{ t('nav.pricing.purchase.documents') }}</a>{% endif %}
+          {% if can('technical_documents.view') %}<a href="/pricing/data-sheet" class="sub {{ 'active' if active_nav == 'technical_documents' }}">{{ t('technical.title') }}</a>{% endif %}
+          {% if can('wiring.view') %}<a href="/pricing/wiring-diagrams" class="sub {{ 'active' if active_nav == 'wiring_diagrams' }}">{{ t('wiring.title') }}</a>{% endif %}
           {% if user.is_admin %}
           <a href="/pricing/settings" class="sub {{ 'active' if active_nav == 'pricing_settings' }}">{{ t('nav.pricing.settings') }}</a>
           {% endif %}
@@ -78,19 +89,24 @@
       </div>
       {% endif %}
 
-      {% if user and user.can_manage_catalogs %}
-      <div class="nav-section" data-nav-section="management" data-active="{{ 'true' if active_nav in ['projects', 'sites', 'services', 'users', 'settings', 'audit_log'] else 'false' }}">
+      {% if user and can('store.view') %}
+      <a href="/store" class="nav-home {{ 'active' if active_nav == 'store' }}"><span class="nav-item-icon" aria-hidden="true">▣</span>{{ t('store.title') }}</a>
+      {% endif %}
+
+      {% if user and (can('projects.view') or can('projects.create') or can('projects.edit') or user.is_admin) %}
+      <div class="nav-section" data-nav-section="management" data-active="{{ 'true' if active_nav in ['projects', 'sites', 'services', 'departments', 'users', 'settings', 'logs_report'] else 'false' }}">
         <button type="button" class="nav-group-toggle" data-nav-group-toggle aria-expanded="true" aria-controls="nav-management">
           <span class="nav-group-label"><span class="nav-item-icon" aria-hidden="true">⚙</span>{{ t('nav.group.management') }}</span><span class="nav-chevron" aria-hidden="true"></span>
         </button>
         <div class="nav-group-panel" id="nav-management">
-          <a href="/projects" class="sub {{ 'active' if active_nav == 'projects' }}">{{ t('nav.management.projects') }}</a>
-          <a href="/sites" class="sub {{ 'active' if active_nav == 'sites' }}">{{ t('nav.management.sites') }}</a>
-          <a href="/service-types" class="sub {{ 'active' if active_nav == 'services' }}">{{ t('nav.management.service_types') }}</a>
+          {% if can('projects.view') or can('projects.create') or can('projects.edit') %}<a href="/projects" class="sub {{ 'active' if active_nav == 'projects' }}">{{ t('nav.management.projects') }}</a>{% endif %}
+          {% if user.is_admin %}<a href="/sites" class="sub {{ 'active' if active_nav == 'sites' }}">{{ t('nav.management.sites') }}</a>
+          <a href="/service-types" class="sub {{ 'active' if active_nav == 'services' }}">{{ t('nav.management.service_types') }}</a>{% endif %}
           {% if user.is_admin %}
+          <a href="/departments" class="sub {{ 'active' if active_nav == 'departments' }}">{{ 'الأقسام والصلاحيات' if lang == 'ar' else 'Departments & access' }}</a>
           <a href="/users" class="sub {{ 'active' if active_nav == 'users' }}">{{ t('nav.management.users') }}</a>
           <a href="/settings" class="sub {{ 'active' if active_nav == 'settings' }}">{{ t('nav.management.settings') }}</a>
-          <a href="/admin/audit-log" class="sub {{ 'active' if active_nav == 'audit_log' }}">{{ t('ui.audit.log') }}</a>
+          <a href="/management/logs-report" class="sub {{ 'active' if active_nav == 'logs_report' }}">{{ t('logs.report.title') }}</a>
           {% endif %}
         </div>
       </div>
@@ -99,6 +115,16 @@
 
     <div class="sidebar-foot">
       {% if user %}
+      {% if department and department_choices %}
+      <form method="post" action="/workspace" class="workspace-switcher">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="next_url" value="{{ workspace_next }}">
+        <label for="sidebar-workspace">{{ 'مساحة العمل' if lang == 'ar' else 'Workspace' }}</label>
+        <select id="sidebar-workspace" name="department_id" onchange="this.form.submit()">
+          {% for option in department_choices %}<option value="{{ option.id }}" {{ 'selected' if option.id == department.id }}>{{ option.name }}</option>{% endfor %}
+        </select>
+      </form>
+      {% endif %}
       <div class="who">{{ user.full_name }}</div>
       <div class="who-role">{{ t('user.role.' ~ user.role.value) }}</div>
       <form method="post" action="/language" class="language-switcher">
@@ -128,20 +154,25 @@
         <span></span>
       </button>
       <div class="topbar-title">
-        <a class="topbar-dashboard-link" href="/dashboard" aria-label="{{ t('nav.dashboard') }}" title="{{ t('nav.dashboard') }}">
+        <button type="button" class="topbar-back-button no-print" data-page-back data-fallback-url="{{ '/records' if user and user.is_customer else '/dashboard' }}" aria-label="{{ t('ui.back') }}" title="{{ t('ui.back') }}">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 5.3a1 1 0 0 1 0 1.4L10.4 11H20a1 1 0 1 1 0 2h-9.6l4.3 4.3a1 1 0 0 1-1.4 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.4 0z"/></svg>
+          <span>{{ t('ui.back') }}</span>
+        </button>
+        <a class="topbar-dashboard-link" href="{{ '/records' if user and user.is_customer else '/dashboard' }}" aria-label="{{ t('nav.records.all') if user and user.is_customer else t('nav.dashboard') }}" title="{{ t('nav.records.all') if user and user.is_customer else t('nav.dashboard') }}">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.8 12 3l9 7.8v9.7a.5.5 0 0 1-.5.5H15v-6H9v6H3.5a.5.5 0 0 1-.5-.5z"/></svg>
-          <span>{{ t('nav.dashboard') }}</span>
+          <span>{{ t('nav.records.all') if user and user.is_customer else t('nav.dashboard') }}</span>
         </a>
         <strong>{% block topbar_title %}{{ settings.app_name }}{% endblock %}</strong>
       </div>
-      {% if user and user.can_submit_records %}
+      {% if user and not user.is_customer %}<a class="notification-button no-print" href="/notifications" aria-label="{{ 'الإشعارات' if lang == 'ar' else 'Notifications' }}" title="{{ 'الإشعارات' if lang == 'ar' else 'Notifications' }}"><span aria-hidden="true">●</span>{% if unread_notifications %}<b>{{ unread_notifications if unread_notifications < 100 else '99+' }}</b>{% endif %}</a>{% endif %}
+      {% if user and (can('records.create_installation') or can('records.create_preventive') or can('records.create_maintenance') or (can('quotations.create') and can('quotations.view'))) %}
       <details class="quick-create no-print">
         <summary class="btn btn-primary">{{ t('ui.quick.create') }}</summary>
         <div class="quick-create-menu">
-          <a href="/installations">{{ t('ui.new.installation') }}</a>
-          <a href="/maintenance">{{ t('ui.new.preventive.maintenance') }}</a>
-          <a href="/general-maintenance">{{ t('ui.new.maintenance') }}</a>
-          {% if user.can_access_pricing %}<a href="/pricing/quotations/new">{{ t('ui.create.quotation') }}</a>{% endif %}
+          {% if can('records.create_installation') %}<a href="/installations">{{ t('ui.new.installation') }}</a>{% endif %}
+          {% if can('records.create_preventive') %}<a href="/maintenance">{{ t('ui.new.preventive.maintenance') }}</a>{% endif %}
+          {% if can('records.create_maintenance') %}<a href="/general-maintenance">{{ t('ui.new.maintenance') }}</a>{% endif %}
+          {% if can('quotations.create') and can('quotations.view') %}<a href="/pricing/quotations/new">{{ t('ui.create.quotation') }}</a>{% endif %}
         </div>
       </details>
       {% endif %}
@@ -156,7 +187,7 @@
   </div>
 </div>
 {% endif %}
-<script src="/static/js/app.js" defer></script>
+<script src="/static/js/app.js?v={{ settings.static_asset_version }}" defer></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

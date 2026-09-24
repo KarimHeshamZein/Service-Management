@@ -14,6 +14,7 @@
     <div class="field"><label>{{ t('ui.item.title') }} <span class="req">*</span></label>
       <select name="device_id" data-service-item-select="installation-item-picker"><option value="">{{ t('ui.choose.an.item') }}</option>{% for d in devices %}<option value="{{ d.id }}" data-item-name="{{ d.name }}" data-item-model="{{ d.model }}" {{ "selected" if item.device_id == d.id|string }}>{{ d.display_label }}</option>{% endfor %}</select><button type="button" class="btn btn-secondary item-picker-trigger" data-service-item-trigger hidden>{{ t('ui.choose.an.item') }}</button>
       <p class="error-text" data-error-kind="device_id" data-error-for="device_id_{{ index }}" style="{{ '' if errors["device_id_" ~ index] else 'display:none' }}">{{ errors["device_id_" ~ index] or '' }}</p></div>
+    <div class="field"><label>{{ t('ui.photo.guidance.profile.optional') }}</label><select name="photo_guidance_profile_id" data-photo-guidance-profile-select><option value="">{{ t('ui.select.photo.guidance.profile') }}</option>{% for profile in photo_guidance_profiles %}<option value="{{ profile.id }}" data-project-id="{{ profile.project_id }}" {{ "selected" if item.photo_guidance_profile_id == profile.id|string }}>{{ profile.name }}</option>{% endfor %}</select><p class="hint">{{ t('ui.photo.guidance.profile.help') }}</p><p class="error-text" data-error-kind="photo_guidance_profile_id" data-error-for="photo_guidance_profile_id_{{ index }}" style="{{ '' if errors["photo_guidance_profile_id_" ~ index] else 'display:none' }}">{{ errors["photo_guidance_profile_id_" ~ index] or '' }}</p></div>
     <div class="field"><label>{{ t('ui.serial.number') }}</label><input name="serial_number" value="{{ item.serial_number or '' }}" maxlength="160" dir="auto">
       <p class="error-text" data-error-kind="serial_number" data-error-for="serial_number_{{ index }}" style="{{ '' if errors["serial_number_" ~ index] else 'display:none' }}">{{ errors["serial_number_" ~ index] or '' }}</p></div>
     <div class="field"><label>{{ t('ui.warranty.start') }}</label><input name="warranty_start" type="date" value="{{ item.warranty_start or '' }}">
@@ -27,7 +28,7 @@
     <p class="error-text" data-error-kind="handover_notes" data-error-for="handover_notes_{{ index }}" style="{{ '' if errors["handover_notes_" ~ index] else 'display:none' }}">{{ errors["handover_notes_" ~ index] or '' }}</p></div>
   <div class="grid cols-2">
   <div class="field"><span class="field-label">{{ t('ui.before.photos') }}</span>
-    <div data-photos data-description-kind="before_photo_descriptions" data-description-name="before_photo_descriptions_{{ index }}" data-description-placeholder="{{ t('ui.photo.description') }}" data-description-label="{{ t('ui.description.for') }}" data-max-bytes="{{ (settings.max_upload_mb * 1048576)|int }}" data-max-files="{{ settings.max_photos_per_record }}">
+    <div data-photos data-photo-stage="before" data-description-kind="before_photo_descriptions" data-description-name="before_photo_descriptions_{{ index }}" data-issue-kind="before_photo_issue_found" data-issue-name="before_photo_issue_found_{{ index }}" data-issue-label="{{ t('ui.issue.found') }}" data-description-placeholder="{{ t('ui.photo.description') }}" data-description-label="{{ t('ui.description.for') }}" data-max-bytes="{{ (settings.max_upload_mb * 1048576)|int }}" data-max-files="{{ settings.max_photos_per_record }}">
       <span data-photo-count>{{ t('ui.no.photos.yet') }}</span><div class="dropzone"><div class="file-actions"><button type="button" class="btn btn-primary" data-pick-kind="before-camera" data-pick="installation-before-camera-{{ index }}">{{ t('ui.take.a.photo') }}</button><button type="button" class="btn btn-secondary" data-pick-kind="before-gallery" data-pick="installation-before-gallery-{{ index }}">{{ t('ui.choose.from.device') }}</button></div>
         <input id="installation-before-camera-{{ index }}" data-photo-kind="before-camera" class="sr-only" type="file" name="before_photos_{{ index }}" data-name-kind="before_photos" accept="image/jpeg,image/png,image/webp" capture="environment" multiple>
         <input id="installation-before-gallery-{{ index }}" data-photo-kind="before-gallery" class="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple></div>
@@ -36,7 +37,7 @@
     </div>
   </div>
   <div class="field"><span class="field-label">{{ t('ui.after.photos') }}</span>
-    <div data-photos data-description-kind="after_photo_descriptions" data-description-name="after_photo_descriptions_{{ index }}" data-description-placeholder="{{ t('ui.photo.description') }}" data-description-label="{{ t('ui.description.for') }}" data-max-bytes="{{ (settings.max_upload_mb * 1048576)|int }}" data-max-files="{{ settings.max_photos_per_record }}">
+    <div data-photos data-photo-stage="after" data-description-kind="after_photo_descriptions" data-description-name="after_photo_descriptions_{{ index }}" data-issue-kind="after_photo_issue_found" data-issue-name="after_photo_issue_found_{{ index }}" data-issue-label="{{ t('ui.issue.found') }}" data-description-placeholder="{{ t('ui.photo.description') }}" data-description-label="{{ t('ui.description.for') }}" data-max-bytes="{{ (settings.max_upload_mb * 1048576)|int }}" data-max-files="{{ settings.max_photos_per_record }}">
       <span data-photo-count>{{ t('ui.no.photos.yet') }}</span><div class="dropzone"><div class="file-actions"><button type="button" class="btn btn-primary" data-pick-kind="after-camera" data-pick="installation-after-camera-{{ index }}">{{ t('ui.take.a.photo') }}</button><button type="button" class="btn btn-secondary" data-pick-kind="after-gallery" data-pick="installation-after-gallery-{{ index }}">{{ t('ui.choose.from.device') }}</button></div>
         <input id="installation-after-camera-{{ index }}" data-photo-kind="after-camera" class="sr-only" type="file" name="after_photos_{{ index }}" data-name-kind="after_photos" accept="image/jpeg,image/png,image/webp" capture="environment" multiple>
         <input id="installation-after-gallery-{{ index }}" data-photo-kind="after-gallery" class="sr-only" type="file" accept="image/jpeg,image/png,image/webp" multiple></div>
@@ -54,8 +55,9 @@
 {% block content %}
 <div class="page-head"><div><span class="eyebrow">{{ t('nav.installations') }}</span><h1>{{ t('ui.new.installation') }}</h1>
   <p class="lede">{{ t('ui.select.the.shared.location.then.add.every.item.installed.during.this.visit') }}</p></div></div>
-<form method="post" action="/installations/submit" enctype="multipart/form-data" novalidate data-async-form data-project-hierarchy data-nested-entry-devices data-photo-prefix="installation" class="guided-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="form_token" value="{{ form_token }}">
+{% if append_record_id %}<div class="alert" role="note"><strong>{{ t('ui.add.to.existing.record') }} {{ append_record_number }}</strong><br>{{ t('ui.add.to.existing.record.help') }}</div>{% endif %}
+<form method="post" action="/installations/submit" enctype="multipart/form-data" novalidate data-async-form data-record-autosave data-project-hierarchy data-nested-entry-devices data-photo-guidance data-guidance-url="/photo-guidance" data-guidance-select-label="{{ t('ui.select.standard.description') }}" data-guidance-alert-label="{{ t('ui.photo.guidance.alert') }}" data-photo-prefix="installation" class="guided-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="form_token" value="{{ form_token }}"><input type="hidden" name="append_record_id" value="{{ append_record_id }}">
   <div class="alert error" role="alert" data-form-error style="{{ '' if errors.form else 'display:none' }}">{{ errors.form or '' }}</div>
   <script type="application/json" data-project-hierarchy-data>{{ project_hierarchy|tojson }}</script>
   <nav class="workflow-jumpbar no-print" aria-label="{{ t('ui.new.installation') }}">
@@ -77,7 +79,7 @@
   <div class="card workflow-section" id="entry-team"><div class="card-head"><h2>{{ t('ui.people.on.site') }}</h2></div><div class="card-body">
     {% include "partials/technical_participant_picker.html" %}
   </div></div>
-  <div class="sticky-form-actions no-print" id="entry-submit"><a class="btn btn-secondary" href="/dashboard">{{ t('ui.cancel') }}</a><button type="submit" class="btn btn-primary" data-submit data-label="{{ t('ui.submit.installation.record') }}" data-saving-label="{{ t('ui.saving.installation') }}">{{ t('ui.submit.installation.record') }}</button></div>
+  <div class="sticky-form-actions no-print" id="entry-submit"><a class="btn btn-secondary" href="{{ '/installations/records/' ~ append_record_id if append_record_id else '/dashboard' }}">{{ t('ui.cancel') }}</a><button type="submit" class="btn btn-primary" data-submit data-label="{{ t('ui.save.additions') if append_record_id else t('ui.submit.installation.record') }}" data-saving-label="{{ t('ui.saving.installation') }}">{{ t('ui.save.additions') if append_record_id else t('ui.submit.installation.record') }}</button></div>
 </form>
 {{ service_item_picker('installation-item-picker', devices) }}
 {% endblock %}

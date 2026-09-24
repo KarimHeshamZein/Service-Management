@@ -83,13 +83,17 @@ def test_three_device_summaries_are_exact_and_localized_in_html_but_english_in_p
 ):
     assert login(client, *LEADER_A).status_code == 303
     installation, maintenance, serials = _submit_three_device_records(client, db)
-    english_cell = "IP Camera - P3265-LV | INST-SN-1 | +2 more"
+    installation_cell = "IP Camera - P3265-LV | INST-SN-1 | +2 more"
+    maintenance_cell = "Camera Service | +2 more"
 
     for path in ("/records", "/reports"):
-        for record in (installation, maintenance):
+        for record, expected in (
+            (installation, installation_cell),
+            (maintenance, maintenance_cell),
+        ):
             page = client.get(f"{path}?q={record.record_number}")
             assert page.status_code == 200
-            assert f"<td>{english_cell}</td>" in page.text
+            assert f"<td>{expected}</td>" in page.text
 
     installation_list = client.get(
         f"/installations/records?q={installation.record_number}"
@@ -100,18 +104,19 @@ def test_three_device_summaries_are_exact_and_localized_in_html_but_english_in_p
     assert installation_list.text.count("+2 more") == 2
     assert maintenance_list.text.count("+2 more") == 1
 
-    for record_type, record in (
-        ("installation", installation),
-        ("maintenance", maintenance),
+    for record_type, record, expected in (
+        ("installation", installation, installation_cell),
+        ("maintenance", maintenance, maintenance_cell),
     ):
         pdf = client.get(
             f"/reports/pdf?type={record_type}&q={record.record_number}"
         )
         assert pdf.status_code == 200
         text = _pdf_text(pdf)
-        assert english_cell in text
-        for serial in serials:
-            assert serial in text
+        assert expected in text
+        if record_type == "installation":
+            for serial in serials:
+                assert serial in text
 
     _switch_to_arabic(client)
     arabic_cell = "IP Camera - P3265-LV | INST-SN-1 | +2 أخرى"
@@ -119,14 +124,14 @@ def test_three_device_summaries_are_exact_and_localized_in_html_but_english_in_p
         page = client.get(f"{path}?q={installation.record_number}")
         assert page.status_code == 200
         assert f"<td>{arabic_cell}</td>" in page.text
-        assert english_cell not in page.text
+        assert installation_cell not in page.text
 
     pdf = client.get(
         f"/reports/pdf?type=installation&q={installation.record_number}"
     )
     assert pdf.status_code == 200
     text = _pdf_text(pdf)
-    assert english_cell in text
+    assert installation_cell in text
     assert "+2 أخرى" not in text
 
 
