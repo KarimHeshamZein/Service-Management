@@ -83,7 +83,12 @@ def validate_image(filename: str, data: bytes) -> tuple[str, str]:
         with Image.open(io.BytesIO(data)) as probe:
             probe.load()
             pil_format = probe.format or ""
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
+    except (
+        Image.DecompressionBombError,
+        UnidentifiedImageError,
+        OSError,
+        ValueError,
+    ) as exc:
         raise UploadError(f"“{display_name}” could not be read as an image.") from exc
 
     decoded_mime = _PIL_FORMAT_TO_MIME.get(pil_format.upper())
@@ -112,7 +117,7 @@ def store_image(filename: str, data: bytes) -> StoredImage:
             img.thumbnail((THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE))
             thumbnail_key = f"{folder}/{stem}_thumb.jpg"
             img.save(settings.upload_dir / thumbnail_key, format="JPEG", quality=82)
-    except (OSError, ValueError):
+    except (Image.DecompressionBombError, OSError, ValueError):
         thumbnail_key = None  # Serving falls back to the original.
 
     return StoredImage(

@@ -1,6 +1,7 @@
 """Saved, hierarchy-aware customer reports assembled from service records."""
 from __future__ import annotations
 
+import logging
 from collections import OrderedDict
 from datetime import datetime, timedelta
 from typing import Any
@@ -36,6 +37,7 @@ from ..structured_report_preview_pdf import build_structured_report_preview_pdf
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 MAX_REPORT_NAME = 200
 MAX_REPORT_NOTES = 5000
@@ -710,12 +712,22 @@ def _pdf_response(
     include_device_data: bool,
     inline: bool,
 ) -> Response:
-    entries = _report_record_views(db, user, report, config)
-    content = build_structured_report_pdf(
-        report,
-        entries,
-        include_device_data=include_device_data,
-    )
+    try:
+        entries = _report_record_views(db, user, report, config)
+        content = build_structured_report_pdf(
+            report,
+            entries,
+            include_device_data=include_device_data,
+        )
+    except Exception:
+        logger.exception(
+            "Structured report PDF generation failed "
+            "(report_id=%s, report_number=%s, report_type=%s)",
+            report.id,
+            report.report_number,
+            report.report_type.value,
+        )
+        raise
     disposition = "inline" if inline else "attachment"
     return Response(
         content=content,

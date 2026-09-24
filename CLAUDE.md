@@ -4,6 +4,21 @@ Service Management System — a maintenance evidence portal. Read `README.md` fo
 full architecture, entities and known limitations. This file is the short version
 plus the rules that aren't inferable from the code.
 
+## RC43 PDF hotfix - 2026-09-24
+
+- Pending release on `fix/rc42-report-pdf`: saved service-report PDFs no longer
+  fail when an evidence thumbnail or original cannot be decoded. The renderer
+  tries the original after a bad thumbnail, shows a visible
+  `Photo unavailable.` placeholder if neither file can be used, and logs the
+  affected storage key without exposing report content. New uploads reject
+  Pillow decompression-bomb dimensions as a normal validation error.
+- Oversized Issue Found, Recommendations, photo-description, and attention
+  rows can split across pages while PDF bookmarks remain valid. Preview or
+  download failures now log the report ID, report number, type, and traceback.
+- The isolated hotfix gate is `5 passed`; Python compilation and visual
+  inspection of normal, oversized-narrative, Arabic, and unreadable-photo PDFs
+  pass. No dependency or schema migration was added.
+
 ## Current handoff — 2026-08-26
 
 - Pending review on `feature/logs-report`: incomplete browser-added Sites,

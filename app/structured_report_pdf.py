@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import io
+import logging
 import re
 from collections import OrderedDict
 from pathlib import Path
@@ -33,7 +34,7 @@ from .config import settings
 from .helpers import to_display
 from .models import MaintenanceResult, ServiceReport, ServiceReportType
 from .pdf_text import PDF_FONT, PDF_FONT_BOLD, pdf_text, style_for_pdf_text
-from .uploads import UploadError, resolve_storage_path
+from .uploads import resolve_storage_path
 
 
 NAVY = colors.HexColor("#17324D")
@@ -50,6 +51,7 @@ CONTENTS_DESTINATION = "report-contents"
 _ARABIC_NAVIGATION_GLYPHS = re.compile(
     r"[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]+"
 )
+logger = logging.getLogger(__name__)
 
 
 class _ReportDocTemplate(SimpleDocTemplate):
@@ -601,6 +603,8 @@ def _attention_section(
         rows,
         colWidths=[36 * mm, 34 * mm, 62 * mm, 48 * mm, 84 * mm],
         repeatRows=1,
+        splitByRow=1,
+        splitInRow=1,
     )
     table.setStyle(
         TableStyle(
@@ -624,35 +628,77 @@ def _attention_section(
 
 
 def _photo_cell(photo: dict[str, Any], styles: dict[str, ParagraphStyle]) -> list[Any] | None:
-    key = photo.get("thumbnail_key") or photo.get("storage_key")
-    if not key:
+    keys = list(
+        dict.fromkeys(
+            key
+            for key in (photo.get("thumbnail_key"), photo.get("storage_key"))
+            if key
+        )
+    )
+    if not keys:
         return None
-    try:
-        path = resolve_storage_path(str(key))
-        with PilImage.open(path) as source:
-            source = ImageOps.exif_transpose(source)
-            if source.mode not in ("RGB", "L"):
-                background = PilImage.new("RGB", source.size, "white")
-                if "A" in source.getbands():
-                    background.paste(source, mask=source.getchannel("A"))
-                else:
-                    background.paste(source)
-                source = background
-            source = source.convert("RGB")
-            source_width, source_height = source.size
-            scale = min(1640 / source_width, 960 / source_height)
-            fitted = source.resize(
-                (
-                    max(1, round(source_width * scale)),
-                    max(1, round(source_height * scale)),
-                ),
-                PilImage.Resampling.LANCZOS,
+    buffer = None
+    fitted = None
+    for key in keys:
+        try:
+            path = resolve_storage_path(str(key))
+            with PilImage.open(path) as source:
+                source = ImageOps.exif_transpose(source)
+                if source.mode not in ("RGB", "L"):
+                    background = PilImage.new("RGB", source.size, "white")
+                    if "A" in source.getbands():
+                        background.paste(source, mask=source.getchannel("A"))
+                    else:
+                        background.paste(source)
+                    source = background
+                source = source.convert("RGB")
+                source_width, source_height = source.size
+                scale = min(1640 / source_width, 960 / source_height)
+                fitted = source.resize(
+                    (
+                        max(1, round(source_width * scale)),
+                        max(1, round(source_height * scale)),
+                    ),
+                    PilImage.Resampling.LANCZOS,
+                )
+                buffer = io.BytesIO()
+                fitted.save(buffer, format="JPEG", quality=88, optimize=True)
+                buffer.seek(0)
+            break
+        except Exception as exc:
+            if isinstance(exc, MemoryError):
+                raise
+            logger.warning(
+                "Skipping unreadable report photo file %s: %s",
+                key,
+                exc,
+                exc_info=True,
             )
-            buffer = io.BytesIO()
-            fitted.save(buffer, format="JPEG", quality=88, optimize=True)
-            buffer.seek(0)
-    except (UploadError, OSError, ValueError):
-        return None
+            buffer = None
+            fitted = None
+
+    if buffer is None or fitted is None:
+        unavailable = Table(
+            [[_p("Photo unavailable.", styles["small_center"])]],
+            colWidths=[82 * mm],
+            rowHeights=[48 * mm],
+        )
+        unavailable.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, -1), LIGHT),
+                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("BOX", (0, 0), (-1, -1), 0.45, BORDER),
+                ]
+            )
+        )
+        cell: list[Any] = [unavailable]
+        if photo.get("description"):
+            cell.extend(
+                [Spacer(1, 1.5 * mm), _p(photo["description"], styles["small_center"])]
+            )
+        return cell
     width, height = fitted.size
     display_scale = min((82 * mm) / width, (48 * mm) / height)
     image = PdfImage(buffer, width=width * display_scale, height=height * display_scale)
@@ -689,7 +735,13 @@ def _photo_rows(photos: list[dict[str, Any]], styles: dict[str, ParagraphStyle])
         rows[-1].append("")
     tables: list[Table] = []
     for row in rows:
-        table = Table([row], colWidths=[88 * mm] * 3, hAlign="LEFT")
+        table = Table(
+            [row],
+            colWidths=[88 * mm] * 3,
+            hAlign="LEFT",
+            splitByRow=1,
+            splitInRow=1,
+        )
         table.setStyle(
             TableStyle(
                 [
@@ -837,7 +889,12 @@ def _device_card(
         [_p(label, styles["small"]), _p(value, styles["body"])]
         for label, value in details
     )
-    table = Table(rows, colWidths=[38 * mm, 226 * mm])
+    table = Table(
+        rows,
+        colWidths=[38 * mm, 226 * mm],
+        splitByRow=1,
+        splitInRow=1,
+    )
     table.setStyle(
         TableStyle(
             [
@@ -1323,8 +1380,8 @@ def build_structured_report_pdf(
                         )
                         if serial_number and serial_number != "-":
                             index_label += f" | SN: {serial_number}"
-                        _with_navigation(
-                            device_card,
+                        device_marker = _with_navigation(
+                            Spacer(1, 0.1 * mm),
                             key=item["_pdf_device_key"],
                             text=index_label,
                             level=4,
@@ -1335,6 +1392,7 @@ def build_structured_report_pdf(
                             KeepTogether(
                                 [
                                     record_banner,
+                                    device_marker,
                                     Spacer(1, 2 * mm),
                                     device_card,
                                 ]
