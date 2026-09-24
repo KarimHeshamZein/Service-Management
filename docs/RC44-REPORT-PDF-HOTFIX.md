@@ -1,6 +1,6 @@
-# RC43 saved-report PDF hotfix
+# RC44 saved-report PDF hotfix
 
-Version `1.1.0-rc43` is an application-only update from `1.1.0-rc42`.
+Version `1.1.0-rc44` is an application-only update from `1.1.0-rc42`.
 It does not change the database schema or production data.
 
 ## Fixes
@@ -18,12 +18,12 @@ It does not change the database schema or production data.
 Use the local Service Management Console on the production PC:
 
 1. Open **System -> Install update package**.
-2. Select `service-management-1.1.0-rc43.zip`.
+2. Select `service-management-1.1.0-rc44.zip`.
 3. Enter the supplied SHA-256 value.
 4. Install the update and wait for the health check to pass.
 
 The deployment workflow creates its normal database and upload safety backup.
-No migration is expected because RC43 retains Alembic head `c6a4e8f21d90`.
+No migration is expected because RC44 retains Alembic head `c6a4e8f21d90`.
 
 ## Verify
 
@@ -33,4 +33,4 @@ No migration is expected because RC43 retains Alembic head `c6a4e8f21d90`.
 4. If a placeholder appears, inspect the named report's source evidence and
    replace the unreadable photo when practical.
 5. If the report still fails, collect the service log from
-   `C:\ServiceManagement\logs`; RC43 records the exact traceback.
+   `C:\ServiceManagement\logs`; RC44 records the exact traceback.

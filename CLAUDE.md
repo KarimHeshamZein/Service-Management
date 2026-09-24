@@ -4,7 +4,7 @@ Service Management System — a maintenance evidence portal. Read `README.md` fo
 full architecture, entities and known limitations. This file is the short version
 plus the rules that aren't inferable from the code.
 
-## RC43 PDF hotfix - 2026-09-24
+## RC44 PDF hotfix - 2026-09-24
 
 - Pending release on `fix/rc42-report-pdf`: saved service-report PDFs no longer
   fail when an evidence thumbnail or original cannot be decoded. The renderer
