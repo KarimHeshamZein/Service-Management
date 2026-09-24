@@ -5,6 +5,7 @@ import html
 import io
 import logging
 import re
+import unicodedata
 from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ from typing import Any
 
 from PIL import Image as PilImage, ImageOps
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
@@ -287,11 +288,66 @@ def _styles() -> dict[str, ParagraphStyle]:
             leading=10.5,
             textColor=BLUE,
         ),
+        "attention_label": ParagraphStyle(
+            "StructuredAttentionLabel",
+            parent=sample["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=7,
+            leading=9,
+            textColor=NAVY,
+        ),
     }
 
 
 def _p(value: Any, style: ParagraphStyle, fallback: str = "-") -> Paragraph:
     return Paragraph(_text(value, fallback), style_for_pdf_text(value, style))
+
+
+def _paragraph_alignment(value: str, style: ParagraphStyle) -> int:
+    """Choose paragraph alignment from its first strong-direction character."""
+    if style.alignment == TA_CENTER:
+        return TA_CENTER
+    for character in value:
+        direction = unicodedata.bidirectional(character)
+        if direction in {"R", "AL"}:
+            return TA_RIGHT
+        if direction == "L":
+            return TA_LEFT
+    return style.alignment
+
+
+def _multilingual_paragraphs(
+    value: Any,
+    style: ParagraphStyle,
+    fallback: str = "-",
+) -> list[Any]:
+    """Render each entered paragraph with safe Latin/Arabic font fallback."""
+    raw = fallback if value is None or value == "" else str(value)
+    raw = raw.replace("\r\n", "\n").replace("\r", "\n")
+    blocks = [block.strip() for block in re.split(r"\n+", raw) if block.strip()]
+    if not blocks:
+        blocks = [fallback]
+
+    flowables: list[Any] = []
+    arabic_font = PDF_FONT_BOLD if "Bold" in str(style.fontName) else PDF_FONT
+    for index, block in enumerate(blocks):
+        if index:
+            flowables.append(Spacer(1, 1.2 * mm))
+        display_text = _text(block, fallback)
+        display_text = _ARABIC_NAVIGATION_GLYPHS.sub(
+            lambda match: f'<font name="{arabic_font}">{match.group(0)}</font>',
+            display_text,
+        )
+        alignment = _paragraph_alignment(block, style)
+        paragraph_style = style
+        if alignment != style.alignment:
+            paragraph_style = ParagraphStyle(
+                f"{style.name}-{'rtl' if alignment == TA_RIGHT else 'ltr'}",
+                parent=style,
+                alignment=alignment,
+            )
+        flowables.append(Paragraph(display_text, paragraph_style))
+    return flowables
 
 
 def _navigation_text(value: Any, *, bold: bool = False) -> tuple[str, str]:
@@ -575,13 +631,32 @@ def _attention_section(
     headers = ["Status", "Record", "Project / Site", "Item / Service", "Attention"]
     rows: list[list[Any]] = [[_p(value, styles["table_header"]) for value in headers]]
     for item in attention:
-        narrative = []
+        narrative: list[Any] = []
         if item["issue"]:
-            narrative.append(f"Issue: {item['issue']}")
+            narrative.extend(
+                [
+                    _p("Issue found", styles["attention_label"]),
+                    *_multilingual_paragraphs(item["issue"], styles["small"]),
+                ]
+            )
         if item["recommendation"]:
-            narrative.append(f"Recommendation: {item['recommendation']}")
+            if narrative:
+                narrative.append(Spacer(1, 1.5 * mm))
+            narrative.extend(
+                [
+                    _p("Recommendations", styles["attention_label"]),
+                    *_multilingual_paragraphs(
+                        item["recommendation"], styles["small"]
+                    ),
+                ]
+            )
         if not narrative:
-            narrative.append("Review the recorded result and agree the next action.")
+            narrative.extend(
+                _multilingual_paragraphs(
+                    "Review the recorded result and agree the next action.",
+                    styles["small"],
+                )
+            )
         record_cell = (
             _linked_paragraph(item["record_number"], item["key"], styles["attention_link"])
             if item["key"]
@@ -596,7 +671,7 @@ def _attention_section(
                     styles["small"],
                 ),
                 _p(item["item_name"], styles["body"]),
-                _p("\n".join(narrative), styles["small"]),
+                narrative,
             ]
         )
     table = Table(
@@ -885,8 +960,22 @@ def _device_card(
             )
             if str(value or "").strip()
         )
+    narrative_labels = {
+        "Maintenance notes",
+        "Installation notes",
+        "Handover notes",
+        "Issue found",
+        "Recommendations",
+    }
     rows.extend(
-        [_p(label, styles["small"]), _p(value, styles["body"])]
+        [
+            _p(label, styles["small"]),
+            (
+                _multilingual_paragraphs(value, styles["body"])
+                if label in narrative_labels
+                else _p(value, styles["body"])
+            ),
+        ]
         for label, value in details
     )
     table = Table(

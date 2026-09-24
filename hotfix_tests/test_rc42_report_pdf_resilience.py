@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 from pypdf import PdfReader
+from reportlab.lib.enums import TA_LEFT, TA_RIGHT
 
 import app.structured_report_pdf as report_pdf
 from app.models import MaintenanceResult, ServiceReportType
@@ -91,6 +92,37 @@ def test_pdf_splits_narratives_taller_than_one_page():
 
     assert content.startswith(b"%PDF")
     assert len(PdfReader(io.BytesIO(content)).pages) > 6
+
+
+def test_pdf_preserves_latin_text_and_direction_in_bilingual_narratives():
+    issue = (
+        "A report was received regarding a gate system malfunction.\n\n"
+        "تم استلام بلاغ بخصوص وجود عطل في نظام البوابات Barrier Gates، "
+        "وتم رفع بلاغ رقم 3418."
+    )
+    recommendation = (
+        "Inspect the generators and the ATS before restoring power.\n\n"
+        "يوصى بفحص المولدات ونظام التحويل قبل إعادة التيار الكهربائي."
+    )
+    report, entries = _report_payload(issue=issue, recommendation=recommendation)
+
+    content = report_pdf.build_structured_report_pdf(report, entries)
+    extracted = "\n".join(
+        page.extract_text() or "" for page in PdfReader(io.BytesIO(content)).pages
+    )
+    paragraphs = report_pdf._multilingual_paragraphs(issue, report_pdf._styles()["body"])
+    rendered_paragraphs = [
+        flowable for flowable in paragraphs if hasattr(flowable, "style")
+    ]
+
+    assert "\x00" not in extracted
+    assert extracted.count("A report was received regarding a gate system malfunction.") == 2
+    assert extracted.count("Inspect the generators and the ATS before restoring power.") == 2
+    assert extracted.count("Barrier Gates") == 2
+    assert "3418" in extracted
+    assert rendered_paragraphs[0].style.alignment == TA_LEFT
+    assert rendered_paragraphs[1].style.alignment == TA_RIGHT
+    assert 'font name="NotoSansArabic"' in rendered_paragraphs[1].text
 
 
 def test_pdf_falls_back_to_original_when_thumbnail_is_unreadable(
