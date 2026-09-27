@@ -11,12 +11,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from PIL import Image as PilImage, ImageOps
+from PIL import Image as PilImage, ImageChops, ImageOps
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 from reportlab.platypus import (
     CondPageBreak,
     Flowable,
@@ -34,18 +35,27 @@ from reportlab.platypus.tableofcontents import TableOfContents
 from .config import settings
 from .helpers import to_display
 from .models import MaintenanceResult, ServiceReport, ServiceReportType
-from .pdf_text import PDF_FONT, PDF_FONT_BOLD, pdf_text, style_for_pdf_text
+from .pdf_text import (
+    PDF_FONT,
+    PDF_FONT_BOLD,
+    pdf_text,
+    style_for_pdf_text,
+)
 from .uploads import resolve_storage_path
 
 
-NAVY = colors.HexColor("#17324D")
-BLUE = colors.HexColor("#1F6F8B")
+NAVY = colors.HexColor("#102A43")
+BLUE = colors.HexColor("#0F6E84")
 GREEN = colors.HexColor("#16845B")
-PALE_BLUE = colors.HexColor("#EAF3F6")
+AMBER = colors.HexColor("#B86E00")
+RED = colors.HexColor("#B64242")
+PALE_BLUE = colors.HexColor("#EAF4F7")
 PALE_GREEN = colors.HexColor("#E8F7F0")
+PALE_AMBER = colors.HexColor("#FFF4DE")
+PALE_RED = colors.HexColor("#FCECEC")
 SLATE = colors.HexColor("#526575")
-LIGHT = colors.HexColor("#F4F7F9")
-BORDER = colors.HexColor("#D7E0E6")
+LIGHT = colors.HexColor("#F5F7FA")
+BORDER = colors.HexColor("#C8D5DE")
 WHITE = colors.white
 LOGO_PATH = Path(__file__).resolve().parent / "static" / "img" / "afaqylogo.png"
 CONTENTS_DESTINATION = "report-contents"
@@ -113,12 +123,38 @@ def _display_datetime(value) -> str:
 def _styles() -> dict[str, ParagraphStyle]:
     sample = getSampleStyleSheet()
     return {
+        "eyebrow": ParagraphStyle(
+            "StructuredEyebrow",
+            parent=sample["Normal"],
+            fontName="Helvetica-Bold",
+            fontSize=8,
+            leading=10,
+            textColor=BLUE,
+            spaceAfter=1.5 * mm,
+        ),
+        "cover_title": ParagraphStyle(
+            "StructuredCoverTitle",
+            parent=sample["Title"],
+            fontName="Helvetica-Bold",
+            fontSize=25,
+            leading=29,
+            textColor=NAVY,
+            spaceAfter=2 * mm,
+        ),
+        "cover_name": ParagraphStyle(
+            "StructuredCoverName",
+            parent=sample["Heading2"],
+            fontName="Helvetica",
+            fontSize=14,
+            leading=18,
+            textColor=SLATE,
+        ),
         "title": ParagraphStyle(
             "StructuredReportTitle",
             parent=sample["Title"],
             fontName="Helvetica-Bold",
-            fontSize=20,
-            leading=24,
+            fontSize=18,
+            leading=22,
             textColor=NAVY,
             spaceAfter=2 * mm,
         ),
@@ -158,33 +194,66 @@ def _styles() -> dict[str, ParagraphStyle]:
             "StructuredPhotoSection",
             parent=sample["Heading3"],
             fontName="Helvetica-Bold",
-            fontSize=10,
-            leading=13,
+            fontSize=10.5,
+            leading=13.5,
             textColor=NAVY,
         ),
         "body": ParagraphStyle(
             "StructuredBody",
             parent=sample["BodyText"],
             fontName="Helvetica",
-            fontSize=8.5,
-            leading=11.5,
+            fontSize=9,
+            leading=12.2,
             textColor=NAVY,
         ),
         "small": ParagraphStyle(
             "StructuredSmall",
             parent=sample["BodyText"],
             fontName="Helvetica",
-            fontSize=7,
-            leading=9,
+            fontSize=7.8,
+            leading=10.2,
             textColor=SLATE,
         ),
         "small_center": ParagraphStyle(
             "StructuredSmallCenter",
             parent=sample["BodyText"],
             fontName="Helvetica",
-            fontSize=7,
-            leading=9,
+            fontSize=8.2,
+            leading=10.8,
             alignment=TA_CENTER,
+            textColor=NAVY,
+        ),
+        "small_bold": ParagraphStyle(
+            "StructuredSmallBold",
+            parent=sample["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=8,
+            leading=10.5,
+            textColor=NAVY,
+        ),
+        "card_title": ParagraphStyle(
+            "StructuredCardTitle",
+            parent=sample["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=11.5,
+            leading=14,
+            textColor=NAVY,
+        ),
+        "card_status": ParagraphStyle(
+            "StructuredCardStatus",
+            parent=sample["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=8,
+            leading=10.5,
+            alignment=TA_RIGHT,
+            textColor=RED,
+        ),
+        "narrative_title": ParagraphStyle(
+            "StructuredNarrativeTitle",
+            parent=sample["BodyText"],
+            fontName="Helvetica-Bold",
+            fontSize=9,
+            leading=11.5,
             textColor=NAVY,
         ),
         "approval_role": ParagraphStyle(
@@ -209,8 +278,8 @@ def _styles() -> dict[str, ParagraphStyle]:
             "StructuredTableHeader",
             parent=sample["BodyText"],
             fontName="Helvetica-Bold",
-            fontSize=7,
-            leading=9,
+            fontSize=7.8,
+            leading=10,
             textColor=WHITE,
         ),
         "toc_main": ParagraphStyle(
@@ -266,8 +335,8 @@ def _styles() -> dict[str, ParagraphStyle]:
             "StructuredMetricValue",
             parent=sample["BodyText"],
             fontName="Helvetica-Bold",
-            fontSize=16,
-            leading=19,
+            fontSize=18,
+            leading=21,
             alignment=TA_CENTER,
             textColor=NAVY,
         ),
@@ -275,7 +344,7 @@ def _styles() -> dict[str, ParagraphStyle]:
             "StructuredMetricLabel",
             parent=sample["BodyText"],
             fontName="Helvetica",
-            fontSize=7.5,
+            fontSize=8,
             leading=10,
             alignment=TA_CENTER,
             textColor=SLATE,
@@ -316,12 +385,80 @@ def _paragraph_alignment(value: str, style: ParagraphStyle) -> int:
     return style.alignment
 
 
+def _directional_style(value: str, style: ParagraphStyle) -> ParagraphStyle:
+    alignment = _paragraph_alignment(value, style)
+    if alignment == style.alignment:
+        return style
+    return ParagraphStyle(
+        f"{style.name}-{'rtl' if alignment == TA_RIGHT else 'ltr'}",
+        parent=style,
+        alignment=alignment,
+    )
+
+
+def _multilingual_markup(
+    value: str,
+    style: ParagraphStyle,
+    fallback: str = "-",
+) -> str:
+    """Return escaped visual text with Arabic glyphs assigned to Noto."""
+    arabic_font = PDF_FONT_BOLD if "Bold" in str(style.fontName) else PDF_FONT
+    display_text = _text(value, fallback)
+    return _ARABIC_NAVIGATION_GLYPHS.sub(
+        lambda match: f'<font name="{arabic_font}">{match.group(0)}</font>',
+        display_text,
+    )
+
+
+def _fits_on_one_line(
+    value: str,
+    style: ParagraphStyle,
+    max_width: float,
+) -> bool:
+    paragraph = Paragraph(
+        _multilingual_markup(value, style),
+        _directional_style(value, style),
+    )
+    _, height = paragraph.wrap(max_width, 10_000)
+    return height <= style.leading + 0.5
+
+
+def _logical_wrapped_lines(
+    value: str,
+    style: ParagraphStyle,
+    max_width: float,
+) -> list[str]:
+    """Wrap logical RTL input before shaping it into visual-order PDF lines.
+
+    ReportLab does not perform Arabic shaping. Shaping an entire paragraph and
+    then allowing ReportLab to wrap it reverses the reading order of long RTL
+    text. These logical lines are measured first; every final line is then
+    shaped independently so both word order and line order remain correct.
+    """
+    words = value.split()
+    if not words:
+        return [value]
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        if _fits_on_one_line(candidate, style, max_width):
+            current = candidate
+            continue
+        lines.append(current)
+        current = word
+    lines.append(current)
+    return lines
+
+
 def _multilingual_paragraphs(
     value: Any,
     style: ParagraphStyle,
     fallback: str = "-",
+    *,
+    max_width: float | None = None,
 ) -> list[Any]:
-    """Render each entered paragraph with safe Latin/Arabic font fallback."""
+    """Render entered paragraphs with safe fonts and correct RTL wrapping."""
     raw = fallback if value is None or value == "" else str(value)
     raw = raw.replace("\r\n", "\n").replace("\r", "\n")
     blocks = [block.strip() for block in re.split(r"\n+", raw) if block.strip()]
@@ -329,24 +466,21 @@ def _multilingual_paragraphs(
         blocks = [fallback]
 
     flowables: list[Any] = []
-    arabic_font = PDF_FONT_BOLD if "Bold" in str(style.fontName) else PDF_FONT
     for index, block in enumerate(blocks):
         if index:
-            flowables.append(Spacer(1, 1.2 * mm))
-        display_text = _text(block, fallback)
-        display_text = _ARABIC_NAVIGATION_GLYPHS.sub(
-            lambda match: f'<font name="{arabic_font}">{match.group(0)}</font>',
-            display_text,
+            flowables.append(Spacer(1, 1.5 * mm))
+        lines = (
+            _logical_wrapped_lines(block, style, max_width)
+            if max_width
+            else [block]
         )
-        alignment = _paragraph_alignment(block, style)
-        paragraph_style = style
-        if alignment != style.alignment:
-            paragraph_style = ParagraphStyle(
-                f"{style.name}-{'rtl' if alignment == TA_RIGHT else 'ltr'}",
-                parent=style,
-                alignment=alignment,
+        for line in lines:
+            flowables.append(
+                Paragraph(
+                    _multilingual_markup(line, style, fallback),
+                    _directional_style(line, style),
+                )
             )
-        flowables.append(Paragraph(display_text, paragraph_style))
     return flowables
 
 
@@ -492,9 +626,56 @@ def _report_summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _draw_logo_watermark(canvas) -> None:
+    """Draw the existing horizontal logo softly behind every report page."""
+    if not LOGO_PATH.is_file():
+        return
+    try:
+        with PilImage.open(LOGO_PATH) as source:
+            rgb = source.convert("RGB")
+            watermark = rgb.convert("RGBA")
+            darkness = ImageOps.grayscale(ImageChops.invert(rgb))
+            alpha = darkness.point(lambda value: min(22, round(value * 0.10)))
+            watermark.putalpha(alpha)
+            image_buffer = io.BytesIO()
+            watermark.save(image_buffer, format="PNG")
+            image_buffer.seek(0)
+            source_width, source_height = watermark.size
+            display_width = 150 * mm
+            display_height = display_width * source_height / source_width
+            page_width, page_height = landscape(A4)
+            canvas.drawImage(
+                ImageReader(image_buffer),
+                (page_width - display_width) / 2,
+                (page_height - display_height) / 2,
+                width=display_width,
+                height=display_height,
+                mask="auto",
+                preserveAspectRatio=True,
+            )
+    except (OSError, ValueError):
+        logger.warning("Unable to draw the report watermark", exc_info=True)
+
+
 def _header_footer(canvas, doc, report_number: str = "") -> None:
     canvas.saveState()
     width, height = landscape(A4)
+    _draw_logo_watermark(canvas)
+    if doc.page > 1 and LOGO_PATH.is_file():
+        canvas.drawImage(
+            str(LOGO_PATH),
+            16 * mm,
+            height - 14 * mm,
+            width=25 * mm,
+            height=25 * mm * 133 / 380,
+            mask="auto",
+            preserveAspectRatio=True,
+        )
+        canvas.setFont("Helvetica-Bold", 7)
+        canvas.setFillColor(NAVY)
+        canvas.drawRightString(width - 16 * mm, height - 10.2 * mm, report_number)
+        canvas.setStrokeColor(BORDER)
+        canvas.line(16 * mm, height - 16 * mm, width - 16 * mm, height - 16 * mm)
     canvas.setStrokeColor(BORDER)
     canvas.line(16 * mm, 12 * mm, width - 16 * mm, 12 * mm)
     canvas.setFont("Helvetica", 7)
@@ -519,6 +700,65 @@ def _header_footer(canvas, doc, report_number: str = "") -> None:
         f"Confidential | Page {doc.page}",
     )
     canvas.restoreState()
+
+
+def _cover_header(
+    report: ServiceReport,
+    styles: dict[str, ParagraphStyle],
+) -> list[Any]:
+    logo: Any = ""
+    if LOGO_PATH.is_file():
+        logo = PdfImage(
+            str(LOGO_PATH),
+            width=52 * mm,
+            height=52 * mm * 133 / 380,
+        )
+    brand = Table(
+        [[logo, _p(settings.app_name.upper(), styles["small_bold"])]],
+        colWidths=[62 * mm, 202 * mm],
+    )
+    brand.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+                ("LEFTPADDING", (0, 0), (0, 0), 0),
+                ("RIGHTPADDING", (-1, 0), (-1, 0), 0),
+            ]
+        )
+    )
+    report_number = Table(
+        [[
+            _p("REPORT NUMBER", styles["table_header"]),
+            _p(report.report_number, styles["body"]),
+        ]],
+        colWidths=[36 * mm, 62 * mm],
+        hAlign="LEFT",
+    )
+    report_number.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (0, 0), NAVY),
+                ("BACKGROUND", (1, 0), (1, 0), PALE_BLUE),
+                ("BOX", (0, 0), (-1, -1), 0.7, NAVY),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ]
+        )
+    )
+    return [
+        brand,
+        Spacer(1, 8 * mm),
+        _p(report.report_type.label.upper(), styles["eyebrow"]),
+        _p(f"{report.report_type.label.title()} Report", styles["cover_title"]),
+        _p(report.name, styles["cover_name"]),
+        Spacer(1, 5 * mm),
+        report_number,
+        Spacer(1, 7 * mm),
+    ]
 
 
 def _metadata_table(
@@ -565,54 +805,168 @@ def _executive_summary(
     styles: dict[str, ParagraphStyle],
 ) -> list[Any]:
     counts = summary["status_counts"]
-    metric_rows = [
-        [
-            (summary["main_count"], "Main Projects"),
-            (summary["sub_count"], "Sub Projects"),
-            (summary["site_count"], "Sites"),
-            (summary["record_count"], "Records"),
-        ],
-        [
-            (summary["service_total"], "Devices / Services"),
-            (counts[MaintenanceResult.COMPLETED_SUCCESSFULLY.value], "Successful"),
-            (counts[MaintenanceResult.COMPLETED_WITH_OBSERVATIONS.value], "With observations"),
-            (counts[MaintenanceResult.FURTHER_ACTION_REQUIRED.value], "Further action"),
-            (counts[MaintenanceResult.UNABLE_TO_COMPLETE.value], "Unable to complete"),
-        ],
+    scope_values = [
+        (summary["main_count"], "Main Projects"),
+        (summary["sub_count"], "Sub Projects"),
+        (summary["site_count"], "Sites"),
+        (summary["record_count"], "Records"),
+        (summary["service_total"], "Devices / Services"),
     ]
-    tables: list[Any] = [_p("EXECUTIVE SUMMARY", styles["section"]), Spacer(1, 2 * mm)]
-    for row in metric_rows:
-        cards = [
+    scope_cells = [
+        [_p(value, styles["metric_value"]), _p(label, styles["metric_label"])]
+        for value, label in scope_values
+    ]
+    scope_table = Table([scope_cells], colWidths=[264 * mm / 5] * 5)
+    scope_table.setStyle(
+        TableStyle(
             [
-                _p(value, styles["metric_value"]),
-                _p(label, styles["metric_label"]),
+                ("BOX", (0, 0), (-1, -1), 0.65, BORDER),
+                ("INNERGRID", (0, 0), (-1, -1), 0.65, BORDER),
+                ("BACKGROUND", (0, 0), (-1, -1), LIGHT),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
             ]
-            for value, label in row
-        ]
-        table = Table([cards], colWidths=[264 * mm / len(cards)] * len(cards))
-        table.setStyle(
+        )
+    )
+    status_values = [
+        (
+            counts[MaintenanceResult.COMPLETED_SUCCESSFULLY.value],
+            "Successful",
+            PALE_GREEN,
+            GREEN,
+        ),
+        (
+            counts[MaintenanceResult.COMPLETED_WITH_OBSERVATIONS.value],
+            "With observations",
+            PALE_AMBER,
+            AMBER,
+        ),
+        (
+            counts[MaintenanceResult.FURTHER_ACTION_REQUIRED.value],
+            "Further action",
+            PALE_RED,
+            RED,
+        ),
+        (
+            counts[MaintenanceResult.UNABLE_TO_COMPLETE.value],
+            "Unable to complete",
+            LIGHT,
+            SLATE,
+        ),
+    ]
+    status_cells = [
+        [_p(value, styles["metric_value"]), _p(label, styles["metric_label"])]
+        for value, label, _, _ in status_values
+    ]
+    status_table = Table([status_cells], colWidths=[66 * mm] * 4)
+    commands: list[tuple] = [
+        ("BOX", (0, 0), (-1, -1), 0.65, BORDER),
+        ("INNERGRID", (0, 0), (-1, -1), 0.65, BORDER),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 7),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+    ]
+    for index, (_, _, background, accent) in enumerate(status_values):
+        commands.extend(
+            [
+                ("BACKGROUND", (index, 0), (index, 0), background),
+                ("LINEABOVE", (index, 0), (index, 0), 3, accent),
+            ]
+        )
+    status_table.setStyle(TableStyle(commands))
+
+    return [
+        _p("REPORT OVERVIEW", styles["eyebrow"]),
+        scope_table,
+        Spacer(1, 3 * mm),
+        _p("RESULT STATUS", styles["eyebrow"]),
+        status_table,
+    ]
+
+
+def _narrative_panel(
+    label: str,
+    value: Any,
+    styles: dict[str, ParagraphStyle],
+    *,
+    accent=BLUE,
+    width: float = 264 * mm,
+) -> Table:
+    """Build a full-width narrative block that can split cleanly by line."""
+    content_width = width - 12 * mm
+    content = _multilingual_paragraphs(
+        value,
+        styles["body"],
+        max_width=content_width,
+    )
+    rows: list[list[Any]] = [[_p(label, styles["narrative_title"])]]
+    rows.extend([[flowable] for flowable in content])
+    table = Table(
+        rows,
+        colWidths=[width],
+        repeatRows=1,
+        splitByRow=1,
+    )
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), LIGHT),
+                ("BOX", (0, 0), (-1, -1), 0.6, BORDER),
+                ("LINEBEFORE", (0, 0), (0, -1), 3, accent),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, 0), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 5),
+                ("TOPPADDING", (0, 1), (-1, -1), 1.5),
+                ("BOTTOMPADDING", (0, 1), (-1, -1), 1.5),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]
+        )
+    )
+    return table
+
+
+def _attention_section(
+    attention: list[dict[str, Any]],
+    styles: dict[str, ParagraphStyle],
+) -> list[Any]:
+    flowables: list[Any] = [
+        _p(
+            "Customer actions and observations are presented as full-width cards for fast review.",
+            styles["subtitle"],
+        ),
+        Spacer(1, 3 * mm),
+    ]
+    for index, item in enumerate(attention, 1):
+        heading_text = f"{item['record_number']} | {item['item_name']}"
+        record_cell = (
+            _linked_paragraph(heading_text, item["key"], styles["card_title"])
+            if item["key"]
+            else _p(heading_text, styles["card_title"])
+        )
+        card_header = Table(
+            [
+                [record_cell, _p(item["status"], styles["card_status"])],
+                [
+                    _p(
+                        f"{item['main_name']}  /  {item['sub_name']}  /  {item['site_name']}",
+                        styles["small"],
+                    ),
+                    "",
+                ],
+            ],
+            colWidths=[198 * mm, 66 * mm],
+        )
+        card_header.setStyle(
             TableStyle(
                 [
-                    ("BOX", (0, 0), (-1, -1), 0.5, BORDER),
-                    ("INNERGRID", (0, 0), (-1, -1), 0.5, BORDER),
-                    ("BACKGROUND", (0, 0), (-1, -1), LIGHT),
+                    ("SPAN", (0, 1), (-1, 1)),
+                    ("BACKGROUND", (0, 0), (-1, 0), PALE_AMBER),
+                    ("BACKGROUND", (0, 1), (-1, 1), LIGHT),
+                    ("BOX", (0, 0), (-1, -1), 0.75, AMBER),
+                    ("LINEBEFORE", (0, 0), (0, -1), 4, AMBER),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("TOPPADDING", (0, 0), (-1, -1), 7),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
-                ]
-            )
-        )
-        tables.extend([table, Spacer(1, 1.5 * mm)])
-    if not summary["attention"]:
-        no_actions = Table(
-            [[_p("No items require attention.", styles["body"])]],
-            colWidths=[264 * mm],
-        )
-        no_actions.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, -1), PALE_GREEN),
-                    ("BOX", (0, 0), (-1, -1), 0.6, GREEN),
                     ("LEFTPADDING", (0, 0), (-1, -1), 8),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 8),
                     ("TOPPADDING", (0, 0), (-1, -1), 6),
@@ -620,86 +974,62 @@ def _executive_summary(
                 ]
             )
         )
-        tables.append(no_actions)
-    return tables
-
-
-def _attention_section(
-    attention: list[dict[str, Any]],
-    styles: dict[str, ParagraphStyle],
-) -> list[Any]:
-    headers = ["Status", "Record", "Project / Site", "Item / Service", "Attention"]
-    rows: list[list[Any]] = [[_p(value, styles["table_header"]) for value in headers]]
-    for item in attention:
-        narrative: list[Any] = []
+        flowables.append(card_header)
         if item["issue"]:
-            narrative.extend(
+            flowables.extend(
                 [
-                    _p("Issue found", styles["attention_label"]),
-                    *_multilingual_paragraphs(item["issue"], styles["small"]),
+                    Spacer(1, 1.5 * mm),
+                    _narrative_panel("ISSUE FOUND", item["issue"], styles, accent=RED),
                 ]
             )
-        if item["recommendation"]:
-            if narrative:
-                narrative.append(Spacer(1, 1.5 * mm))
-            narrative.extend(
+        if item["recommendation"] and not item["issue"]:
+            flowables.extend(
                 [
-                    _p("Recommendations", styles["attention_label"]),
-                    *_multilingual_paragraphs(
-                        item["recommendation"], styles["small"]
+                    Spacer(1, 1.5 * mm),
+                    _narrative_panel(
+                        "RECOMMENDATIONS",
+                        item["recommendation"],
+                        styles,
+                        accent=BLUE,
                     ),
                 ]
             )
-        if not narrative:
-            narrative.extend(
-                _multilingual_paragraphs(
-                    "Review the recorded result and agree the next action.",
-                    styles["small"],
+        elif item["recommendation"]:
+            recommendation_notice = Table(
+                [[_p(
+                    "Recommendations are included in the linked detailed record.",
+                    styles["small_bold"],
+                )]],
+                colWidths=[264 * mm],
+            )
+            recommendation_notice.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, -1), PALE_BLUE),
+                        ("BOX", (0, 0), (-1, -1), 0.6, BLUE),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                        ("TOPPADDING", (0, 0), (-1, -1), 5),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                    ]
                 )
             )
-        record_cell = (
-            _linked_paragraph(item["record_number"], item["key"], styles["attention_link"])
-            if item["key"]
-            else _p(item["record_number"], styles["attention_link"])
-        )
-        rows.append(
-            [
-                _p(item["status"], styles["body"]),
-                record_cell,
-                _p(
-                    f"{item['main_name']} > {item['sub_name']} > {item['site_name']}",
-                    styles["small"],
-                ),
-                _p(item["item_name"], styles["body"]),
-                narrative,
-            ]
-        )
-    table = Table(
-        rows,
-        colWidths=[36 * mm, 34 * mm, 62 * mm, 48 * mm, 84 * mm],
-        repeatRows=1,
-        splitByRow=1,
-        splitInRow=1,
-    )
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), NAVY),
-                ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, LIGHT]),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                ("TOPPADDING", (0, 0), (-1, -1), 6),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-            ]
-        )
-    )
-    return [
-        _p("Customer actions and observations are listed first for quick review.", styles["subtitle"]),
-        Spacer(1, 3 * mm),
-        table,
-    ]
+            flowables.extend([Spacer(1, 1.5 * mm), recommendation_notice])
+        if not item["issue"] and not item["recommendation"]:
+            flowables.extend(
+                [
+                    Spacer(1, 1.5 * mm),
+                    _narrative_panel(
+                        "ACTION",
+                        "Review the recorded result and agree the next action.",
+                        styles,
+                        accent=AMBER,
+                    ),
+                ]
+            )
+        if index != len(attention):
+            flowables.append(Spacer(1, 4 * mm))
+    return flowables
 
 
 def _photo_cell(photo: dict[str, Any], styles: dict[str, ParagraphStyle]) -> list[Any] | None:
@@ -727,14 +1057,15 @@ def _photo_cell(photo: dict[str, Any], styles: dict[str, ParagraphStyle]) -> lis
                         background.paste(source)
                     source = background
                 source = source.convert("RGB")
-                source_width, source_height = source.size
-                scale = min(1640 / source_width, 960 / source_height)
-                fitted = source.resize(
+                contained = source.copy()
+                contained.thumbnail((1640, 960), PilImage.Resampling.LANCZOS)
+                fitted = PilImage.new("RGB", (1640, 960), (242, 246, 248))
+                fitted.paste(
+                    contained,
                     (
-                        max(1, round(source_width * scale)),
-                        max(1, round(source_height * scale)),
+                        (1640 - contained.width) // 2,
+                        (960 - contained.height) // 2,
                     ),
-                    PilImage.Resampling.LANCZOS,
                 )
                 buffer = io.BytesIO()
                 fitted.save(buffer, format="JPEG", quality=88, optimize=True)
@@ -770,8 +1101,13 @@ def _photo_cell(photo: dict[str, Any], styles: dict[str, ParagraphStyle]) -> lis
         )
         cell: list[Any] = [unavailable]
         if photo.get("description"):
+            cell.extend([Spacer(1, 1.5 * mm)])
             cell.extend(
-                [Spacer(1, 1.5 * mm), _p(photo["description"], styles["small_center"])]
+                _multilingual_paragraphs(
+                    photo["description"],
+                    styles["small_center"],
+                    max_width=78 * mm,
+                )
             )
         return cell
     width, height = fitted.size
@@ -789,13 +1125,19 @@ def _photo_cell(photo: dict[str, Any], styles: dict[str, ParagraphStyle]) -> lis
                 ("RIGHTPADDING", (0, 0), (-1, -1), 0),
                 ("TOPPADDING", (0, 0), (-1, -1), 0),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ("BOX", (0, 0), (-1, -1), 0.7, BORDER),
             ]
         )
     )
     cell: list[Any] = [frame]
     if photo.get("description"):
+        cell.extend([Spacer(1, 1.5 * mm)])
         cell.extend(
-            [Spacer(1, 1.5 * mm), _p(photo["description"], styles["small_center"])]
+            _multilingual_paragraphs(
+                photo["description"],
+                styles["small_center"],
+                max_width=78 * mm,
+            )
         )
     return cell
 
@@ -820,8 +1162,8 @@ def _photo_rows(photos: list[dict[str, Any]], styles: dict[str, ParagraphStyle])
         table.setStyle(
             TableStyle(
                 [
-                    ("BOX", (0, 0), (-1, -1), 0.45, BORDER),
-                    ("INNERGRID", (0, 0), (-1, -1), 0.45, BORDER),
+                    ("BOX", (0, 0), (-1, -1), 0.7, BORDER),
+                    ("INNERGRID", (0, 0), (-1, -1), 0.7, BORDER),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ("LEFTPADDING", (0, 0), (-1, -1), 4),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 4),
@@ -878,7 +1220,7 @@ def _main_banner(
 ) -> Table:
     table = Table(
         [
-            [_p(f"MAIN PROJECT  ·  {main_name}", styles["main"])],
+            [_p(f"MAIN PROJECT | {main_name}", styles["main"])],
             [_p(f"Customer: {customer_names or '-'}", styles["small"])],
         ],
         colWidths=[264 * mm],
@@ -903,7 +1245,7 @@ def _record_banner(record: dict[str, Any], styles: dict[str, ParagraphStyle]) ->
     table = Table(
         [
             [_p(
-                f"Record {record['record_number']} · {record['service_name']} · {record['result'].label}",
+                f"Record {record['record_number']} | {record['service_name']} | {record['result'].label}",
                 styles["section"],
             )],
             [_p(
@@ -928,71 +1270,29 @@ def _record_banner(record: dict[str, Any], styles: dict[str, ParagraphStyle]) ->
     return table
 
 
-def _device_card(
-    item: dict[str, Any],
-    styles: dict[str, ParagraphStyle],
-    report_type: ServiceReportType,
-) -> Table:
-    rows: list[list[Any]] = [
-        [_p(item.get("device_name"), styles["section"]), ""],
-    ]
-    details: list[tuple[str, Any]] = [
-        ("Service", item.get("service_name")),
-        ("Result", getattr(item.get("result"), "label", item.get("result"))),
-    ]
-    if report_type == ServiceReportType.INSTALLATION:
-        details.extend(
-            [
-                ("Model", item.get("device_model")),
-                ("Serial number", item.get("serial_number")),
-                ("Warranty date", item.get("warranty_start")),
-                ("Installation notes", item.get("notes")),
-                ("Handover notes", item.get("handover_notes")),
-            ]
-        )
-    else:
-        details.extend(
-            (label, value)
-            for label, value in (
-                ("Maintenance notes", item.get("notes")),
-                ("Issue found", item.get("issue_description")),
-                ("Recommendations", item.get("recommendations")),
-            )
-            if str(value or "").strip()
-        )
-    narrative_labels = {
-        "Maintenance notes",
-        "Installation notes",
-        "Handover notes",
-        "Issue found",
-        "Recommendations",
-    }
-    rows.extend(
-        [
-            _p(label, styles["small"]),
-            (
-                _multilingual_paragraphs(value, styles["body"])
-                if label in narrative_labels
-                else _p(value, styles["body"])
-            ),
-        ]
-        for label, value in details
+def _record_header(record: dict[str, Any], styles: dict[str, ParagraphStyle]) -> Table:
+    """Compact ASCII-safe record header used by the redesigned report."""
+    title = (
+        f"Record {record['record_number']} | {record['service_name']} | "
+        f"{record['result'].label}"
     )
     table = Table(
-        rows,
-        colWidths=[38 * mm, 226 * mm],
-        splitByRow=1,
-        splitInRow=1,
+        [
+            [_p(title, styles["section"])],
+            [_p(
+                f"Performed by {record['team_leader_name']} on "
+                f"{_display_datetime(record['submitted_at'])}",
+                styles["small"],
+            )],
+        ],
+        colWidths=[264 * mm],
     )
     table.setStyle(
         TableStyle(
             [
-                ("SPAN", (0, 0), (-1, 0)),
                 ("BACKGROUND", (0, 0), (-1, 0), PALE_BLUE),
-                ("BACKGROUND", (0, 1), (0, -1), LIGHT),
-                ("BOX", (0, 0), (-1, -1), 0.55, BLUE),
-                ("INNERGRID", (0, 1), (-1, -1), 0.35, BORDER),
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BACKGROUND", (0, 1), (-1, 1), LIGHT),
+                ("BOX", (0, 0), (-1, -1), 0.65, BLUE),
                 ("LEFTPADDING", (0, 0), (-1, -1), 8),
                 ("RIGHTPADDING", (0, 0), (-1, -1), 8),
                 ("TOPPADDING", (0, 0), (-1, -1), 5),
@@ -1001,6 +1301,113 @@ def _device_card(
         )
     )
     return table
+
+
+def _device_card(
+    item: dict[str, Any],
+    styles: dict[str, ParagraphStyle],
+    report_type: ServiceReportType,
+) -> list[Any]:
+    result = getattr(item.get("result"), "label", item.get("result"))
+    header = Table(
+        [[
+            _p(item.get("device_name"), styles["card_title"]),
+            _p(result, styles["card_status"]),
+        ]],
+        colWidths=[198 * mm, 66 * mm],
+    )
+    header.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), PALE_BLUE),
+                ("BOX", (0, 0), (-1, -1), 0.7, BLUE),
+                ("LINEBEFORE", (0, 0), (0, -1), 4, BLUE),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 8),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 7),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 7),
+            ]
+        )
+    )
+    details: list[tuple[str, Any]] = [("Service", item.get("service_name"))]
+    narratives: list[tuple[str, Any, Any]] = []
+    if report_type == ServiceReportType.INSTALLATION:
+        details.extend(
+            [
+                ("Model", item.get("device_model")),
+                ("Serial number", item.get("serial_number")),
+                ("Warranty date", item.get("warranty_start")),
+            ]
+        )
+        narratives.extend(
+            [
+                ("INSTALLATION NOTES", item.get("notes"), BLUE),
+                ("HANDOVER NOTES", item.get("handover_notes"), GREEN),
+            ]
+        )
+    else:
+        narratives.extend(
+            [
+                ("MAINTENANCE NOTES", item.get("notes"), SLATE),
+                ("ISSUE FOUND", item.get("issue_description"), RED),
+                ("RECOMMENDATIONS", item.get("recommendations"), BLUE),
+            ]
+        )
+    detail_cells: list[list[Any]] = []
+    if len(details) == 1:
+        label, value = details[0]
+        detail_cells.append(
+            [_p(label, styles["small"]), _p(value, styles["body"])]
+        )
+        metadata = Table(detail_cells, colWidths=[28 * mm, 236 * mm])
+        label_columns = [(0, 0)]
+    else:
+        for index in range(0, len(details), 2):
+            left_label, left_value = details[index]
+            if index + 1 < len(details):
+                right_label, right_value = details[index + 1]
+            else:
+                right_label, right_value = "", ""
+            detail_cells.append(
+                [
+                    _p(left_label, styles["small"]),
+                    _p(left_value, styles["body"]),
+                    _p(right_label, styles["small"], ""),
+                    _p(right_value, styles["body"], ""),
+                ]
+            )
+        metadata = Table(
+            detail_cells,
+            colWidths=[28 * mm, 84 * mm, 28 * mm, 124 * mm],
+        )
+        label_columns = [(0, 0), (2, 0)]
+    metadata_commands: list[tuple] = [
+        ("GRID", (0, 0), (-1, -1), 0.45, BORDER),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]
+    for column, row in label_columns:
+        metadata_commands.append(
+            ("BACKGROUND", (column, row), (column, -1), LIGHT)
+        )
+    metadata.setStyle(
+        TableStyle(metadata_commands)
+    )
+    flowables: list[Any] = [header, Spacer(1, 1.5 * mm), metadata]
+    for label, value, accent in narratives:
+        if not str(value or "").strip():
+            continue
+        flowables.extend(
+            [
+                Spacer(1, 1.5 * mm),
+                _narrative_panel(label, value, styles, accent=accent),
+            ]
+        )
+    return flowables
 
 
 def _approvals_block(styles: dict[str, ParagraphStyle]) -> list[Any]:
@@ -1014,17 +1421,17 @@ def _approvals_block(styles: dict[str, ParagraphStyle]) -> list[Any]:
         cards.append(
             [
                 _p(role, styles["approval_role"]),
-                Spacer(1, 17 * mm),
+                Spacer(1, 32 * mm),
                 _p("Name: ____________________________", styles["approval_hint"]),
-                Spacer(1, 2 * mm),
+                Spacer(1, 4 * mm),
                 _p("Job title: ________________________", styles["approval_hint"]),
-                Spacer(1, 2 * mm),
-                _p("Signature: ________________________", styles["approval_hint"]),
-                Spacer(1, 2 * mm),
+                Spacer(1, 4 * mm),
+                _p("Signature & Stamp: _________________", styles["approval_hint"]),
+                Spacer(1, 4 * mm),
                 _p("Date: _____________________________", styles["approval_hint"]),
             ]
         )
-    table = Table([cards], colWidths=[86 * mm] * 3, rowHeights=[62 * mm])
+    table = Table([cards], colWidths=[86 * mm] * 3, rowHeights=[105 * mm])
     table.setStyle(
         TableStyle(
             [
@@ -1236,9 +1643,9 @@ def build_structured_report_pdf(
         pagesize=landscape(A4),
         rightMargin=14 * mm,
         leftMargin=14 * mm,
-        topMargin=13 * mm,
+        topMargin=20 * mm,
         bottomMargin=17 * mm,
-        title=f"{report.report_number} — {report.name}",
+        title=f"{report.report_number} - {report.name}",
         author=report.created_by_name,
     )
     styles = _styles()
@@ -1251,17 +1658,10 @@ def build_structured_report_pdf(
             item["_pdf_device_key"] = f"device-{assigned_device_counter}"
     summary = _report_summary(render_entries)
 
-    logo = ""
-    if LOGO_PATH.is_file():
-        logo = PdfImage(str(LOGO_PATH), width=35 * mm, height=35 * mm * 133 / 380)
-    heading = [
-        _p(report.name, styles["title"]),
-        _p(f"{report.report_type.label} Report · {report.report_number}", styles["subtitle"]),
-    ]
-    header = Table([[logo, heading]], colWidths=[44 * mm, 220 * mm])
-    header.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]))
+    document.title = f"{report.report_number} - {report.name}"
+    cover_flowables = _cover_header(report, styles)
     _with_navigation(
-        header,
+        cover_flowables[0],
         key="report-information",
         text="Report Information",
         level=0,
@@ -1270,14 +1670,19 @@ def build_structured_report_pdf(
     )
     story.extend(
         [
-            header,
+            *cover_flowables,
             _metadata_table(report, summary, styles),
-            Spacer(1, 4 * mm),
+            Spacer(1, 5 * mm),
             *_executive_summary(summary, styles),
         ]
     )
     if report.notes:
-        story.extend([Spacer(1, 3 * mm), _p(f"Notes: {report.notes}", styles["body"])])
+        story.extend(
+            [
+                Spacer(1, 3 * mm),
+                _narrative_panel("REPORT NOTES", report.notes, styles, accent=SLATE),
+            ]
+        )
     contents = TableOfContents(
         levelStyles=[
             styles["toc_main"],
@@ -1294,7 +1699,7 @@ def build_structured_report_pdf(
         rightColumnWidth=18 * mm,
         notifyKind="DeviceIndexEntry",
     )
-    device_index_heading = _p("RECORD & DEVICE INDEX", styles["title"])
+    device_index_heading = _p("RECORD & DEVICE INDEX", styles["section"])
     _with_navigation(
         device_index_heading,
         key="record-device-index",
@@ -1328,14 +1733,15 @@ def build_structured_report_pdf(
                 key=CONTENTS_DESTINATION,
                 text="Table of contents",
             ),
-            _p("TABLE OF CONTENTS", styles["title"]),
+            _p("REPORT NAVIGATION", styles["title"]),
             _p(
-                "Select any section, Project, Site, or Record to open its page.",
+                "Use the contents and device index below to move directly to the required section.",
                 styles["subtitle"],
             ),
             Spacer(1, 3 * mm),
+            _p("TABLE OF CONTENTS", styles["section"]),
             contents,
-            PageBreak(),
+            Spacer(1, 6 * mm),
             device_index_heading,
             _p(
                 "Select a device to open its detailed service page. The PDF viewer search can also find a Record ID, device, or serial number.",
@@ -1393,7 +1799,7 @@ def build_structured_report_pdf(
                     ]
                 )
             first_sub = False
-            sub_heading = _p(f"SUB PROJECT  ·  {sub_name}", styles["sub"])
+            sub_heading = _p(f"SUB PROJECT | {sub_name}", styles["sub"])
             _with_navigation(
                 sub_heading,
                 key=f"sub-{sub_counter}",
@@ -1419,7 +1825,7 @@ def build_structured_report_pdf(
                 first_site_in_sub = False
                 first_site = False
                 site_banner = Table(
-                    [[_p(f"SITE  ·  {site_name}", styles["site"]) ]],
+                    [[_p(f"SITE | {site_name}", styles["site"]) ]],
                     colWidths=[264 * mm],
                 )
                 site_banner.setStyle(
@@ -1450,7 +1856,7 @@ def build_structured_report_pdf(
                     for item_index, item in enumerate(record["items"]):
                         if item_index:
                             story.append(_PageBreakUnlessAtTop())
-                        record_banner = _record_banner(record, styles)
+                        record_banner = _record_header(record, styles)
                         if item_index == 0:
                             _with_navigation(
                                 record_banner,
@@ -1460,7 +1866,7 @@ def build_structured_report_pdf(
                                 notify_kind="TOCEntry",
                                 index_level=3,
                             )
-                        device_card = _device_card(item, styles, report.report_type)
+                        device_flowables = _device_card(item, styles, report.report_type)
                         device_name = _navigation_text(item.get("device_name"))[1] or "Unnamed device"
                         serial_number = _navigation_text(item.get("serial_number"))[1]
                         index_label = (
@@ -1483,16 +1889,17 @@ def build_structured_report_pdf(
                                     record_banner,
                                     device_marker,
                                     Spacer(1, 2 * mm),
-                                    device_card,
+                                    *device_flowables[:3],
                                 ]
                             )
                         )
+                        story.extend(device_flowables[3:])
                         photos = item.get("photos") or []
                         if not photos:
                             continue
                         story.extend(
                             [
-                                _PageBreakUnlessAtTop(),
+                                CondPageBreak(70 * mm),
                                 _p("PHOTO EVIDENCE", styles["sub"]),
                                 Spacer(1, 1.5 * mm),
                             ]
@@ -1612,7 +2019,7 @@ def build_structured_report_pdf(
         notify_kind="TOCEntry",
         index_level=0,
     )
-    story.extend([CondPageBreak(75 * mm), *approval_flowables])
+    story.extend([CondPageBreak(118 * mm), *approval_flowables])
 
     def draw_page(canvas, doc) -> None:
         _header_footer(canvas, doc, report.report_number)

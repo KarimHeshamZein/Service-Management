@@ -1,6 +1,6 @@
 ﻿{
     "product":  "Service Management System",
-    "version":  "1.1.0-rc45",
-    "created_utc":  "2026-09-24T10:35:39.3198971Z",
+    "version":  "1.1.0-rc46",
+    "created_utc":  "2026-09-27T07:22:59.7294078Z",
     "alembic_head":  "c6a4e8f21d90"
 }

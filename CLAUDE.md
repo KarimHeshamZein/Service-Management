@@ -4,6 +4,28 @@ Service Management System — a maintenance evidence portal. Read `README.md` fo
 full architecture, entities and known limitations. This file is the short version
 plus the rules that aren't inferable from the code.
 
+## RC46 structured PDF redesign and RTL fix - 2026-09-27
+
+- The official saved-report PDF now wraps logical Arabic text before shaping
+  each final line. Long Arabic Issue Found and Recommendations paragraphs keep
+  their correct word and line order, including mixed English product names,
+  abbreviations, and report numbers.
+- Items Requiring Attention is a full-width card register instead of a narrow
+  five-column table. It presents the complete issue and links to the detailed
+  record, where the full recommendation remains available without duplicating
+  it across multiple pages.
+- The cover, status summary, navigation, hierarchy, record details, evidence,
+  watermark, page header/footer, and approval area now use a consistent branded
+  card design. Record narratives split by measured line instead of moving a
+  whole record to a later page and leaving the previous page empty.
+- Evidence remains three images per row. Landscape and portrait uploads are
+  placed in equal 82 x 48 mm evidence frames with larger captions and stronger
+  borders. The MR-2026-00010 reproduction reduced from 10 pages to 7 while
+  retaining the full detailed text, five photos, navigation, and approvals.
+- The isolated hotfix gate is `7 passed`; Python compilation and page-by-page
+  PNG inspection of the long bilingual reproduction pass. No dependency or
+  schema migration was added.
+
 ## RC45 bilingual PDF hotfix - 2026-09-24
 
 - Saved service-report narratives now render Latin and Arabic text with the

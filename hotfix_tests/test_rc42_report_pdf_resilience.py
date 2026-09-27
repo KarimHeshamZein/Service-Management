@@ -10,6 +10,7 @@ import pytest
 from PIL import Image
 from pypdf import PdfReader
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT
+from reportlab.lib.units import mm
 
 import app.structured_report_pdf as report_pdf
 from app.models import MaintenanceResult, ServiceReportType
@@ -117,12 +118,37 @@ def test_pdf_preserves_latin_text_and_direction_in_bilingual_narratives():
 
     assert "\x00" not in extracted
     assert extracted.count("A report was received regarding a gate system malfunction.") == 2
-    assert extracted.count("Inspect the generators and the ATS before restoring power.") == 2
+    assert extracted.count("Inspect the generators and the ATS before restoring power.") == 1
     assert extracted.count("Barrier Gates") == 2
     assert "3418" in extracted
     assert rendered_paragraphs[0].style.alignment == TA_LEFT
     assert rendered_paragraphs[1].style.alignment == TA_RIGHT
     assert 'font name="NotoSansArabic"' in rendered_paragraphs[1].text
+
+
+def test_long_arabic_is_wrapped_in_logical_order_before_pdf_shaping():
+    narrative = (
+        "تم استلام بلاغ من غرفة العمليات بخصوص وجود عطل في نظام البوابات، "
+        "وتم التوجه إلى الموقع لفحص العطل والعمل على حل المشكلة. بعد الفحص، "
+        "تبين أن وحدات الباور الخاصة بعدد 3 بوابات Barrier Gates قد تعرضت "
+        "للاحتراق والتلف نتيجة ارتفاع التيار الكهربائي، مما أدى إلى تعطل "
+        "وحدات الباور الخاصة بالبوابات الثلاث."
+    )
+    style = report_pdf._styles()["body"]
+
+    logical_lines = report_pdf._logical_wrapped_lines(narrative, style, 70 * mm)
+    rendered = report_pdf._multilingual_paragraphs(
+        narrative,
+        style,
+        max_width=70 * mm,
+    )
+
+    assert len(logical_lines) > 2
+    assert " ".join(logical_lines) == narrative
+    assert logical_lines[0].startswith("تم استلام بلاغ")
+    assert logical_lines[-1].endswith("البوابات الثلاث.")
+    assert len(rendered) == len(logical_lines)
+    assert all(flowable.style.alignment == TA_RIGHT for flowable in rendered)
 
 
 def test_pdf_falls_back_to_original_when_thumbnail_is_unreadable(
