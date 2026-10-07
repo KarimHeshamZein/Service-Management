@@ -1,6 +1,6 @@
 # Implementation checklist
 
-This is the short progress tracker for the UI/UX and business-logic improvements. The [review findings](ui-ux-logic-review.md) contain the evidence; the [detailed improvement plan](ui-ux-improvement-plan.md) contains acceptance criteria and dependencies. Phase IDs below refer to that plan. This order is a recommendation and can change when implementation reveals a dependency.
+This is the short progress tracker for the UI/UX and business-logic improvements. The [review findings](ui-ux-logic-review.md) contain the evidence; the [detailed improvement plan](ui-ux-improvement-plan.md) contains acceptance criteria and dependencies. Phase IDs below refer to that plan. This order is a recommendation and can change when implementation reveals a dependency. The user chose focused testing per change and a full-suite run after the selected implementation scope is stable, replacing the repository's per-change full-suite cadence.
 
 ## Current position
 
@@ -49,11 +49,15 @@ Work in small, reviewable changes. Where one phase spans unrelated risks, its pa
 - [ ] **25 — P5:** Add reviewable cross-Department group transfers after access and preservation safeguards.
 - [ ] **26 — P6:** Measure catalogue performance with representative data, then optimize only confirmed bottlenecks.
 
+## Final regression gate
+
+- [ ] After the chosen implementation scope is stable, run the full test suite once before release. Fix any failures and rerun the affected checks; if a fix changes code after the full-suite run, repeat the full suite so the final result covers the final code.
+
 ## How each item moves to done
 
 1. Confirm the exact behavior and boundary from the detailed plan; record any policy decision before coding.
 2. Create a fresh task branch from the updated `main` after checkpoint integration. Preserve local data and the unrelated root `index.html`.
-3. Run focused regressions and the repository's required full test suite before and after a source change. Verify affected screens in a browser, including English/Arabic and relevant mobile/keyboard paths when available. Record any verification that remains blocked.
+3. Run focused, proportionate regressions for each source change, including permission/transaction and migration checks when relevant. Do not rerun the full suite for every item. Verify affected screens in a browser, including English/Arabic and relevant mobile/keyboard paths when available. Record any verification that remains blocked.
 4. Review the diff and record the PR/commit, test result, and any remaining limitation here. Check the item only when its acceptance criteria are met.
 
 The next concrete change is item **01**. Its proposed scope is the Category grant mutation route and the User Roles grant-saving form; it does not require a database migration or broader Pricing redesign.
