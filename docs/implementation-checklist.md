@@ -7,7 +7,7 @@ This is the short progress tracker for the UI/UX and business-logic improvements
 - [x] Complete ten bounded review batches and record their findings.
 - [x] Push the application and review checkpoint to GitHub (`feature/pre-improvement-checkpoint-2026-10-07`).
 - [x] Prepare the first implementation slice and its acceptance checks below.
-- [ ] Integrate the checkpoint into `main` through a reviewed pull request before source implementation.
+- [ ] Integrate the checkpoint into `main` through [PR #3](https://github.com/KarimHeshamZein/Service-Management/pull/3) before source implementation. GitHub requires one approving review; merge is pending that review.
 - [ ] Agree on the first implementation slice: protect Pricing Category grants (P0, B2-001/B2-002).
 - [ ] Implement and verify the first slice.
 
