@@ -15,6 +15,7 @@ from ..deps import require_technical_documents_access, require_technical_documen
 from ..helpers import flash, render
 from ..models import PricingItem, PricingItemCategory, PricingRelatedItem, TechnicalDocument, TechnicalRecommendation, User, utcnow
 from ..purchase_documents import PurchaseDocumentError
+from ..pricing_categories import category_path_label
 from ..security import csrf_valid
 from ..technical_documents import recommendation_pdf, resolve_technical_file, store_technical_file, technical_package
 from .purchase_documents import _browser_context
@@ -28,11 +29,11 @@ def _redirect(path: str) -> RedirectResponse:
 
 def _target(db: Session, kind: str, item_id: int):
     if kind == "main":
-        item = db.scalar(select(PricingItem).options(selectinload(PricingItem.category).selectinload(PricingItemCategory.parent)).where(PricingItem.id == item_id))
+        item = db.scalar(select(PricingItem).options(selectinload(PricingItem.category).selectinload(PricingItemCategory.parent).selectinload(PricingItemCategory.parent)).where(PricingItem.id == item_id))
         if not item: raise HTTPException(404, "Item not found.")
         return item, item, item.name, item.model or ""
     if kind == "related":
-        related = db.scalar(select(PricingRelatedItem).options(selectinload(PricingRelatedItem.main_item).selectinload(PricingItem.category).selectinload(PricingItemCategory.parent)).where(PricingRelatedItem.id == item_id))
+        related = db.scalar(select(PricingRelatedItem).options(selectinload(PricingRelatedItem.main_item).selectinload(PricingItem.category).selectinload(PricingItemCategory.parent).selectinload(PricingItemCategory.parent)).where(PricingRelatedItem.id == item_id))
         if not related: raise HTTPException(404, "Item not found.")
         return related, related.main_item, related.name, related.main_item.model or ""
     raise HTTPException(404, "Item not found.")
@@ -49,7 +50,7 @@ def _rec_filter(kind: str, item_id: int):
 def _category(main: PricingItem) -> str:
     category = main.category
     if not category: return "Uncategorized"
-    return f"{category.parent.name} / {category.name}" if category.parent else category.name
+    return category_path_label(category)
 
 
 @router.get("")

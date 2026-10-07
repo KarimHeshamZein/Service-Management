@@ -147,19 +147,31 @@ def test_selected_project_scope_exposes_other_users_work_only_in_selected_projec
 def test_selected_pricing_scope_supports_whole_categories_and_individual_items(client, db):
     user = db.query(User).filter(User.username == LEADER_A[0]).one()
     selected = PricingItemCategory(name="Selected CCTV", department_id=1)
+    selected_sub = PricingItemCategory(
+        name="Selected brand", department_id=1, parent=selected
+    )
+    selected_leaf = PricingItemCategory(
+        name="Selected cameras", department_id=1, parent=selected_sub
+    )
     individual_folder = PricingItemCategory(name="Individual access", department_id=1)
+    individual_sub = PricingItemCategory(
+        name="Individual brand", department_id=1, parent=individual_folder
+    )
+    individual_leaf = PricingItemCategory(
+        name="Individual cameras", department_id=1, parent=individual_sub
+    )
     db.add_all([selected, individual_folder])
     db.flush()
     category_item = PricingItem(
-        department_id=1, category_id=selected.id, name="Allowed category camera",
+        department_id=1, category_id=selected_leaf.id, name="Allowed category camera",
         model="CAT-1", unit_price=Decimal("10"), currency="SAR",
     )
     direct_item = PricingItem(
-        department_id=1, category_id=individual_folder.id, name="Allowed direct camera",
+        department_id=1, category_id=individual_leaf.id, name="Allowed direct camera",
         model="DIRECT-1", unit_price=Decimal("20"), currency="SAR",
     )
     hidden_item = PricingItem(
-        department_id=1, category_id=individual_folder.id, name="Hidden peer camera",
+        department_id=1, category_id=individual_leaf.id, name="Hidden peer camera",
         model="HIDDEN-1", unit_price=Decimal("30"), currency="SAR",
     )
     db.add_all([category_item, direct_item, hidden_item])
@@ -174,10 +186,10 @@ def test_selected_pricing_scope_supports_whole_categories_and_individual_items(c
     db.commit()
 
     login(client, *LEADER_A)
-    category_page = client.get(f"/pricing/items?category={selected.id}")
+    category_page = client.get(f"/pricing/items?category={selected_leaf.id}")
     assert category_page.status_code == 200
     assert "Allowed category camera" in category_page.text
-    direct_page = client.get(f"/pricing/items?category={individual_folder.id}")
+    direct_page = client.get(f"/pricing/items?category={individual_leaf.id}")
     assert direct_page.status_code == 200
     assert "Allowed direct camera" in direct_page.text
     assert "Hidden peer camera" not in direct_page.text
@@ -298,6 +310,11 @@ def test_admin_can_move_category_tree_and_items_to_another_department(client, db
     operations = _add_department(db)
     root = PricingItemCategory(name="Cameras", department_id=1)
     child = PricingItemCategory(name="Hikvision", department_id=1, parent=root)
+    grandchild = PricingItemCategory(
+        name="Hikvision NVR",
+        department_id=1,
+        parent=child,
+    )
     direct_item = PricingItem(
         department_id=1,
         category=root,
@@ -308,7 +325,7 @@ def test_admin_can_move_category_tree_and_items_to_another_department(client, db
     )
     child_item = PricingItem(
         department_id=1,
-        category=child,
+        category=grandchild,
         name="Department NVR",
         model="SUB",
         unit_price=Decimal("200.00"),
@@ -324,6 +341,7 @@ def test_admin_can_move_category_tree_and_items_to_another_department(client, db
     db.commit()
     root_id = root.id
     child_id = child.id
+    grandchild_id = grandchild.id
     item_ids = {direct_item.id, child_item.id}
 
     login(client, *ADMIN)
@@ -342,7 +360,7 @@ def test_admin_can_move_category_tree_and_items_to_another_department(client, db
     db.expire_all()
     moved_categories = list(db.scalars(
         select(PricingItemCategory)
-        .where(PricingItemCategory.id.in_({root_id, child_id}))
+        .where(PricingItemCategory.id.in_({root_id, child_id, grandchild_id}))
         .execution_options(include_all_departments=True)
     ))
     moved_items = list(db.scalars(
@@ -357,6 +375,7 @@ def test_admin_can_move_category_tree_and_items_to_another_department(client, db
     )
     assert {entry.department_id for entry in moved_categories} == {operations.id}
     assert next(entry for entry in moved_categories if entry.id == child_id).parent_id == root_id
+    assert next(entry for entry in moved_categories if entry.id == grandchild_id).parent_id == child_id
     assert {entry.department_id for entry in moved_items} == {operations.id}
     assert moved_related is not None and moved_related.department_id == operations.id
 
@@ -479,6 +498,13 @@ def test_item_move_refuses_to_split_a_shared_purchase_document(client, db):
 
     login(client, *ADMIN)
     token = csrf_of(client, "/pricing/items?category=uncategorized")
+    item_page = client.get("/pricing/items?category=uncategorized")
+    edit_action = f'action="/pricing/items/{first_id}/edit"'
+    edit_start = item_page.text.index(edit_action)
+    edit_end = item_page.text.index("</form>", edit_start)
+    assert 'name="target_department_id"' not in item_page.text[edit_start:edit_end]
+    assert f'action="/pricing/items/{first_id}/move-department"' in item_page.text
+
     refused = client.post(
         f"/pricing/items/{first_id}/move-department",
         data={"target_department_id": str(operations.id), "csrf_token": token},

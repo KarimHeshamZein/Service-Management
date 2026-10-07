@@ -55,6 +55,14 @@ from ..models import (
     utcnow,
 )
 from ..pricing import money, next_quotation_number, percentage, quantity
+from ..pricing_categories import (
+    MAX_CATEGORY_DEPTH,
+    category_ancestry,
+    category_depth,
+    category_descendants,
+    category_path_label,
+    category_subtree_height,
+)
 from ..pricing_pdf import build_quotation_pdf
 from ..purchase_documents import delete_purchase_files
 from ..technical_documents import delete_quotation_technical_files, recommendation_pdf, resolve_technical_file
@@ -101,6 +109,7 @@ MAX_QUOTATION_INVOICE_IMAGES = 20
 MAX_INVOICE_UPLOAD_BATCH = 10
 MAX_QUOTATION_SITE_SURVEY_IMAGES = 20
 MAX_SITE_SURVEY_UPLOAD_BATCH = 10
+MAX_PRICING_ITEM_DESCRIPTION_LENGTH = 5000
 LINE_ITEM_RE = re.compile(r"^line_(\d+)_item_id$")
 PLANNER_HTML = Path(__file__).resolve().parents[1] / "static" / "camera-planner.html"
 
@@ -337,6 +346,34 @@ def _pricing_settings(db: Session) -> dict:
     return _settings_values(db.get(PricingSettings, 1))
 
 
+def _category_parent_error(
+    category: PricingItemCategory | None,
+    parent: PricingItemCategory | None,
+) -> str | None:
+    """Validate a move/create against the fixed Main/Sub/Sub-sub hierarchy."""
+    if parent is None:
+        new_depth = 0
+    else:
+        if category is not None and (
+            parent.id == category.id
+            or parent.id in {entry.id for entry in category_descendants(category)}
+        ):
+            return "A Category cannot be placed inside itself or one of its child folders."
+        if category is not None and parent.department_id != category.department_id:
+            return "The parent Category must belong to the same Department."
+        new_depth = category_depth(parent) + 1
+    subtree_height = category_subtree_height(category) if category is not None else 0
+    if new_depth + subtree_height > MAX_CATEGORY_DEPTH:
+        return "Pricing Categories support Main Category, Subcategory, and Sub-subcategory only."
+    return None
+
+
+def _category_item_count(category: PricingItemCategory) -> int:
+    return len(category.items) + sum(
+        _category_item_count(child) for child in category.children
+    )
+
+
 def _catalogue(db: Session, *, include_inactive: bool = False) -> list[PricingItem]:
     stmt = (
         select(PricingItem)
@@ -344,7 +381,9 @@ def _catalogue(db: Session, *, include_inactive: bool = False) -> list[PricingIt
             selectinload(PricingItem.related_items),
             selectinload(PricingItem.price_history),
             selectinload(PricingItem.related_items).selectinload(PricingRelatedItem.price_history),
-            selectinload(PricingItem.category).selectinload(PricingItemCategory.parent),
+            selectinload(PricingItem.category)
+            .selectinload(PricingItemCategory.parent)
+            .selectinload(PricingItemCategory.parent),
         )
         .order_by(PricingItem.name, PricingItem.model)
     )
@@ -362,17 +401,26 @@ def _catalogue(db: Session, *, include_inactive: bool = False) -> list[PricingIt
 
 
 def _catalogue_payload(items: list[PricingItem]) -> list[dict]:
-    return [
-        {
+    payload: list[dict] = []
+    for item in items:
+        path = item.category_path
+        payload.append({
             "id": item.id,
             "label": item.display_label,
+            "description": item.description,
             "price": str(item.unit_price),
             "currency": item.currency,
             "category_name": item.category_name,
             "category_id": item.category_id,
             "main_category_name": item.main_category_name,
             "subcategory_name": item.subcategory_name,
+            "subsubcategory_name": item.subsubcategory_name,
             "parent_category_id": item.category.parent_id if item.category else None,
+            "category_path": [
+                {"id": entry.id, "name": entry.name}
+                for entry in path
+            ],
+            "category_path_label": category_path_label(item.category),
             "image_url": (
                 f"/pricing/items/{item.id}/image?size=thumb"
                 if item.image_storage_key
@@ -388,46 +436,72 @@ def _catalogue_payload(items: list[PricingItem]) -> list[dict]:
                 for related in item.related_items
                 if related.is_active
             ],
-        }
-        for item in items
-        if item.is_active
-    ]
+        })
+    return payload
 
 
 def _catalogue_tree(catalogue: list[dict]) -> list[dict]:
     roots: dict[str, dict] = {}
     for item in catalogue:
-        root_key = (
-            f"category-{item['parent_category_id'] or item['category_id']}"
-            if item["category_id"]
-            else "uncategorized"
-        )
-        root = roots.setdefault(
-            root_key,
-            {
-                "key": root_key,
-                "name": item["main_category_name"],
-                "items": [],
-                "subcategories": {},
-            },
-        )
-        if item["subcategory_name"]:
-            sub_key = f"subcategory-{item['category_id']}"
-            subcategory = root["subcategories"].setdefault(
-                sub_key,
-                {"key": sub_key, "name": item["subcategory_name"], "items": []},
+        path = item["category_path"]
+        if not path:
+            root = roots.setdefault(
+                "uncategorized",
+                {
+                    "key": "uncategorized",
+                    "name": "",
+                    "category_id": None,
+                    "parent_key": None,
+                    "depth": 0,
+                    "items": [],
+                    "children": {},
+                },
             )
-            subcategory["items"].append(item)
-        else:
             root["items"].append(item)
-    result = []
-    for root in roots.values():
-        root["subcategories"] = list(root["subcategories"].values())
-        root["item_count"] = len(root["items"]) + sum(
-            len(entry["items"]) for entry in root["subcategories"]
+            continue
+        children = roots
+        parent_key = None
+        node = None
+        for depth, category in enumerate(path):
+            key = f"category-{category['id']}"
+            node = children.setdefault(
+                key,
+                {
+                    "key": key,
+                    "name": category["name"],
+                    "category_id": category["id"],
+                    "parent_key": parent_key,
+                    "depth": depth,
+                    "items": [],
+                    "children": {},
+                },
+            )
+            children = node["children"]
+            parent_key = key
+        node["items"].append(item)
+
+    def finalize(node: dict) -> dict:
+        children = [finalize(child) for child in node["children"].values()]
+        children.sort(key=lambda entry: entry["name"].casefold())
+        node["children"] = children
+        node["item_count"] = len(node["items"]) + sum(
+            child["item_count"] for child in children
         )
-        result.append(root)
+        return node
+
+    result = [finalize(root) for root in roots.values()]
+    result.sort(key=lambda entry: (entry["key"] == "uncategorized", entry["name"].casefold()))
     return result
+
+
+def _catalogue_folders(roots: list[dict]) -> list[dict]:
+    folders: list[dict] = []
+    pending = list(roots)
+    while pending:
+        folder = pending.pop(0)
+        folders.append(folder)
+        pending[0:0] = folder["children"]
+    return folders
 
 
 def _department_folder_rows(
@@ -538,8 +612,12 @@ def _item_context(
             select(PricingItemCategory)
             .options(
                 selectinload(PricingItemCategory.items),
-                selectinload(PricingItemCategory.parent),
-                selectinload(PricingItemCategory.children),
+                selectinload(PricingItemCategory.parent).selectinload(
+                    PricingItemCategory.parent
+                ),
+                selectinload(PricingItemCategory.children).selectinload(
+                    PricingItemCategory.children
+                ),
                 selectinload(PricingItemCategory.user_access),
             )
             .order_by(PricingItemCategory.name)
@@ -560,7 +638,9 @@ def _item_context(
             selectinload(PricingItem.related_items).selectinload(
                 PricingRelatedItem.price_history
             ),
-            selectinload(PricingItem.category).selectinload(PricingItemCategory.parent),
+            selectinload(PricingItem.category)
+            .selectinload(PricingItemCategory.parent)
+            .selectinload(PricingItemCategory.parent),
             selectinload(PricingItem.price_history),
         )
         .order_by(PricingItem.is_active.desc(), PricingItem.name, PricingItem.model)
@@ -569,8 +649,10 @@ def _item_context(
         stmt = stmt.where(PricingItem.category_id.is_(None))
     elif selected_category is not None:
         category_ids = [selected_category.id]
-        if term and selected_category.parent_id is None:
-            category_ids.extend(child.id for child in selected_category.children)
+        if term:
+            category_ids.extend(
+                child.id for child in category_descendants(selected_category)
+            )
         stmt = stmt.where(PricingItem.category_id.in_(category_ids))
     if term:
         like = f"%{term}%"
@@ -578,6 +660,7 @@ def _item_context(
             or_(
                 PricingItem.name.ilike(like),
                 PricingItem.model.ilike(like),
+                PricingItem.description.ilike(like),
                 PricingItem.category.has(PricingItemCategory.name.ilike(like)),
             )
         )
@@ -616,15 +699,32 @@ def _item_context(
         "categories": categories,
         "root_categories": [entry for entry in categories if entry.parent_id is None],
         "root_category_item_counts": {
-            entry.id: len(entry.items) + sum(len(child.items) for child in entry.children)
+            entry.id: _category_item_count(entry)
             for entry in categories
             if entry.parent_id is None
         },
-        "selected_subcategories": (
-            selected_category.children
-            if selected_category and selected_category.parent_id is None
-            else []
+        "category_item_counts": {
+            entry.id: _category_item_count(entry)
+            for entry in categories
+        },
+        "selected_child_categories": (
+            selected_category.children if selected_category else []
         ),
+        "category_parent_options": [
+            entry for entry in categories
+            if category_depth(entry) < MAX_CATEGORY_DEPTH
+        ],
+        "category_depths": {
+            entry.id: category_depth(entry) for entry in categories
+        },
+        "category_valid_parent_ids": {
+            entry.id: {
+                candidate.id
+                for candidate in categories
+                if _category_parent_error(entry, candidate) is None
+            }
+            for entry in categories
+        },
         "q": term,
         "selected_category": selected_category,
         "selected_category_key": category_key,
@@ -717,12 +817,17 @@ async def create_category(
     if not name:
         flash(request, "Enter a category name.", "error")
         return _redirect("/pricing/items")
-    if parent_id and (parent is None or parent.parent_id is not None):
-        flash(request, "Choose an existing Main Category.", "error")
+    if parent_id and parent is None:
+        flash(request, "Choose an existing Category.", "error")
+        return _redirect("/pricing/items")
+    parent_error = _category_parent_error(None, parent)
+    if parent_error:
+        flash(request, parent_error, "error")
         return _redirect("/pricing/items")
     clash = db.scalar(
         select(PricingItemCategory).where(
-            func.lower(PricingItemCategory.name) == name.lower()
+            PricingItemCategory.parent_id == (parent.id if parent else None),
+            func.lower(PricingItemCategory.name) == name.lower(),
         )
     )
     if clash:
@@ -781,21 +886,17 @@ async def edit_category(
         flash(request, "Enter a category name.", "error")
         return _redirect("/pricing/items")
     parent = db.get(PricingItemCategory, parent_id) if parent_id else None
-    if parent_id and (
-        parent is None
-        or parent.id == category.id
-        or parent.parent_id is not None
-        or bool(category.children)
-    ):
-        flash(
-            request,
-            "A Subcategory must belong to a Main Category and cannot contain another Subcategory.",
-            "error",
-        )
+    if parent_id and parent is None:
+        flash(request, "Choose an existing Category.", "error")
+        return _redirect("/pricing/items")
+    parent_error = _category_parent_error(category, parent)
+    if parent_error:
+        flash(request, parent_error, "error")
         return _redirect("/pricing/items")
     clash = db.scalar(
         select(PricingItemCategory).where(
             PricingItemCategory.id != category.id,
+            PricingItemCategory.parent_id == (parent.id if parent else None),
             func.lower(PricingItemCategory.name) == name.lower(),
         )
     )
@@ -854,7 +955,7 @@ async def delete_category(
     if category.children:
         flash(
             request,
-            "Delete or move its Subcategories before deleting this Main Category.",
+            "Delete or move its child Categories before deleting this folder.",
             "error",
         )
         return _redirect("/pricing/items")
@@ -895,7 +996,7 @@ async def move_category_department(
     if target_clash:
         flash(request, f'The target Department already has a Main Category named "{category.name}".', "error")
         return _redirect("/pricing/items")
-    categories = [category, *category.children] if category.parent_id is None else [category]
+    categories = [category, *category_descendants(category)]
     items = [item for entry in categories for item in entry.items]
     source_department_id = category.department_id
     try:
@@ -937,6 +1038,7 @@ async def create_item(
         return _redirect("/pricing/items")
     name = str(form.get("name") or "").strip()
     model = str(form.get("model") or "").strip()
+    description = str(form.get("description") or "").strip()
     unit_price = money(form.get("unit_price"))
     currency = _currency(form.get("currency"), _pricing_settings(db)["currency"])
     service_enabled = (
@@ -950,6 +1052,13 @@ async def create_item(
     image = form.get("image")
     if not name:
         flash(request, "Enter the main item name.", "error")
+        return _redirect("/pricing/items")
+    if len(description) > MAX_PRICING_ITEM_DESCRIPTION_LENGTH:
+        flash(
+            request,
+            f"Keep the item description under {MAX_PRICING_ITEM_DESCRIPTION_LENGTH} characters.",
+            "error",
+        )
         return _redirect("/pricing/items")
     if unit_price is None or currency is None:
         flash(request, "Enter a valid non-negative item price.", "error")
@@ -976,6 +1085,7 @@ async def create_item(
     item = PricingItem(
         name=name,
         model=model,
+        description=description,
         unit_price=unit_price,
         currency=currency,
         service_enabled=service_enabled,
@@ -1022,6 +1132,7 @@ async def edit_item(
     item = db.get(PricingItem, item_id)
     name = str(form.get("name") or "").strip()
     model = str(form.get("model") or "").strip()
+    description = str(form.get("description") or "").strip()
     unit_price = money(form.get("unit_price"))
     image = form.get("image")
     if item is None:
@@ -1038,6 +1149,13 @@ async def edit_item(
     category = db.get(PricingItemCategory, category_id) if category_id else None
     if not name or unit_price is None or currency is None:
         flash(request, "Enter a valid item name and non-negative price.", "error")
+        return _redirect("/pricing/items")
+    if len(description) > MAX_PRICING_ITEM_DESCRIPTION_LENGTH:
+        flash(
+            request,
+            f"Keep the item description under {MAX_PRICING_ITEM_DESCRIPTION_LENGTH} characters.",
+            "error",
+        )
         return _redirect("/pricing/items")
     if raw_category_id and category is None:
         flash(request, "Choose an existing item category.", "error")
@@ -1075,8 +1193,10 @@ async def edit_item(
             return _redirect("/pricing/items")
     old_keys = (item.image_storage_key, item.image_thumbnail_key)
     old_price, old_currency = item.unit_price, item.currency
+    old_description = item.description
     item.name = name
     item.model = model
+    item.description = description
     item.unit_price = unit_price
     item.currency = currency
     item.service_enabled = service_enabled
@@ -1106,6 +1226,8 @@ async def edit_item(
     changes = {}
     if old_price != unit_price or old_currency != currency:
         changes["price"] = {"before": f"{old_price} {old_currency}", "after": f"{unit_price} {currency}"}
+    if old_description != description:
+        changes["description"] = {"before": old_description, "after": description}
     set_audit_context(request, action="update", entity_type="pricing_item", entity_id=item.id, entity_label=item.display_label, changes=changes)
     if stored:
         delete_stored(*old_keys)
@@ -1595,6 +1717,7 @@ def _quotation_form_context(
         )
     )
     catalogue = _catalogue_payload(items)
+    catalogue_tree = _catalogue_tree(catalogue)
     return {
         "active_nav": "pricing_quotations",
         "quotation": quotation,
@@ -1607,7 +1730,8 @@ def _quotation_form_context(
         )),
         "quotation_addressees": addressees,
         "catalogue": catalogue,
-        "catalogue_tree": _catalogue_tree(catalogue),
+        "catalogue_tree": catalogue_tree,
+        "catalogue_folders": _catalogue_folders(catalogue_tree),
         "form": form or _default_quote_form(db),
         "errors": errors or {},
         "form_token": form_token or issue_form_token(request),
@@ -1701,7 +1825,6 @@ def _build_quote_lines(
         if line_currency is None:
             errors[f"line_{index}_currency"] = "Choose SAR or USD."
             continue
-
         active_related_ids = {
             related.id
             for related in item.related_items
@@ -1729,6 +1852,7 @@ def _build_quote_lines(
             source_item_id=item.id,
             item_name=item.name,
             item_model=item.model,
+            item_description=item.description,
             quantity=line_quantity,
             unit_price=line_price,
             currency=line_currency,

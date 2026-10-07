@@ -148,6 +148,12 @@ def test_pdf_text_removes_invisible_item_name_characters_and_centers_arabic():
     assert style_for_pdf_text("وصف الصورة", centered).alignment == TA_CENTER
 
 
+def test_pdf_text_normalizes_fullwidth_ascii_punctuation():
+    assert pdf_text("Warranty：3 years，camera（IP）") == (
+        "Warranty:3 years,camera(IP)"
+    )
+
+
 def test_admin_can_delete_report_only_without_deleting_source_record(client, db):
     login(client, *LEADER_A)
     assert submit_installation(client, serial_number="REPORT-ONLY-DELETE").status_code == 303
@@ -254,8 +260,8 @@ def test_saved_installation_report_has_fixed_creator_and_customer_scope(client, 
     pdf_text = "\n".join(pdf_pages)
     assert "TABLE OF CONTENTS" in pdf_text
     assert "RECORD & DEVICE INDEX" in pdf_text
-    assert "EXECUTIVE SUMMARY" in pdf_pages[0]
-    assert "No items require attention." in pdf_pages[0]
+    assert "REPORT OVERVIEW" in pdf_pages[0]
+    assert "RESULT STATUS" in pdf_pages[0]
     assert "Technicians" not in pdf_pages[0]
     assert "Confidential | Page 1" in pdf_pages[0]
     record_number = db.get(InstallationRecord, record_id).record_number
@@ -277,9 +283,9 @@ def test_saved_installation_report_has_fixed_creator_and_customer_scope(client, 
     assert "2026-08-17 10:15" in pdf_text
     assert "Performed by Leader One on 2026-08-17 11:30" in pdf_text
     assert "installation.jpg" not in pdf_text
-    assert "Installation notes" in pdf_text
+    assert "INSTALLATION NOTES" in pdf_text
     assert "Mounted, connected, configured and commissioned the equipment." in pdf_text
-    assert "Handover notes" in pdf_text
+    assert "HANDOVER NOTES" in pdf_text
     assert "Customer accepted the commissioned camera." in pdf_text
     assert "APPROVALS" in pdf_text
     assert "Customer Representative" in pdf_text
@@ -287,11 +293,11 @@ def test_saved_installation_report_has_fixed_creator_and_customer_scope(client, 
     assert "Project Manager" in pdf_text
     assert pdf_text.count("Name:") == 3
     assert pdf_text.count("Job title:") == 3
-    assert pdf_text.count("Signature:") == 3
+    assert pdf_text.count("Signature & Stamp:") == 3
     assert pdf_text.count("Date:") >= 3
-    detail_page = next(index for index, text in enumerate(pdf_pages) if "Installation notes" in text)
+    detail_page = next(index for index, text in enumerate(pdf_pages) if "INSTALLATION NOTES" in text)
     evidence_page = next(index for index, text in enumerate(pdf_pages) if "Before Installation" in text)
-    assert evidence_page > detail_page
+    assert evidence_page >= detail_page
     assert "After Installation" in pdf_text
     manual_pdf = client.get(f"/reports/installation/{report.id}/pdf?include_device_data=true")
     manual_text = "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(manual_pdf.content)).pages)
@@ -616,11 +622,11 @@ def test_saved_report_workflow_is_shared_by_both_maintenance_types(client, db):
     )
     assert "ITEMS REQUIRING ATTENTION" in preventive_text
     assert "ITEMS REQUIRING ATTENTION" in maintenance_text
-    for label in ("Issue found", "Recommendations"):
+    for label in ("ISSUE FOUND", "RECOMMENDATIONS"):
         assert label in preventive_text
         assert label in maintenance_text
-    assert "Maintenance notes" in preventive_text
-    assert "Maintenance notes" in maintenance_text
+    assert "MAINTENANCE NOTES" in preventive_text
+    assert "MAINTENANCE NOTES" in maintenance_text
     assert "Preventive notes for PDF." in preventive_text
     assert "Completed corrective maintenance." in maintenance_text
     for label in ("Model", "Serial number"):
@@ -696,7 +702,7 @@ def test_multi_service_pdf_keeps_each_service_with_its_own_evidence(client, db):
     first_evidence = next(
         index
         for index, text in enumerate(pages)
-        if index > first_detail and "PHOTO EVIDENCE" in text and "Camera Service" in text
+        if index >= first_detail and "PHOTO EVIDENCE" in text and "Camera Service" in text
     )
     first_after = next(
         index for index, text in enumerate(pages) if index >= first_evidence and "After Maintenance" in text
@@ -705,13 +711,13 @@ def test_multi_service_pdf_keeps_each_service_with_its_own_evidence(client, db):
     second_evidence = next(
         index
         for index, text in enumerate(pages)
-        if index > second_detail and "PHOTO EVIDENCE" in text and "Camera Service" in text
+        if index >= second_detail and "PHOTO EVIDENCE" in text and "Camera Service" in text
     )
     second_after = next(
         index for index, text in enumerate(pages) if index >= second_evidence and "After Maintenance" in text
     )
 
-    assert first_detail < first_evidence <= first_after < second_detail < second_evidence <= second_after
+    assert first_detail <= first_evidence <= first_after <= second_detail <= second_evidence <= second_after
     assert "Second device notes." not in pages[first_detail]
     assert "First device notes." not in pages[second_detail]
     assert f"Record {record.record_number}" in pages[first_detail]

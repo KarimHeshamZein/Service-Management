@@ -4,7 +4,117 @@ Service Management System — a maintenance evidence portal. Read `README.md` fo
 full architecture, entities and known limitations. This file is the short version
 plus the rules that aren't inferable from the code.
 
-## Current handoff — 2026-08-31
+## Current handoff — 2026-10-06
+
+- The validated offline production release is
+  `dist/service-management-offline-1.1.0-rc53.zip` (535,473,487 bytes) with
+  SHA-256
+  `595bedaa21178ad657c2c7b8d8a39c9b5ddc7ff9271e9cf35ec79cf73a3de864`.
+  The authoritative repository suite is `457 passed, 9 warnings`; the final
+  affected-page/release/Alembic gate is `23 passed, 1 warning`. The exact bundle
+  passes outer checksum verification, outer and embedded ZIP CRCs, all 62
+  internal checksums, required installer/prerequisite checks, embedded version
+  `1.1.0-rc53` and Alembic head `c4d7e9a31b62`, feature-source checks, and
+  exclusion of real data, `.env`, uploads, logs, backups, caches, Git history,
+  `output`, `tmp`, and the unrelated root `index.html`. RC52 remains available
+  but is superseded by RC53.
+
+- Pending review: quotation PDF Description cells now use a dedicated compact
+  7 pt/9 pt-leading style; Item names, quantities, prices, headers, and all
+  non-description PDF text retain their existing sizes. A live quotation with a
+  463-character Description was downloaded and rendered to
+  `output/pdf/quotation-description-compact-preview.pdf`; the page is aligned,
+  readable, and materially shorter. The Pricing Items page alone now opts into a
+  full-width content container instead of the global 1240 px cap. At a 1600 px
+  viewport it uses all 1356 px beside the sidebar, and the live three-level Item
+  table was screenshot-verified without right-side wasted space. Pricing
+  regression is `43 passed`; Python compilation, JavaScript syntax, and
+  `git diff --check` pass. No migration was required. The local service was
+  restarted on `127.0.0.1:8999`. This work is included in RC53 above.
+
+- Pending review: Price Quotation creation no longer accepts a per-line Item
+  Note. Each saved line now snapshots the reusable Pricing Item Description,
+  the quotation detail shows that Description, and the PDF replaces its `Note`
+  column with `Description`. Existing quotation lines are backfilled from their
+  currently linked Pricing Items by migration `c4d7e9a31b62`, which is the new
+  single Alembic head. With approval, the development database was backed up to
+  `tmp/phase2-dev-backups/service_management-before-c4d7e9a31b62-20261006-115212.dump`,
+  migrated to `c4d7e9a31b62`, and passed `alembic check`. All 29 existing
+  quotation lines were processed, three received non-empty Description
+  snapshots, and the backfill had zero mismatches. PDF text normalization
+  now converts full-width ASCII punctuation (including `：`, `，`, `（`, and
+  `）`) before rendering, preventing Helvetica from printing `■`. Pricing plus
+  migration regression is `44 passed`; focused behavior/text regression is `4
+  passed`; Python compilation, JavaScript syntax, and `git diff --check` pass.
+  An actual quotation PDF was generated, text-extracted, and visually rendered:
+  it has the Description column, correct punctuation, and no black square. The
+  local service was restarted on `127.0.0.1:8999`; authenticated live checks
+  passed for the quotation form, an existing quotation detail, and its PDF. The
+  live form has no Item Note and does have the read-only Description preview;
+  the PDF has the Description column and no `■`. This work is included in RC53
+  above.
+
+- Pending review on `feature/department-workspaces`: Pricing Item Categories now
+  support exactly three navigable levels: Main Category, Subcategory, and
+  Sub-subcategory. Items may be assigned directly at any level, child folders
+  appear above the current folder's direct Items, and Back moves up one level.
+  The same hierarchy is used by Items, quotation selection, Purchase Documents,
+  Data Sheet, Department moves, and selected-category permission scoping.
+  Existing one- and two-level Categories remain valid without conversion, and a
+  fourth level plus circular moves are rejected. Pricing Items also have an
+  optional reusable 5,000-character Description that is editable, searchable,
+  visible in catalogue browsers, and shown in item pickers; quotations now copy
+  it into a saved line snapshot. Migration `a9e3c7b21f84` adds the Description
+  column and is the single Alembic head. With approval, the development database
+  was backed up to
+  `tmp/phase2-dev-backups/service_management-before-a9e3c7b21f84-20261005-160225.dump`,
+  migrated to `a9e3c7b21f84`, and passed `alembic check`. The service was
+  restarted successfully on `127.0.0.1:8999`; an authenticated live Items-page
+  check returned HTTP 200 with no server error. The Item Department transfer is
+  now a separate form, so normal Item edits no longer require selecting a target
+  Department; focused tests pass (`2 passed`) and a live authenticated check
+  found seven Edit forms with no Department requirement plus seven independent
+  Move forms. The full suite passed after the hierarchy work (`456
+  passed, 9 warnings`), and the subsequent Description-focused gates pass (`43
+  passed` Pricing, `11 passed` cross-module, and `1 passed` isolated Alembic
+  round-trip/schema-drift). Python compilation, JavaScript syntax, and
+  `git diff --check` pass. Release workflow plus isolated Alembic regression is
+  `21 passed`. The prior validated offline production bundle was
+  `dist/service-management-offline-1.1.0-rc52.zip` (535,471,884 bytes) with
+  SHA-256
+  `e15d58e69b81be3e21b83bbe6b3e181c4c1b4d2cefc2c8002c13937fcb6b6794`.
+  Its outer checksum, ZIP CRCs, all 62 internal checksums, required installer
+  files, embedded RC52 metadata, Alembic head `a9e3c7b21f84`, feature sources,
+  and exclusion of real data, secrets, uploads, logs, Git history, and the
+  unrelated root `index.html` all pass. RC52 is superseded by RC53 above.
+
+- Previous handoff — 2026-10-01:
+
+- Pending review: every main Price Quotation item now has its own optional
+  2,000-character note. The note survives create validation, is restored during
+  Edit, appears beneath the saved item, and has its own `Note` column in the
+  quotation PDF. Long notes split safely across PDF pages with repeated table
+  headers. Non-note cells in priced-item rows are centered horizontally and
+  vertically while the Note stays top-left aligned; all priced-item table headers
+  are also centered both horizontally and vertically. English/Arabic wrapping,
+  tall-row alignment, and
+  header alignment were visually verified. Newly added browser rows start with a blank note. Migration
+  `f6b8d3a42c71` adds the non-null line-note column while preserving existing
+  quotations with blank values. Pricing regression is `43 passed`; the earlier
+  bilingual i18n gate is `24 passed`; the
+  isolated Alembic round-trip and ORM drift gate is `1 passed`; Python compile,
+  JavaScript syntax, and `git diff --check` pass. With approval, the development
+  database was backed up to
+  `tmp/phase2-dev-backups/service_management-before-f6b8d3a42c71-20261001-111502.dump`,
+  migrated to `f6b8d3a42c71`, passed `alembic check`, and restarted successfully
+  on `127.0.0.1:8999`; the live Login health check returned HTTP 200. Release
+  workflow regression is `20 passed`; the final PDF header-alignment regression
+  is `2 passed`. The validated offline production bundle is
+  `dist/service-management-offline-1.1.0-rc51.zip` with SHA-256
+  `e2d8a3beace86a2f0d6aebe3fe9b05fa732ccb84a6f0ca1de8b604a9d3f0f141`.
+  Its outer checksum, all 62 internal checksums, embedded RC51 manifest, Alembic
+  head, quotation-note/header/body-alignment source, ZIP integrity, and exclusion
+  of real data/secrets all pass. RC50 remains available but is superseded by RC51.
 
 - Pending review on `feature/department-workspaces`: the Department access
   design now uses **direct per-user permissions only**; Department permission

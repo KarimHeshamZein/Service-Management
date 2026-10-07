@@ -1594,6 +1594,7 @@ MESSAGES = {'logs.report.title': 'Logs Report',
  'ui.no.authorized.records.for.report': 'No authorized records are available for this report.',
  'ui.no.saved.reports': 'No saved reports yet',
  'ui.notes.optional': 'Notes (optional)',
+ 'ui.item.note.optional': 'Item note (optional)',
  'ui.pdf.preview.and.download': 'PDF Preview & Download',
  'ui.report.design.preview.part.1': 'Redesigned PDF preview - Part 1',
  'ui.report.design.preview.part.1.help': 'Review the experimental cover and executive summary. The official PDF remains unchanged.',
@@ -1821,4 +1822,14 @@ MESSAGES.update({
  'pricing.move.category.confirm': 'Move this Category and all of its Subcategories and Items to the selected Department?',
  'pricing.move.item.confirm': 'Move this Item and its linked files to the selected Department?',
  'pricing.move.item.help': 'The Item becomes Uncategorized in the target Department. Historical quotations remain unchanged.',
+})
+
+MESSAGES.update({
+ 'ui.subsubcategory': 'Sub-subcategory',
+ 'ui.subsubcategory.under': 'Sub-subcategory under',
+ 'ui.child.categories': 'child categories',
+ 'ui.choose.a.child.category.or.manage.direct.items.below': 'Open a child Category, or manage Items assigned directly to this folder below.',
+ 'ui.open.a.child.category.or.select.this.folder': 'Open a child Category, or select this folder directly.',
+ 'ui.this.category.has.no.child.categories': 'This Category has no child Categories. You can select it directly.',
+ 'ui.select.this.category': 'Select this Category',
 })

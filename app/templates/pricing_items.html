@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "partials/macros.html" as ui with context %}
+{% set page_content_class = 'content-wide' %}
 {% macro category_selector(input_id, selected=None) %}
 <div class="field pricing-category-selector" data-pricing-category-selector>
   <label for="{{ input_id }}-trigger">{{ t('ui.item.category') }}</label>
@@ -41,7 +42,7 @@
     <form method="post" action="/pricing/categories" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:18px;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <div class="field" style="margin:0;flex:1 1 260px;"><label for="category-name">{{ t('ui.category.name') }}</label><input id="category-name" name="name" required maxlength="120" dir="auto"></div>
-      <div class="field" style="margin:0;flex:1 1 260px;"><label for="category-parent">{{ t('ui.category.level') }}</label><select id="category-parent" name="parent_category_id"><option value="">{{ t('ui.main.category') }}</option>{% for parent in root_categories %}<option value="{{ parent.id }}">{{ t('ui.subcategory.under') }} {{ parent.name }}</option>{% endfor %}</select></div>
+      <div class="field" style="margin:0;flex:1 1 260px;"><label for="category-parent">{{ t('ui.category.level') }}</label><select id="category-parent" name="parent_category_id"><option value="">{{ t('ui.main.category') }}</option>{% for parent in category_parent_options %}<option value="{{ parent.id }}">{{ t('ui.subcategory.under') if category_depths[parent.id] == 0 else t('ui.subsubcategory.under') }} {{ parent.display_label }}</option>{% endfor %}</select></div>
       <div class="field" style="margin:0;flex:1 1 220px;"><label for="category-visibility">{{ 'الرؤية' if lang == 'ar' else 'Visibility' }}</label><select id="category-visibility" name="visibility"><option value="department">{{ 'القسم بالكامل' if lang == 'ar' else 'Entire Department' }}</option><option value="selected_users">{{ 'مستخدمون محددون فقط' if lang == 'ar' else 'Selected users only' }}</option></select></div>
       <details class="compact-access-picker">
         <summary>{{ 'اختر المستخدمين عند تقييد الوصول' if lang == 'ar' else 'Select users when access is restricted' }}</summary>
@@ -54,13 +55,13 @@
       <form method="post" action="/pricing/categories/{{ category.id }}/edit" class="pricing-category-row">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <div class="field"><label class="sr-only" for="category-{{ category.id }}">{{ t('ui.category.name') }}</label><input id="category-{{ category.id }}" name="name" value="{{ category.name }}" required maxlength="120" dir="auto"></div>
-        <div class="field"><label class="sr-only" for="category-parent-{{ category.id }}">{{ t('ui.category.level') }}</label><select id="category-parent-{{ category.id }}" name="parent_category_id"><option value="">{{ t('ui.main.category') }}</option>{% for parent in root_categories if parent.id != category.id %}<option value="{{ parent.id }}" {{ 'selected' if category.parent_id == parent.id }}>{{ t('ui.subcategory.under') }} {{ parent.name }}</option>{% endfor %}</select></div>
+        <div class="field"><label class="sr-only" for="category-parent-{{ category.id }}">{{ t('ui.category.level') }}</label><select id="category-parent-{{ category.id }}" name="parent_category_id"><option value="">{{ t('ui.main.category') }}</option>{% for parent in category_parent_options if parent.id in category_valid_parent_ids[category.id] %}<option value="{{ parent.id }}" {{ 'selected' if category.parent_id == parent.id }}>{{ t('ui.subcategory.under') if category_depths[parent.id] == 0 else t('ui.subsubcategory.under') }} {{ parent.display_label }}</option>{% endfor %}</select></div>
         <div class="field"><label class="sr-only" for="category-visibility-{{ category.id }}">{{ 'الرؤية' if lang == 'ar' else 'Visibility' }}</label><select id="category-visibility-{{ category.id }}" name="visibility"><option value="department" {{ 'selected' if category.visibility == 'department' }}>{{ 'القسم بالكامل' if lang == 'ar' else 'Entire Department' }}</option><option value="selected_users" {{ 'selected' if category.visibility == 'selected_users' }}>{{ 'مستخدمون محددون فقط' if lang == 'ar' else 'Selected users only' }}</option></select></div>
         <details class="compact-access-picker">
           <summary>{{ 'الوصول للكاتجوري' if lang == 'ar' else 'Category access' }} · {{ category_access[category.id]|length }} {{ 'محدد' if lang == 'ar' else 'selected' }}</summary>
           <div class="choice-grid compact">{% for member in department_users %}<label class="choice"><input type="checkbox" name="category_user_ids" value="{{ member.id }}" {{ 'checked' if member.id in category_access[category.id] }}><span>{{ member.full_name }}</span></label>{% endfor %}</div>
         </details>
-        <span class="hint">{{ category.items|length }} {{ t('ui.items.lowercase') }}{% if category.children %} · {{ category.children|length }} {{ t('ui.subcategories') }}{% endif %}</span>
+        <span class="hint">{{ category.items|length }} {{ t('ui.items.lowercase') }}{% if category.children %} · {{ category.children|length }} {{ t('ui.child.categories') }}{% endif %}</span>
         <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.save') }}</button>
         {% if user.is_admin and department_options|length > 1 %}<div class="field"><label class="sr-only" for="category-department-{{ category.id }}">{{ t('pricing.move.to.department') }}</label><select id="category-department-{{ category.id }}" name="target_department_id" required><option value="">{{ t('pricing.move.to.department') }}</option>{% for option in department_options if option.id != department.id %}<option value="{{ option.id }}">{{ option.name }}</option>{% endfor %}</select></div><button class="btn btn-secondary btn-sm" type="submit" formaction="/pricing/categories/{{ category.id }}/move-department" formnovalidate onclick="return confirm('{{ t('pricing.move.category.confirm') }}');">{{ t('pricing.move') }}</button>{% endif %}
         {% if can_delete %}<button class="btn btn-danger btn-sm" type="submit" formaction="/pricing/categories/{{ category.id }}/delete">{{ t('ui.delete') }}</button>{% endif %}
@@ -80,6 +81,8 @@
           <input id="pi-name" name="name" required maxlength="160" value="{{ prefill_name }}" placeholder="Camera" dir="auto"></div>
         <div class="field"><label for="pi-model">{{ t('ui.model') }}</label>
           <input id="pi-model" name="model" maxlength="120" value="{{ prefill_model }}" placeholder="P3265-LV" dir="auto"></div>
+        <div class="field"><label for="pi-description">{{ t('ui.description.optional') }}</label>
+          <textarea id="pi-description" name="description" rows="3" maxlength="5000" dir="auto"></textarea></div>
         <div class="field"><label for="pi-price">{{ t('ui.unit.price.label') }} <span class="req">*</span></label>
           <input id="pi-price" name="unit_price" type="number" min="0" max="999999999999.99" step="0.01" required></div>
         <div class="field"><label for="pi-currency">{{ t('ui.currency') }} <span class="req">*</span></label><select id="pi-currency" name="currency" required>{% for code in currencies %}<option value="{{ code }}">{{ code }}</option>{% endfor %}</select></div>
@@ -158,16 +161,16 @@
   </div>
 </section>
 {% else %}
-{% if selected_subcategories %}
+{% if selected_child_categories %}
 <section class="pricing-category-browser pricing-subcategory-browser" data-subcategory-overview>
   <div class="pricing-category-browser-head">
-    <div class="pricing-category-detail-title"><a class="btn btn-secondary btn-sm" href="/pricing/items">{{ t('ui.back.to.categories') }}</a><div><h2>{{ selected_category.name }}</h2><p class="hint">{{ t('ui.choose.a.subcategory.or.manage.direct.items.below') }}</p></div></div>
+    <div class="pricing-category-detail-title"><a class="btn btn-secondary btn-sm" href="{{ '/pricing/items?category=' ~ selected_category.parent_id if selected_category.parent_id else '/pricing/items' }}">{{ t('ui.back') }}</a><div><h2>{{ selected_category.display_label }}</h2><p class="hint">{{ t('ui.choose.a.child.category.or.manage.direct.items.below') }}</p></div></div>
   </div>
   <div class="pricing-category-folder-grid pricing-subcategory-folder-grid">
-    {% for subcategory in selected_subcategories %}
-    <a class="pricing-category-folder pricing-subcategory-folder" href="/pricing/items?category={{ subcategory.id }}">
+    {% for subcategory in selected_child_categories %}
+    <a class="pricing-category-folder pricing-subcategory-folder {{ 'pricing-subsubcategory-folder' if category_depths[subcategory.id] == 2 }}" href="/pricing/items?category={{ subcategory.id }}">
       <span class="pricing-category-folder-icon" aria-hidden="true"></span>
-      <span class="pricing-category-folder-copy"><strong>{{ subcategory.name }}</strong><span>{{ subcategory.items|length }} {{ t('ui.item') if subcategory.items|length == 1 else t('ui.items.lowercase') }}</span></span>
+      {% set subcategory_count = category_item_counts[subcategory.id] %}<span class="pricing-category-folder-copy"><strong>{{ subcategory.name }}</strong><span>{{ subcategory_count }} {{ t('ui.item') if subcategory_count == 1 else t('ui.items.lowercase') }}</span></span>
       <span class="pricing-category-folder-arrow" aria-hidden="true">›</span>
     </a>
     {% endfor %}
@@ -177,8 +180,8 @@
 <div class="card">
   <div class="card-head">
     <div class="pricing-category-detail-title" data-category-detail>
-      {% if not selected_subcategories %}<a class="btn btn-secondary btn-sm" href="{{ '/pricing/items?category=' ~ selected_category.parent_id if selected_category and selected_category.parent_id else '/pricing/items' }}">{{ t('ui.back') }}</a>{% endif %}
-      <div><h2>{% if selected_subcategories %}{{ t('ui.direct.items') }}{% else %}{{ selected_category.name if selected_category else (t('ui.uncategorized') if selected_category_key == 'uncategorized' else t('ui.search.results')) }}{% endif %}</h2><p class="hint">{{ items|length }} {{ t('ui.item') if items|length == 1 else t('ui.items.lowercase') }}</p></div>
+      {% if not selected_child_categories %}<a class="btn btn-secondary btn-sm" href="{{ '/pricing/items?category=' ~ selected_category.parent_id if selected_category and selected_category.parent_id else '/pricing/items' }}">{{ t('ui.back') }}</a>{% endif %}
+      <div><h2>{% if selected_child_categories %}{{ t('ui.direct.items') }}{% else %}{{ selected_category.display_label if selected_category else (t('ui.uncategorized') if selected_category_key == 'uncategorized' else t('ui.search.results')) }}{% endif %}</h2><p class="hint">{{ items|length }} {{ t('ui.item') if items|length == 1 else t('ui.items.lowercase') }}</p></div>
     </div>
     <form method="get" action="/pricing/items" style="display:flex;gap:8px;">
       {% if selected_category_key %}<input type="hidden" name="category" value="{{ selected_category_key }}">{% endif %}
@@ -196,8 +199,8 @@
         {% for item in items %}
           <tr data-pricing-item-row="{{ item.id }}">
             <td>{% if item.image_storage_key %}<img src="/pricing/items/{{ item.id }}/image?size=thumb" alt="{{ item.name }}" style="width:64px;height:48px;object-fit:cover;border-radius:6px;">{% else %}<span class="hint">{{ t('ui.no.image') }}</span>{% endif %}</td>
-            <td><strong>{{ item.name }}</strong></td>
-            <td>{{ item.category.name if item.category else t('ui.uncategorized') }}</td>
+            <td><strong>{{ item.name }}</strong>{% if item.description %}<p class="hint" dir="auto">{{ item.description }}</p>{% endif %}</td>
+            <td>{{ item.category.display_label if item.category else t('ui.uncategorized') }}</td>
             <td>{{ item.model or '—' }}</td>
             <td class="num">{{ item.unit_price|money }} {{ item.currency }}</td>
             <td>{{ t('ui.available') if item.service_enabled else t('ui.not.available') }}</td>
@@ -216,11 +219,13 @@
           <tr id="pricing-item-{{ item.id }}" hidden>
             <td colspan="9" style="background:#f7f9fa;">
               <div class="grid cols-2">
+                <div>
                 <form method="post" action="/pricing/items/{{ item.id }}/edit" enctype="multipart/form-data">
                   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                   <p class="section-title">{{ t('ui.main.item.details') }}</p>
                   <div class="field"><label for="pin{{ item.id }}">{{ t('ui.item.name') }}</label><input id="pin{{ item.id }}" name="name" value="{{ item.name }}" required maxlength="160" dir="auto"></div>
                   <div class="field"><label for="pim{{ item.id }}">{{ t('ui.model') }}</label><input id="pim{{ item.id }}" name="model" value="{{ item.model }}" maxlength="120" dir="auto"></div>
+                  <div class="field"><label for="pid{{ item.id }}">{{ t('ui.description.optional') }}</label><textarea id="pid{{ item.id }}" name="description" rows="4" maxlength="5000" dir="auto">{{ item.description }}</textarea></div>
                   <div class="field"><label for="pip{{ item.id }}">{{ t('ui.unit.price.label') }}</label><input id="pip{{ item.id }}" name="unit_price" type="number" min="0" step="0.01" value="{{ item.unit_price }}" required></div>
                   <div class="field"><label for="pic{{ item.id }}">{{ t('ui.currency') }}</label><select id="pic{{ item.id }}" name="currency" required>{% for code in currencies %}<option value="{{ code }}" {{ 'selected' if code == item.currency }}>{{ code }}</option>{% endfor %}</select></div>
                   {{ category_selector('pict' ~ item.id, item.category) }}
@@ -230,8 +235,9 @@
                     <button class="btn btn-primary btn-sm" type="submit">{{ t('ui.save.main.item') }}</button>
                     {% if item.image_storage_key %}<button class="btn btn-quiet btn-sm" type="submit" formaction="/pricing/items/{{ item.id }}/remove-image" formnovalidate>{{ t('ui.remove.image') }}</button>{% endif %}
                   </div>
-                  {% if user.is_admin and department_options|length > 1 %}<div class="inline-panel"><div class="field"><label for="item-department-{{ item.id }}">{{ t('pricing.move.to.department') }}</label><select id="item-department-{{ item.id }}" name="target_department_id" required><option value="">{{ t('ui.choose') }}</option>{% for option in department_options if option.id != department.id %}<option value="{{ option.id }}">{{ option.name }}</option>{% endfor %}</select></div><button class="btn btn-secondary btn-sm" type="submit" formaction="/pricing/items/{{ item.id }}/move-department" formnovalidate onclick="return confirm('{{ t('pricing.move.item.confirm') }}');">{{ t('pricing.move') }}</button><p class="hint">{{ t('pricing.move.item.help') }}</p></div>{% endif %}
                 </form>
+                {% if user.is_admin and department_options|length > 1 %}<form method="post" action="/pricing/items/{{ item.id }}/move-department" class="inline-panel"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="field"><label for="item-department-{{ item.id }}">{{ t('pricing.move.to.department') }}</label><select id="item-department-{{ item.id }}" name="target_department_id" required><option value="">{{ t('ui.choose') }}</option>{% for option in department_options if option.id != department.id %}<option value="{{ option.id }}">{{ option.name }}</option>{% endfor %}</select></div><button class="btn btn-secondary btn-sm" type="submit" onclick="return confirm('{{ t('pricing.move.item.confirm') }}');">{{ t('pricing.move') }}</button><p class="hint">{{ t('pricing.move.item.help') }}</p></form>{% endif %}
+                </div>
                 <details class="price-history-panel" style="grid-column:1 / -1;grid-row:2;" open>
                   <summary>{{ t('ui.price.history') }}</summary>
                   <div class="price-history-summary"><strong>{{ item.unit_price|money }} {{ item.currency }}</strong>{% if item.price_history and item.price_history[0].old_price is not none %}<span>{{ t('ui.previous.price') }}: {{ item.price_history[0].old_price|money }} {{ item.price_history[0].old_currency }}</span>{% endif %}</div>
@@ -295,7 +301,7 @@
       {% for category in root_categories %}
       <button type="button" class="pricing-category-folder pricing-picker-folder" data-open-pricing-category="pricing-category-choice-{{ category.id }}" data-category-label="{{ category.name }}">
         <span class="pricing-category-folder-icon" aria-hidden="true"></span>
-        <span class="pricing-category-folder-copy"><strong>{{ category.name }}</strong><span>{{ category.children|length }} {{ t('ui.subcategories') }}</span></span>
+        <span class="pricing-category-folder-copy"><strong>{{ category.name }}</strong><span>{{ category.children|length }} {{ t('ui.child.categories') }}</span></span>
         <span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span>
       </button>
       {% endfor %}
@@ -305,25 +311,25 @@
         <span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span>
       </button>
     </div>
-    {% for category in root_categories %}
-    <section id="pricing-category-choice-{{ category.id }}" data-pricing-category-panel hidden>
+    {% for category in categories %}
+    <section id="pricing-category-choice-{{ category.id }}" data-pricing-category-panel data-parent-panel="{{ 'pricing-category-choice-' ~ category.parent_id if category.parent_id else '' }}" data-category-label="{{ category.display_label }}" hidden>
       <div class="pricing-category-choice-head">
-        <div><span class="eyebrow">{{ t('ui.main.category') }}</span><h3>{{ category.name }}</h3></div>
-        <button type="button" class="btn btn-primary btn-sm" data-select-pricing-category data-category-id="{{ category.id }}" data-category-label="{{ category.name }}">{{ t('ui.select.this.main.category') }}</button>
+        <div><span class="eyebrow">{{ t('ui.main.category') if category_depths[category.id] == 0 else (t('ui.subcategory') if category_depths[category.id] == 1 else t('ui.subsubcategory')) }}</span><h3>{{ category.display_label }}</h3></div>
+        <button type="button" class="btn btn-primary btn-sm" data-select-pricing-category data-category-id="{{ category.id }}" data-category-label="{{ category.display_label }}">{{ t('ui.select.this.category') }}</button>
       </div>
       {% if category.children %}
-      <p class="hint">{{ t('ui.open.a.subcategory.to.select.it') }}</p>
+      <p class="hint">{{ t('ui.open.a.child.category.or.select.this.folder') }}</p>
       <div class="pricing-category-folder-grid pricing-subcategory-folder-grid">
         {% for subcategory in category.children|sort(attribute='name') %}
-        <button type="button" class="pricing-category-folder pricing-subcategory-folder pricing-picker-folder" data-select-pricing-category data-category-id="{{ subcategory.id }}" data-category-label="{{ category.name }} &rsaquo; {{ subcategory.name }}">
+        <button type="button" class="pricing-category-folder pricing-subcategory-folder {{ 'pricing-subsubcategory-folder' if category_depths[subcategory.id] == 2 }} pricing-picker-folder" data-open-pricing-category="pricing-category-choice-{{ subcategory.id }}" data-category-label="{{ subcategory.display_label }}">
           <span class="pricing-category-folder-icon" aria-hidden="true"></span>
-          <span class="pricing-category-folder-copy"><strong>{{ subcategory.name }}</strong><span>{{ t('ui.subcategory') }}</span></span>
+          <span class="pricing-category-folder-copy"><strong>{{ subcategory.name }}</strong><span>{{ t('ui.subcategory') if category_depths[subcategory.id] == 1 else t('ui.subsubcategory') }}</span></span>
           <span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span>
         </button>
         {% endfor %}
       </div>
       {% else %}
-      <p class="hint">{{ t('ui.this.main.category.has.no.subcategories') }}</p>
+      <p class="hint">{{ t('ui.this.category.has.no.child.categories') }}</p>
       {% endif %}
     </section>
     {% endfor %}

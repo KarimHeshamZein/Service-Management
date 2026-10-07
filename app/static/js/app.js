@@ -633,6 +633,7 @@
   );
   if (pricingCategoryPicker) {
     var activePricingCategorySelector = null;
+    var activePricingCategoryPanel = null;
     var pricingCategoryRoot = pricingCategoryPicker.querySelector(
       "[data-pricing-category-root]"
     );
@@ -652,6 +653,7 @@
     }
 
     function showPricingCategoryRoot() {
+      activePricingCategoryPanel = null;
       if (pricingCategoryRoot) pricingCategoryRoot.hidden = false;
       if (pricingCategoryBack) pricingCategoryBack.hidden = true;
       if (pricingCategoryTitle) {
@@ -660,6 +662,19 @@
       pricingCategoryPicker.querySelectorAll("[data-pricing-category-panel]").forEach(
         function (panel) { panel.hidden = true; }
       );
+    }
+
+    function showPricingCategoryPanel(panel) {
+      if (!panel) return;
+      activePricingCategoryPanel = panel;
+      if (pricingCategoryRoot) pricingCategoryRoot.hidden = true;
+      pricingCategoryPicker.querySelectorAll("[data-pricing-category-panel]").forEach(
+        function (candidate) { candidate.hidden = candidate !== panel; }
+      );
+      if (pricingCategoryBack) pricingCategoryBack.hidden = false;
+      if (pricingCategoryTitle) {
+        pricingCategoryTitle.textContent = panel.dataset.categoryLabel || "";
+      }
     }
 
     document.querySelectorAll("[data-open-pricing-category-picker]").forEach(
@@ -683,15 +698,7 @@
       function (folder) {
         folder.addEventListener("click", function () {
           var panel = document.getElementById(folder.dataset.openPricingCategory);
-          if (!panel) return;
-          if (pricingCategoryRoot) pricingCategoryRoot.hidden = true;
-          pricingCategoryPicker.querySelectorAll("[data-pricing-category-panel]").forEach(
-            function (candidate) { candidate.hidden = candidate !== panel; }
-          );
-          if (pricingCategoryBack) pricingCategoryBack.hidden = false;
-          if (pricingCategoryTitle) {
-            pricingCategoryTitle.textContent = folder.dataset.categoryLabel;
-          }
+          showPricingCategoryPanel(panel);
         });
       }
     );
@@ -721,7 +728,18 @@
     );
 
     if (pricingCategoryBack) {
-      pricingCategoryBack.addEventListener("click", showPricingCategoryRoot);
+      pricingCategoryBack.addEventListener("click", function () {
+        if (!activePricingCategoryPanel) {
+          showPricingCategoryRoot();
+          return;
+        }
+        var parentPanelId = activePricingCategoryPanel.dataset.parentPanel;
+        if (parentPanelId) {
+          showPricingCategoryPanel(document.getElementById(parentPanelId));
+        } else {
+          showPricingCategoryRoot();
+        }
+      });
     }
     var closePricingCategory = pricingCategoryPicker.querySelector(
       "[data-close-pricing-category-picker]"
@@ -1060,6 +1078,10 @@
       var priceInput = section.querySelector("[data-pricing-main-price]");
       var currencyInput = section.querySelector("[data-pricing-main-currency]");
       var image = section.querySelector("[data-pricing-item-image]");
+      var descriptionWrap = section.querySelector(
+        "[data-pricing-item-description-wrap]"
+      );
+      var description = section.querySelector("[data-pricing-item-description]");
       if (!item) {
         if (resetPrice) {
           priceInput.value = "";
@@ -1068,6 +1090,8 @@
         image.hidden = true;
         image.removeAttribute("src");
         image.alt = "";
+        if (descriptionWrap) descriptionWrap.hidden = true;
+        if (description) description.textContent = "";
         return;
       }
       if (resetPrice || !priceInput.value) priceInput.value = item.price;
@@ -1080,6 +1104,10 @@
         image.hidden = true;
         image.removeAttribute("src");
         image.alt = "";
+      }
+      if (descriptionWrap && description) {
+        description.textContent = item.description || "";
+        descriptionWrap.hidden = !item.description;
       }
     }
 
@@ -1217,13 +1245,10 @@
       if (pricingPickerBack) pricingPickerBack.hidden = true;
       if (pricingPickerTitle) pricingPickerTitle.textContent = pricingPickerTitle.dataset.defaultTitle;
       pricingPickerParentPanel = null;
-      pricingItemPicker.querySelectorAll("[data-pricing-picker-category-panel]").forEach(function (panel) {
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-folder-panel]").forEach(function (panel) {
         panel.hidden = true;
       });
-      pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory-panel]").forEach(function (panel) {
-        panel.hidden = true;
-      });
-      pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory]").forEach(function (folder) {
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-folder]").forEach(function (folder) {
         folder.hidden = false;
       });
       pricingItemPicker.querySelectorAll("[data-pricing-picker-item]").forEach(function (choice) {
@@ -1232,29 +1257,13 @@
       if (pricingItemPickerEmpty) pricingItemPickerEmpty.hidden = true;
     }
 
-    function showPricingPickerCategory(panelId, label) {
+    function showPricingPickerFolder(panelId, label) {
       if (pricingPickerCategoryList) pricingPickerCategoryList.hidden = true;
       if (pricingPickerBack) pricingPickerBack.hidden = false;
       if (pricingPickerTitle) pricingPickerTitle.textContent = label;
-      pricingPickerParentPanel = null;
-      pricingItemPicker.querySelectorAll("[data-pricing-picker-category-panel]").forEach(function (panel) {
-        panel.hidden = panel.id !== panelId;
-      });
-      pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory-panel]").forEach(function (panel) {
-        panel.hidden = true;
-      });
-      if (pricingItemPickerEmpty) pricingItemPickerEmpty.hidden = true;
-    }
-
-    function showPricingPickerSubcategory(panelId, parentPanelId, label) {
-      if (pricingPickerCategoryList) pricingPickerCategoryList.hidden = true;
-      if (pricingPickerBack) pricingPickerBack.hidden = false;
-      if (pricingPickerTitle) pricingPickerTitle.textContent = label;
-      pricingPickerParentPanel = parentPanelId;
-      pricingItemPicker.querySelectorAll("[data-pricing-picker-category-panel]").forEach(function (panel) {
-        panel.hidden = true;
-      });
-      pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory-panel]").forEach(function (panel) {
+      var activePanel = pricingItemPicker.querySelector("#" + panelId);
+      pricingPickerParentPanel = activePanel ? activePanel.dataset.parentPanel : null;
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-folder-panel]").forEach(function (panel) {
         panel.hidden = panel.id !== panelId;
       });
       if (pricingItemPickerEmpty) pricingItemPickerEmpty.hidden = true;
@@ -1268,16 +1277,10 @@
     });
 
     if (pricingItemPicker) {
-      pricingItemPicker.querySelectorAll("[data-pricing-picker-category]").forEach(function (folder) {
+      pricingItemPicker.querySelectorAll("[data-pricing-picker-folder]").forEach(function (folder) {
         folder.addEventListener("click", function () {
-          showPricingPickerCategory(folder.dataset.pricingPickerCategory, folder.dataset.categoryLabel);
-        });
-      });
-      pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory]").forEach(function (folder) {
-        folder.addEventListener("click", function () {
-          showPricingPickerSubcategory(
-            folder.dataset.pricingPickerSubcategory,
-            folder.dataset.parentPanel,
+          showPricingPickerFolder(
+            folder.dataset.pricingPickerFolder,
             folder.dataset.categoryLabel
           );
         });
@@ -1287,7 +1290,7 @@
           if (pricingItemPickerSearch) pricingItemPickerSearch.value = "";
           if (pricingPickerParentPanel) {
             var parentPanel = pricingItemPicker.querySelector("#" + pricingPickerParentPanel);
-            showPricingPickerCategory(
+            showPricingPickerFolder(
               pricingPickerParentPanel,
               parentPanel ? parentPanel.dataset.categoryLabel : ""
             );
@@ -1324,7 +1327,7 @@
           if (pricingPickerBack) pricingPickerBack.hidden = false;
           if (pricingPickerTitle) pricingPickerTitle.textContent = pricingPickerTitle.dataset.searchTitle;
           pricingPickerParentPanel = null;
-          pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory]").forEach(function (folder) {
+          pricingItemPicker.querySelectorAll("[data-pricing-picker-folder]").forEach(function (folder) {
             folder.hidden = true;
           });
           var visibleCount = 0;
@@ -1333,12 +1336,7 @@
             choice.hidden = !matches;
             if (matches) visibleCount += 1;
           });
-          pricingItemPicker.querySelectorAll("[data-pricing-picker-category-panel]").forEach(function (category) {
-            category.hidden = !category.querySelector(
-              "[data-pricing-picker-item]:not([hidden])"
-            );
-          });
-          pricingItemPicker.querySelectorAll("[data-pricing-picker-subcategory-panel]").forEach(function (category) {
+          pricingItemPicker.querySelectorAll("[data-pricing-picker-folder-panel]").forEach(function (category) {
             category.hidden = !category.querySelector(
               "[data-pricing-picker-item]:not([hidden])"
             );
@@ -2913,7 +2911,13 @@
     var pickerSearch = picker.querySelector("[data-purchase-picker-search]");
     var countNode = picker.querySelector("[data-purchase-selected-count]");
     var emptyLabel = selectedHost.querySelector("[data-purchase-empty]") ? selectedHost.querySelector("[data-purchase-empty]").textContent : "No items selected yet.";
-    var view = { root: null, category: null };
+    var categoryById = new Map();
+    function registerCategory(folder) {
+      categoryById.set(Number(folder.id), folder);
+      (folder.children || []).forEach(registerCategory);
+    }
+    categories.forEach(registerCategory);
+    var view = { folder: null };
 
     function sync() {
       jsonInput.value = JSON.stringify(Array.from(selected.values()));
@@ -2939,6 +2943,12 @@
         var detail = document.createElement("small");
         detail.textContent = item.is_related ? form.dataset.relatedLabel + " · " + item.parent_name : item.model;
         copy.appendChild(detail);
+      }
+      if (item.description) {
+        var description = document.createElement("small");
+        description.textContent = item.description;
+        description.dir = "auto";
+        copy.appendChild(description);
       }
       holder.appendChild(copy); return holder;
     }
@@ -2990,28 +3000,31 @@
       var search = String(pickerSearch.value || "").trim().toLowerCase();
       if (search) {
         var resultGrid = document.createElement("div"); resultGrid.className = "purchase-item-grid";
-        catalogue.filter(function (item) { return (item.name + " " + item.model + " " + item.parent_name).toLowerCase().includes(search); }).forEach(function (item) { resultGrid.appendChild(itemButton(item)); });
+        catalogue.filter(function (item) { return (item.name + " " + item.model + " " + item.description + " " + item.parent_name).toLowerCase().includes(search); }).forEach(function (item) { resultGrid.appendChild(itemButton(item)); });
         pickerContent.appendChild(resultGrid); pickerBack.hidden = true; sync(); return;
       }
-      if (!view.root) {
+      if (!view.folder) {
         var roots = document.createElement("div"); roots.className = "pricing-category-folder-grid";
-        categories.forEach(function (root) { roots.appendChild(folder(root.name, false, function () { view.root = root; view.category = root.id; renderPicker(); })); });
-        if (catalogue.some(function (item) { return item.category_id === null; })) roots.appendChild(folder(form.dataset.uncategorizedLabel, false, function () { view.root = { id: null, name: form.dataset.uncategorizedLabel, children: [] }; view.category = null; renderPicker(); }));
+        categories.forEach(function (root) { roots.appendChild(folder(root.name, false, function () { view.folder = root; renderPicker(); })); });
+        if (catalogue.some(function (item) { return item.category_id === null; })) roots.appendChild(folder(form.dataset.uncategorizedLabel, false, function () { view.folder = { id: null, parent_id: null, name: form.dataset.uncategorizedLabel, children: [] }; renderPicker(); }));
         pickerContent.appendChild(roots); pickerBack.hidden = true; sync(); return;
       }
       pickerBack.hidden = false;
-      if (view.category === view.root.id && view.root.children && view.root.children.length) {
+      if (view.folder.children && view.folder.children.length) {
         var subfolders = document.createElement("div"); subfolders.className = "pricing-category-folder-grid pricing-subcategory-folder-grid";
-        view.root.children.forEach(function (child) { subfolders.appendChild(folder(child.name, true, function () { view.category = child.id; renderPicker(); })); });
+        view.folder.children.forEach(function (child) { subfolders.appendChild(folder(child.name, true, function () { view.folder = child; renderPicker(); })); });
         pickerContent.appendChild(subfolders);
       }
-      var items = catalogue.filter(function (item) { return item.category_id === view.category; });
+      var items = catalogue.filter(function (item) { return item.category_id === view.folder.id; });
       var itemGrid = document.createElement("div"); itemGrid.className = "purchase-item-grid";
       items.forEach(function (item) { itemGrid.appendChild(itemButton(item)); }); pickerContent.appendChild(itemGrid); sync();
     }
     pickerBack.addEventListener("click", function () {
-      if (view.root && view.category !== view.root.id) { view.category = view.root.id; }
-      else { view.root = null; view.category = null; }
+      if (view.folder && view.folder.parent_id !== null && view.folder.parent_id !== undefined) {
+        view.folder = categoryById.get(Number(view.folder.parent_id)) || null;
+      } else {
+        view.folder = null;
+      }
       renderPicker();
     });
     pickerSearch.addEventListener("input", renderPicker);

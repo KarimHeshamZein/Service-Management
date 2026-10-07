@@ -2009,7 +2009,15 @@ class PricingItemCategory(Base):
 
     @property
     def display_label(self) -> str:
-        return f"{self.parent.name} › {self.name}" if self.parent else self.name
+        from .pricing_categories import category_path_label
+
+        return category_path_label(self)
+
+    @property
+    def depth(self) -> int:
+        from .pricing_categories import category_depth
+
+        return category_depth(self)
 
     __table_args__ = (
         CheckConstraint(
@@ -2268,6 +2276,7 @@ class PricingItem(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
     model: Mapped[str] = mapped_column(String(120), nullable=False, default="", index=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="SAR")
     service_enabled: Mapped[bool] = mapped_column(
@@ -2335,11 +2344,35 @@ class PricingItem(Base):
     def main_category_name(self) -> str:
         if not self.category:
             return ""
-        return self.category.parent.name if self.category.parent else self.category.name
+        from .pricing_categories import category_ancestry
+
+        return category_ancestry(self.category)[0].name
 
     @property
     def subcategory_name(self) -> str:
-        return self.category.name if self.category and self.category.parent else ""
+        if not self.category:
+            return ""
+        from .pricing_categories import category_ancestry
+
+        path = category_ancestry(self.category)
+        return path[1].name if len(path) > 1 else ""
+
+    @property
+    def subsubcategory_name(self) -> str:
+        if not self.category:
+            return ""
+        from .pricing_categories import category_ancestry
+
+        path = category_ancestry(self.category)
+        return path[2].name if len(path) > 2 else ""
+
+    @property
+    def category_path(self) -> list[PricingItemCategory]:
+        if not self.category:
+            return []
+        from .pricing_categories import category_ancestry
+
+        return category_ancestry(self.category)
 
 
 class ProjectPhotoGuidanceSetting(Base):
@@ -2899,9 +2932,11 @@ class PricingQuotationLine(Base):
     )
     item_name: Mapped[str] = mapped_column(String(160), nullable=False)
     item_model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    item_description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="SAR")
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     skip_optional_items: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False

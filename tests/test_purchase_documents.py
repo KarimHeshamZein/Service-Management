@@ -33,7 +33,8 @@ def _pdf_bytes() -> bytes:
 
 def _catalogue(db):
     root = PricingItemCategory(name="Cameras")
-    sub = PricingItemCategory(name="Hikvision", parent=root)
+    brand = PricingItemCategory(name="Hikvision", parent=root)
+    sub = PricingItemCategory(name="Hikvision Cameras", parent=brand)
     camera = db.query(PricingItem).filter_by(name="IP Camera").one()
     camera.category = sub
     camera.related_items = [PricingRelatedItem(name="Camera bracket", unit_price=Decimal("20.00"), currency="SAR")]
@@ -86,9 +87,15 @@ def test_purchase_documents_use_folder_and_image_catalogue(client, db):
     root_page = client.get(f"/pricing/purchase-documents?category={root.id}")
     assert "Hikvision" in root_page.text
     assert "Network Recorder" in root_page.text
+    brand_page = client.get(
+        f"/pricing/purchase-documents?category={sub.parent_id}"
+    )
+    assert "Hikvision Cameras" in brand_page.text
+    assert f"category={root.id}" in brand_page.text
     sub_page = client.get(f"/pricing/purchase-documents?category={sub.id}")
     assert "IP Camera" in sub_page.text
     assert "Camera bracket" in sub_page.text
+    assert f"category={sub.parent_id}" in sub_page.text
     assert f"/pricing/items/{camera.id}/image?size=thumb" in sub_page.text
 
     form = client.get("/pricing/purchase-documents/new")

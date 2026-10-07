@@ -34,6 +34,12 @@ from ..models import (
     utcnow,
 )
 from ..pricing import money
+from ..pricing_categories import (
+    category_ancestry,
+    category_path_label,
+    category_root,
+    category_tree,
+)
 from ..purchase_documents import (
     MAX_PURCHASE_FILES,
     PurchaseDocumentError,
@@ -65,7 +71,11 @@ def _target(db: Session, kind: str, item_id: int) -> tuple[Any, PricingItem]:
     if kind == "main":
         item = db.scalar(
             select(PricingItem)
-            .options(selectinload(PricingItem.category).selectinload(PricingItemCategory.parent))
+            .options(
+                selectinload(PricingItem.category)
+                .selectinload(PricingItemCategory.parent)
+                .selectinload(PricingItemCategory.parent)
+            )
             .where(PricingItem.id == item_id)
         )
         if item is None:
@@ -77,6 +87,7 @@ def _target(db: Session, kind: str, item_id: int) -> tuple[Any, PricingItem]:
             .options(
                 selectinload(PricingRelatedItem.main_item)
                 .selectinload(PricingItem.category)
+                .selectinload(PricingItemCategory.parent)
                 .selectinload(PricingItemCategory.parent)
             )
             .where(PricingRelatedItem.id == item_id)
@@ -90,19 +101,21 @@ def _target(db: Session, kind: str, item_id: int) -> tuple[Any, PricingItem]:
 def _card(main: PricingItem, related: PricingRelatedItem | None = None) -> dict[str, Any]:
     target = related or main
     category = main.category
+    root = category_root(category)
     return {
         "key": f'{"related" if related else "main"}:{target.id}',
         "kind": "related" if related else "main",
         "id": target.id,
         "name": target.name,
         "model": main.model if related is None else "",
+        "description": main.description if related is None else "",
         "currency": target.currency,
         "is_related": related is not None,
         "parent_name": main.name if related else "",
         "category_id": category.id if category else None,
-        "root_category_id": (
-            category.parent_id if category and category.parent_id else category.id if category else None
-        ),
+        "root_category_id": root.id if root else None,
+        "category_path_ids": [entry.id for entry in category_ancestry(category)],
+        "category_path_label": category_path_label(category),
         "image_url": f"/pricing/items/{main.id}/image?size=thumb" if main.image_storage_key else "",
         "url": _item_url("related" if related else "main", target.id),
     }
@@ -113,8 +126,12 @@ def _catalogue(db: Session) -> tuple[list[PricingItemCategory], list[dict[str, A
         db.scalars(
             select(PricingItemCategory)
             .options(
-                selectinload(PricingItemCategory.parent),
-                selectinload(PricingItemCategory.children),
+                selectinload(PricingItemCategory.parent).selectinload(
+                    PricingItemCategory.parent
+                ),
+                selectinload(PricingItemCategory.children).selectinload(
+                    PricingItemCategory.children
+                ),
                 selectinload(PricingItemCategory.items).selectinload(PricingItem.related_items),
             )
             .order_by(PricingItemCategory.name)
@@ -125,7 +142,9 @@ def _catalogue(db: Session) -> tuple[list[PricingItemCategory], list[dict[str, A
             select(PricingItem)
             .options(
                 selectinload(PricingItem.related_items),
-                selectinload(PricingItem.category).selectinload(PricingItemCategory.parent),
+                selectinload(PricingItem.category)
+                .selectinload(PricingItemCategory.parent)
+                .selectinload(PricingItemCategory.parent),
             )
             .order_by(PricingItem.name, PricingItem.model)
         ).unique()
@@ -153,7 +172,9 @@ def _browser_context(db: Session, *, q: str = "", category: str = "") -> dict[st
             card for card in catalogue
             if term in card["name"].casefold()
             or term in card["model"].casefold()
+            or term in card["description"].casefold()
             or term in card["parent_name"].casefold()
+            or term in card["category_path_label"].casefold()
         ]
     elif category_key == "uncategorized":
         cards = [card for card in catalogue if card["category_id"] is None]
@@ -170,7 +191,8 @@ def _browser_context(db: Session, *, q: str = "", category: str = "") -> dict[st
         "uncategorized_count": sum(1 for card in catalogue if card["category_id"] is None),
         "selected_category": selected,
         "selected_category_key": category_key,
-        "subcategories": selected.children if selected and selected.parent_id is None else [],
+        "subcategories": selected.children if selected else [],
+        "selected_category_label": category_path_label(selected),
         "cards": cards,
         "q": q.strip(),
         "catalogue": catalogue,
@@ -222,17 +244,7 @@ def _form_context(
         "document_types": list(PurchaseDocumentType),
         "currencies": CURRENCIES,
         "catalogue": browser["catalogue"],
-        "category_tree": [
-            {
-                "id": root.id,
-                "name": root.name,
-                "children": [
-                    {"id": child.id, "name": child.name}
-                    for child in root.children
-                ],
-            }
-            for root in browser["root_categories"]
-        ],
+        "category_tree": category_tree(browser["categories"]),
         "selected_items_json": json.dumps(selected),
     }
 

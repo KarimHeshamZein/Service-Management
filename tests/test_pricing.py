@@ -56,6 +56,7 @@ def _create_catalogue(db):
     camera = PricingItem(
         name="Quotation Camera",
         model="Q-CAM-1",
+        description="Outdoor camera for monitored entrances.",
         unit_price=Decimal("100.00"),
     )
     camera.related_items = [
@@ -65,6 +66,10 @@ def _create_catalogue(db):
     recorder = PricingItem(
         name="Quotation Recorder",
         model="Q-NVR-1",
+        description=(
+            "Video Surveillance Base package; Warranty：3 years，"
+            "camera（IP） supported."
+        ),
         unit_price=Decimal("500.00"),
     )
     db.add_all([camera, recorder])
@@ -261,8 +266,8 @@ def test_quotation_add_item_control_opens_catalogue_picker_at_end(client, db):
     assert 'data-pricing-item-picker' in page.text
     assert 'data-pricing-item-picker-search' in page.text
     assert 'data-pricing-picker-category-list' in page.text
-    assert 'data-pricing-picker-category="quotation-picker-uncategorized"' in page.text
-    assert 'data-pricing-picker-category-panel' in page.text
+    assert 'data-pricing-picker-folder="quotation-picker-uncategorized"' in page.text
+    assert 'data-pricing-picker-folder-panel' in page.text
     assert 'data-pricing-picker-back' in page.text
     assert 'data-choose-pricing-item' in page.text
     assert f'data-item-id="{camera.id}"' in page.text
@@ -279,7 +284,8 @@ def test_quotation_add_item_control_opens_catalogue_picker_at_end(client, db):
     script = client.get("/static/js/app.js")
     assert script.status_code == 200
     assert "showPricingPickerCategories()" in script.text
-    assert "showPricingPickerCategory(folder.dataset.pricingPickerCategory" in script.text
+    assert "showPricingPickerFolder(" in script.text
+    assert "folder.dataset.pricingPickerFolder" in script.text
 
 
 def test_quotation_quantity_steppers_use_whole_units_without_changing_prices(client, db):
@@ -753,11 +759,36 @@ def test_item_and_related_item_crud_obeys_delete_rules(client, db):
             "csrf_token": token,
             "name": "Field Camera",
             "model": "FC-10",
+            "description": "Outdoor camera for perimeter monitoring.",
             "unit_price": "123.45",
         },
     )
     assert created.status_code == 303
     item = db.query(PricingItem).filter(PricingItem.name == "Field Camera").one()
+    assert item.description == "Outdoor camera for perimeter monitoring."
+
+    item_page = client.get("/pricing/items?category=uncategorized")
+    assert "Outdoor camera for perimeter monitoring." in item_page.text
+    description_search = client.get("/pricing/items?q=perimeter+monitoring")
+    assert f'data-pricing-item-row="{item.id}"' in description_search.text
+    quotation_form = client.get("/pricing/quotations/new")
+    assert "Outdoor camera for perimeter monitoring." in quotation_form.text
+
+    edited_item = client.post(
+        f"/pricing/items/{item.id}/edit",
+        data={
+            "csrf_token": token,
+            "name": item.name,
+            "model": item.model,
+            "description": "Updated reusable item description.",
+            "unit_price": str(item.unit_price),
+            "currency": item.currency,
+            "service_enabled": "1",
+        },
+    )
+    assert edited_item.status_code == 303
+    db.refresh(item)
+    assert item.description == "Updated reusable item description."
 
     related = client.post(
         "/pricing/related-items",
@@ -905,27 +936,46 @@ def test_item_categories_assign_existing_items_and_group_item_pickers(client, db
     assert db.get(PricingItemCategory, category_id) is None
 
 
-def test_main_and_subcategory_navigation_keeps_direct_items_separate(client, db):
+def test_three_level_category_navigation_and_assignment(client, db):
     camera, recorder = _create_catalogue(db)
+    access_control = PricingItem(
+        name="Hikvision Access Control",
+        model="HAC-1",
+        unit_price=Decimal("250.00"),
+    )
+    hik_camera = PricingItem(
+        name="Hikvision Camera",
+        model="HCAM-1",
+        unit_price=Decimal("350.00"),
+    )
+    db.add_all([access_control, hik_camera])
+    db.commit()
     login(client, *ADMIN)
     token = csrf_of(client, "/pricing/items")
-    client.post(
-        "/pricing/categories",
-        data={"csrf_token": token, "name": "Cameras", "parent_category_id": ""},
-    )
-    main = db.query(PricingItemCategory).filter_by(name="Cameras").one()
-    client.post(
-        "/pricing/categories",
-        data={
-            "csrf_token": token,
-            "name": "Hikvision Cameras",
-            "parent_category_id": str(main.id),
-        },
-    )
-    subcategory = db.query(PricingItemCategory).filter_by(
-        name="Hikvision Cameras"
-    ).one()
-    for item, category in ((camera, main), (recorder, subcategory)):
+
+    def create_category(name, parent=None):
+        response = client.post(
+            "/pricing/categories",
+            data={
+                "csrf_token": token,
+                "name": name,
+                "parent_category_id": str(parent.id) if parent else "",
+            },
+        )
+        assert response.status_code == 303
+        return db.query(PricingItemCategory).filter_by(name=name).one()
+
+    main = create_category("Cameras")
+    brand = create_category("Hikvision", main)
+    camera_folder = create_category("Hikvision Cameras", brand)
+    access_folder = create_category("Hikvision Access Control", brand)
+
+    for item, category in (
+        (camera, main),
+        (recorder, brand),
+        (hik_camera, camera_folder),
+        (access_control, access_folder),
+    ):
         response = client.post(
             f"/pricing/items/{item.id}/edit",
             data={
@@ -942,46 +992,52 @@ def test_main_and_subcategory_navigation_keeps_direct_items_separate(client, db)
 
     main_page = client.get(f"/pricing/items?category={main.id}")
     assert main_page.status_code == 200
-    assert "data-subcategory-overview" in main_page.text
-    assert "data-pricing-category-assignment-picker" in main_page.text
-    assert (
-        f'data-open-pricing-category="pricing-category-choice-{main.id}"'
-        in main_page.text
-    )
-    assert (
-        f'data-select-pricing-category data-category-id="{subcategory.id}"'
-        in main_page.text
-    )
-    assert f'id="pict{camera.id}" name="category_id" value="{main.id}"' in main_page.text
-    assert '<select id="pi-category" name="category_id">' not in main_page.text
-    assert "data-pricing-category-back" in main_page.text
-    assert f'href="/pricing/items?category={subcategory.id}"' in main_page.text
+    assert 'class="content content-wide"' in main_page.text
+    assert f'href="/pricing/items?category={brand.id}"' in main_page.text
     assert f'data-pricing-item-row="{camera.id}"' in main_page.text
     assert f'data-pricing-item-row="{recorder.id}"' not in main_page.text
 
-    subcategory_page = client.get(f"/pricing/items?category={subcategory.id}")
-    assert subcategory_page.status_code == 200
-    assert f'href="/pricing/items?category={main.id}"' in subcategory_page.text
-    assert f'data-pricing-item-row="{recorder.id}"' in subcategory_page.text
-    assert f'data-pricing-item-row="{camera.id}"' not in subcategory_page.text
+    brand_page = client.get(f"/pricing/items?category={brand.id}")
+    assert brand_page.status_code == 200
+    assert f'href="/pricing/items?category={main.id}"' in brand_page.text
+    assert f'href="/pricing/items?category={camera_folder.id}"' in brand_page.text
+    assert f'href="/pricing/items?category={access_folder.id}"' in brand_page.text
+    assert f'data-pricing-item-row="{recorder.id}"' in brand_page.text
+    assert f'data-pricing-item-row="{camera.id}"' not in brand_page.text
 
-    nested = client.post(
+    access_page = client.get(f"/pricing/items?category={access_folder.id}")
+    assert access_page.status_code == 200
+    assert f'href="/pricing/items?category={brand.id}"' in access_page.text
+    assert f'data-pricing-item-row="{access_control.id}"' in access_page.text
+    assert "Cameras / Hikvision / Hikvision Access Control" in access_page.text
+
+    assignment_picker = main_page.text
+    assert "data-pricing-category-assignment-picker" in assignment_picker
+    assert f'data-open-pricing-category="pricing-category-choice-{main.id}"' in assignment_picker
+    assert f'data-open-pricing-category="pricing-category-choice-{brand.id}"' in assignment_picker
+    assert f'data-open-pricing-category="pricing-category-choice-{access_folder.id}"' in assignment_picker
+    assert f'data-category-id="{access_folder.id}"' in assignment_picker
+    assert "data-pricing-category-back" in assignment_picker
+
+    fourth_level = client.post(
         "/pricing/categories",
         data={
             "csrf_token": token,
-            "name": "Nested folders are not allowed",
-            "parent_category_id": str(subcategory.id),
+            "name": "Fourth level is rejected",
+            "parent_category_id": str(access_folder.id),
         },
     )
-    assert nested.status_code == 303
-    assert db.query(PricingItemCategory).count() == 2
+    assert fourth_level.status_code == 303
+    assert db.query(PricingItemCategory).filter_by(name="Fourth level is rejected").count() == 0
 
     quotation = client.get("/pricing/quotations/new")
     assert quotation.status_code == 200
-    assert f'data-pricing-picker-category="quotation-picker-category-{main.id}"' in quotation.text
-    assert f'data-pricing-picker-subcategory="quotation-picker-subcategory-{subcategory.id}"' in quotation.text
+    for category in (main, brand, camera_folder, access_folder):
+        assert f'data-pricing-picker-folder="quotation-picker-category-{category.id}"' in quotation.text
     assert f'data-item-id="{camera.id}"' in quotation.text
     assert f'data-item-id="{recorder.id}"' in quotation.text
+    assert f'data-item-id="{hik_camera.id}"' in quotation.text
+    assert f'data-item-id="{access_control.id}"' in quotation.text
 
 
 def test_main_item_image_is_validated_protected_and_removed(client, db):
@@ -1514,6 +1570,49 @@ def test_quotation_rejects_missing_required_charge(client, db):
     assert db.query(PricingQuotation).count() == 0
 
 
+def test_quotation_ignores_removed_legacy_item_note_input(client, db):
+    camera, _recorder = _create_catalogue(db)
+    login(client, *ADMIN)
+    legacy_item_note = "This field no longer belongs to quotation creation."
+    original_description = camera.description
+
+    response = _submit_quote(client, camera, line_0_notes=legacy_item_note)
+
+    assert response.status_code == 303
+    quotation = db.query(PricingQuotation).one()
+    assert quotation.lines[0].notes == ""
+    assert quotation.lines[0].item_description == original_description
+    camera.description = "A later catalog edit must not rewrite saved quotations."
+    db.commit()
+    db.expire_all()
+    detail = client.get(f"/pricing/quotations/{quotation.id}")
+    assert legacy_item_note not in detail.text
+    assert original_description in detail.text
+    assert "A later catalog edit must not rewrite saved quotations." not in detail.text
+
+
+def test_quotation_pdf_splits_a_long_catalog_description_across_pages(client, db):
+    camera, _recorder = _create_catalogue(db)
+    login(client, *ADMIN)
+    camera.description = (
+        "Long catalog item description for layout validation. " * 45
+    )[:2000]
+    db.commit()
+
+    response = _submit_quote(client, camera)
+
+    assert response.status_code == 303
+    quotation = db.query(PricingQuotation).one()
+    pdf = client.get(f"/pricing/quotations/{quotation.id}/pdf")
+    assert pdf.status_code == 200
+    reader = PdfReader(io.BytesIO(pdf.content))
+    assert len(reader.pages) >= 2
+    text = " ".join(
+        "\n".join(page.extract_text() or "" for page in reader.pages).split()
+    )
+    assert text.count("Long catalog item description for layout validation.") >= 35
+
+
 def test_quotation_search_edit_pdf_and_admin_delete(client, db):
     camera, recorder = _create_catalogue(db)
     login(client, *ADMIN)
@@ -1552,7 +1651,14 @@ def test_quotation_search_edit_pdf_and_admin_delete(client, db):
     assert edited.status_code == 303
     db.refresh(quotation)
     assert quotation.lines[0].item_name == "Quotation Recorder"
+    assert quotation.lines[0].item_description == recorder.description
     assert quotation.notes == "Updated quotation."
+
+    detail = client.get(f"/pricing/quotations/{quotation.id}")
+    assert recorder.description in detail.text
+    edit_page = client.get(f"/pricing/quotations/{quotation.id}/edit")
+    assert 'name="line_0_notes"' not in edit_page.text
+    assert recorder.description in edit_page.text
 
     pdf = client.get(f"/pricing/quotations/{quotation.id}/pdf")
     assert pdf.status_code == 200
@@ -1560,8 +1666,13 @@ def test_quotation_search_edit_pdf_and_admin_delete(client, db):
     assert pdf.content.startswith(b"%PDF")
     reader = PdfReader(io.BytesIO(pdf.content))
     text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    normalized_text = " ".join(text.split())
     assert quotation.quotation_number in text
     assert "Quotation Recorder" in text
+    assert "Description" in text
+    assert "Video Surveillance Base package; Warranty:3 years," in normalized_text
+    assert "camera(IP) supported." in normalized_text
+    assert "■" not in text
     assert "500.00 SAR" in text
     assert "Grand total" not in text
     assert "Page 1" in text

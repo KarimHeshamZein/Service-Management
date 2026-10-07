@@ -178,7 +178,7 @@
       {% endif %}
     </header>
 
-    <main class="content">
+    <main class="content {{ page_content_class|default('') }}">
       {% for flash in flashes %}
       <div class="alert {{ flash.level }}" role="status">{{ flash.message }}</div>
       {% endfor %}

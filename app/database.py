@@ -114,11 +114,22 @@ def _scope_department_queries(execute_state) -> None:
             category_table.c.id.in_(directly_granted_category_ids),
             category_table.c.parent_id.is_not(None),
         )
-        granted_subcategory_ids = select(category_table.c.id).where(
+        direct_grandparent_category_ids = select(category_table.c.parent_id).where(
+            category_table.c.id.in_(direct_parent_category_ids),
+            category_table.c.parent_id.is_not(None),
+        )
+        granted_child_category_ids = select(category_table.c.id).where(
             category_table.c.parent_id.in_(granted_category_ids)
         )
+        granted_grandchild_category_ids = select(category_table.c.id).where(
+            category_table.c.parent_id.in_(granted_child_category_ids)
+        )
+        granted_tree_category_ids = granted_category_ids.union(
+            granted_child_category_ids,
+            granted_grandchild_category_ids,
+        )
         items_in_granted_categories = select(item_table.c.id).where(
-            item_table.c.category_id.in_(granted_category_ids.union(granted_subcategory_ids))
+            item_table.c.category_id.in_(granted_tree_category_ids)
         )
         if pricing_scope == "department":
             category_visible = PricingItemCategory.id.is_not(None)
@@ -128,12 +139,12 @@ def _scope_department_queries(execute_state) -> None:
             visible_related_ids = select(related_table.c.id)
         elif pricing_scope == "selected":
             category_visible = or_(
-                PricingItemCategory.id.in_(granted_category_ids),
-                PricingItemCategory.parent_id.in_(granted_category_ids),
+                PricingItemCategory.id.in_(granted_tree_category_ids),
                 # Keep the folder path visible for an individually granted
                 # Item, without exposing the folder's other Items.
                 PricingItemCategory.id.in_(directly_granted_category_ids),
                 PricingItemCategory.id.in_(direct_parent_category_ids),
+                PricingItemCategory.id.in_(direct_grandparent_category_ids),
             )
             visible_item_ids = granted_item_ids.union(items_in_granted_categories)
             item_visible = or_(

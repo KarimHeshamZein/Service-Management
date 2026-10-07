@@ -5,7 +5,15 @@
 # - Preserve product names, file formats, protocols, and technical acronyms literally.
 # - Never drop a {placeholder}: it carries real data into the message, and removing
 #   it silently destroys that data. test_i18n enforces placeholder parity with en.py.
-MESSAGES = {'logs.report.title': 'تقرير السجلات',
+MESSAGES = {
+ 'ui.subsubcategory': 'كاتجوري فرعية من المستوى الثالث',
+ 'ui.subsubcategory.under': 'كاتجوري مستوى ثالث داخل',
+ 'ui.child.categories': 'كاتجوريز فرعية',
+ 'ui.choose.a.child.category.or.manage.direct.items.below': 'افتح كاتجوري فرعية، أو أدر الأصناف الموجودة مباشرة داخل هذا الفولدر بالأسفل.',
+ 'ui.open.a.child.category.or.select.this.folder': 'افتح كاتجوري فرعية، أو اختر هذا الفولدر مباشرة.',
+ 'ui.this.category.has.no.child.categories': 'لا توجد كاتجوريز فرعية داخل هذا الفولدر. يمكنك اختياره مباشرة.',
+ 'ui.select.this.category': 'اختر هذه الكاتجوري',
+ 'logs.report.title': 'تقرير السجلات',
  'logs.report.help': 'ابحث عن نشاط المستخدمين وأحداث النظام وأعمال الفنيين من مكان واحد.',
  'logs.report.activity': 'نشاط المستخدمين والنظام',
  'logs.report.technician': 'نشاط الفنيين',
@@ -1575,6 +1583,7 @@ MESSAGES = {'logs.report.title': 'تقرير السجلات',
  'ui.no.authorized.records.for.report': '\u0644\u0627 \u062a\u0648\u062c\u062f \u0633\u062c\u0644\u0627\u062a \u0645\u0635\u0631\u062d \u0628\u0647\u0627 \u0644\u0647\u0630\u0627 \u0627\u0644\u062a\u0642\u0631\u064a\u0631.',
  'ui.no.saved.reports': '\u0644\u0627 \u062a\u0648\u062c\u062f \u062a\u0642\u0627\u0631\u064a\u0631 \u0645\u062d\u0641\u0648\u0638\u0629 \u0628\u0639\u062f',
  'ui.notes.optional': '\u0645\u0644\u0627\u062d\u0638\u0627\u062a (\u0627\u062e\u062a\u064a\u0627\u0631\u064a)',
+ 'ui.item.note.optional': '\u0645\u0644\u0627\u062d\u0638\u0629 \u0627\u0644\u0635\u0646\u0641 (\u0627\u062e\u062a\u064a\u0627\u0631\u064a)',
  'ui.pdf.preview.and.download': '\u0645\u0639\u0627\u064a\u0646\u0629 PDF \u0648\u062a\u0646\u0632\u064a\u0644\u0647',
  'ui.report.design.preview.part.1': '\u0645\u0639\u0627\u064a\u0646\u0629 \u062a\u0635\u0645\u064a\u0645 PDF \u0627\u0644\u062c\u062f\u064a\u062f - \u0627\u0644\u062c\u0632\u0621 \u0627\u0644\u0623\u0648\u0644',
  'ui.report.design.preview.part.1.help': '\u0631\u0627\u062c\u0639 \u0627\u0644\u063a\u0644\u0627\u0641 \u0648\u0627\u0644\u0645\u0644\u062e\u0635 \u0627\u0644\u062a\u0646\u0641\u064a\u0630\u064a \u0627\u0644\u062a\u062c\u0631\u064a\u0628\u064a\u064a\u0646 \u0641\u064a PDF. \u0627\u0644\u062a\u0642\u0631\u064a\u0631 \u0627\u0644\u0631\u0633\u0645\u064a \u0627\u0644\u062d\u0627\u0644\u064a \u0644\u0645 \u064a\u062a\u063a\u064a\u0631.',
