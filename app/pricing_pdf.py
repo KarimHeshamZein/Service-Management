@@ -8,7 +8,7 @@ from typing import Any
 
 from PIL import Image as PilImage
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_RIGHT
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
@@ -85,6 +85,14 @@ def _styles() -> dict[str, ParagraphStyle]:
             leading=11.5,
             textColor=NAVY,
         ),
+        "item_description": ParagraphStyle(
+            "QuotationItemDescription",
+            parent=sample["BodyText"],
+            fontName="Helvetica",
+            fontSize=7,
+            leading=9,
+            textColor=NAVY,
+        ),
         "small": ParagraphStyle(
             "QuotationSmall",
             parent=sample["BodyText"],
@@ -93,11 +101,30 @@ def _styles() -> dict[str, ParagraphStyle]:
             leading=10,
             textColor=SLATE,
         ),
+        "center": ParagraphStyle(
+            "QuotationCenter",
+            parent=sample["BodyText"],
+            fontName="Helvetica",
+            fontSize=8.5,
+            leading=11.5,
+            alignment=TA_CENTER,
+            textColor=NAVY,
+        ),
+        "center_small": ParagraphStyle(
+            "QuotationCenterSmall",
+            parent=sample["BodyText"],
+            fontName="Helvetica",
+            fontSize=7.5,
+            leading=10,
+            alignment=TA_CENTER,
+            textColor=SLATE,
+        ),
         "table_header": ParagraphStyle(
             "QuotationTableHeader",
             parent=sample["BodyText"],
             fontName="Helvetica-Bold",
             fontSize=7.5,
+            alignment=TA_CENTER,
             leading=9.5,
             textColor=WHITE,
         ),
@@ -149,14 +176,14 @@ def _page_footer(canvas, document) -> None:
 
 def _item_image(line, styles: dict[str, ParagraphStyle]):
     if not line.image_storage_key:
-        return _paragraph("-", styles["small"])
+        return _paragraph("-", styles["center_small"])
     try:
         key = line.image_thumbnail_key or line.image_storage_key
         path = resolve_storage_path(key)
         with PilImage.open(path) as probe:
             width, height = probe.size
     except (UploadError, OSError, ValueError):
-        return _paragraph("-", styles["small"])
+        return _paragraph("-", styles["center_small"])
     max_width = 22 * mm
     max_height = 18 * mm
     scale = min(max_width / width, max_height / height)
@@ -326,6 +353,7 @@ def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
             _paragraph("#", styles["table_header"]),
             _paragraph("Image", styles["table_header"]),
             _paragraph("Item", styles["table_header"]),
+            _paragraph("Description", styles["table_header"]),
             _paragraph("Qty", styles["table_header"]),
             _paragraph("Unit price", styles["table_header"]),
             _paragraph("Total", styles["table_header"]),
@@ -343,12 +371,13 @@ def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
             )
         rows.append(
             [
-                _paragraph(position, styles["small"]),
+                _paragraph(position, styles["center_small"]),
                 _item_image(line, styles),
-                _paragraph(item_description, styles["body"]),
-                _paragraph(line.quantity, styles["right"]),
-                _paragraph(_amount(line.unit_price, line.currency), styles["right"]),
-                _paragraph(_amount(line.main_total, line.currency), styles["right"]),
+                _paragraph(item_description, styles["center"]),
+                _paragraph(line.item_description, styles["item_description"]),
+                _paragraph(line.quantity, styles["center"]),
+                _paragraph(_amount(line.unit_price, line.currency), styles["center"]),
+                _paragraph(_amount(line.main_total, line.currency), styles["center"]),
             ]
         )
         row_index += 1
@@ -357,13 +386,14 @@ def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
                 [
                     "",
                     "",
-                    _paragraph(f"- {related.item_name}", styles["small"]),
-                    _paragraph(related.quantity, styles["right"]),
+                    _paragraph(f"- {related.item_name}", styles["center_small"]),
+                    "",
+                    _paragraph(related.quantity, styles["center"]),
                     _paragraph(
                         _amount(related.unit_price, related.currency),
-                        styles["right"],
+                        styles["center"],
                     ),
-                    _paragraph(_amount(related.total, related.currency), styles["right"]),
+                    _paragraph(_amount(related.total, related.currency), styles["center"]),
                 ]
             )
             row_index += 1
@@ -372,7 +402,11 @@ def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
                 [
                     "",
                     "",
-                    _paragraph("- Optional items intentionally skipped", styles["small"]),
+                    _paragraph(
+                        "- Optional items intentionally skipped",
+                        styles["center_small"],
+                    ),
+                    "",
                     "",
                     "",
                     "",
@@ -382,40 +416,41 @@ def build_quotation_pdf(quotation: PricingQuotation) -> bytes:
     for charge in quotation.charges:
         rows.append(
             [
-                _paragraph(f"C{charge.position}", styles["small"]),
+                _paragraph(f"C{charge.position}", styles["center_small"]),
                 "",
                 _paragraph(
                     f"{charge.label}\nRequired charge - per {charge.unit_label}",
-                    styles["body"],
+                    styles["center"],
                 ),
-                _paragraph(charge.quantity, styles["right"]),
+                "",
+                _paragraph(charge.quantity, styles["center"]),
                 _paragraph(
                     _amount(charge.unit_price, charge.currency),
-                    styles["right"],
+                    styles["center"],
                 ),
-                _paragraph(_amount(charge.total, charge.currency), styles["right"]),
+                _paragraph(_amount(charge.total, charge.currency), styles["center"]),
             ]
         )
 
     item_table = Table(
         rows,
-        colWidths=[8 * mm, 25 * mm, 50 * mm, 17 * mm, 32 * mm, 38 * mm],
+        colWidths=[7 * mm, 23 * mm, 34 * mm, 40 * mm, 13 * mm, 25 * mm, 28 * mm],
         repeatRows=1,
+        splitInRow=1,
     )
-    item_table.setStyle(
-        TableStyle(
-            [
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
-                ("BACKGROUND", (0, 0), (-1, 0), NAVY),
-                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, LIGHT]),
-                ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ]
-        )
-    )
+    table_commands = [
+        ("VALIGN", (0, 0), (-1, 0), "MIDDLE"),
+        ("VALIGN", (0, 1), (-1, -1), "MIDDLE"),
+        ("VALIGN", (3, 1), (3, -1), "TOP"),
+        ("GRID", (0, 0), (-1, -1), 0.4, BORDER),
+        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [WHITE, LIGHT]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]
+    item_table.setStyle(TableStyle(table_commands))
     story.append(item_table)
 
     if quotation.notes:

@@ -33,13 +33,114 @@ def _tokens(client) -> tuple[str, str]:
     return csrf, form_token
 
 
+def test_edit_flow_can_append_a_complete_site_service_to_same_maintenance_record(client, db):
+    login(client, *LEADER_A)
+    csrf, form_token = _tokens(client)
+    first = client.post(
+        "/general-maintenance/submit",
+        data={
+            "csrf_token": csrf,
+            "form_token": form_token,
+            "project_id": "1",
+            "work_site_id": "1",
+            "service_type_id": "1",
+            "result_0": "completed_successfully",
+            "notes": "Original maintenance work",
+        },
+        files=[("photos_0", ("first.jpg", make_image(), "image/jpeg"))],
+    )
+    record = db.query(GeneralMaintenanceRecord).one()
+    page = client.get(f"/general-maintenance/records/{record.id}/edit")
+    assert "data-add-to-existing-site" in page.text
+    assert f"/general-maintenance/submit?append_to={record.id}" not in page.text
+    csrf = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    form_token = re.search(r'name="form_token" value="([^"]+)"', page.text).group(1)
+    item_id = record.work_items[0].id
+    response = client.post(
+        f"/general-maintenance/records/{record.id}/edit",
+        data={
+            "csrf_token": csrf,
+            "form_token": form_token,
+            "append_record_id": str(record.id),
+            "existing_item_id": str(item_id),
+            f"existing_result_{item_id}": "completed_successfully",
+            f"existing_notes_{item_id}": record.work_items[0].notes,
+            "append_scope_position": "0",
+            "project_id": "1",
+            "work_site_id": "1",
+            "item_scope_index": "0",
+            "service_type_id": "1",
+            "result_0": "completed_successfully",
+            "notes": "Added maintenance work",
+        },
+        files=[("photos_0", ("second.jpg", make_image(), "image/jpeg"))],
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == first.headers["location"]
+    db.expire_all()
+    record = db.get(GeneralMaintenanceRecord, record.id)
+    assert db.query(GeneralMaintenanceRecord).count() == 1
+    assert [item.notes for item in record.work_items] == [
+        "Original maintenance work",
+        "Added maintenance work",
+    ]
+    assert [item.scope_position for item in record.work_items] == [0, 0]
+    assert db.query(RecordRevision).filter_by(
+        record_type="maintenance", action="items_added"
+    ).count() == 1
+    detail = client.get(f"/general-maintenance/records/{record.id}")
+    assert detail.status_code == 200
+    assert "Change history" not in detail.text
+
+
+def test_edit_new_maintenance_site_without_service_returns_actionable_error(client, db):
+    login(client, *LEADER_A)
+    csrf, form_token = _tokens(client)
+    assert client.post(
+        "/general-maintenance/submit",
+        data={
+            "csrf_token": csrf, "form_token": form_token, "project_id": "1",
+            "work_site_id": "1", "service_type_id": "1",
+            "result_0": "completed_successfully",
+        },
+        files=[("photos_0", ("first.jpg", make_image(), "image/jpeg"))],
+    ).status_code == 303
+    record = db.query(GeneralMaintenanceRecord).one()
+    original_item = record.work_items[0]
+    page = client.get(f"/general-maintenance/records/{record.id}/edit")
+
+    response = client.post(
+        f"/general-maintenance/records/{record.id}/edit",
+        data={
+            "csrf_token": re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1),
+            "form_token": re.search(r'name="form_token" value="([^"]+)"', page.text).group(1),
+            "append_record_id": str(record.id),
+            "existing_item_id": str(original_item.id),
+            f"existing_result_{original_item.id}": original_item.result.value,
+            f"existing_notes_{original_item.id}": original_item.notes,
+            "append_scope_position": "", "project_id": "1", "work_site_id": "2",
+            "item_scope_index": "0", "service_type_id": "",
+            "result_0": "completed_successfully",
+        },
+        files=[("photos_0", ("unsaved.jpg", make_image(), "image/jpeg"))],
+        headers={"X-Requested-With": "XMLHttpRequest"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["errors"]["service_type_id_0"] == "Select the service performed."
+    assert "No changes were made" not in response.text
+    db.expire_all()
+    assert len(db.get(GeneralMaintenanceRecord, record.id).work_items) == 1
+
+
 def test_maintenance_module_is_separate_and_uses_the_grouped_layout(client):
     assert client.get("/general-maintenance").status_code == 303
     login(client, *LEADER_A)
     page = client.get("/general-maintenance")
     assert page.status_code == 200
     assert 'action="/general-maintenance/submit"' in page.text
-    assert "Add another device" in page.text
+    assert "Add another service" in page.text
     assert "Maintenance result" in page.text
     assert 'href="/maintenance"' in page.text
     assert 'href="/general-maintenance"' in page.text
@@ -63,6 +164,9 @@ def test_normal_maintenance_stores_before_and_after_photos(client, db):
             "installed_device_id": "1",
             "result_0": "completed_successfully",
             "notes": "Completed normal maintenance.",
+            "before_photo_descriptions_0": "General site view",
+            "after_photo_descriptions_0": "Loose solar panel connection",
+            "after_photo_issue_found_0_0": "1",
         },
         files=[
             ("before_photos_0", ("before.jpg", make_image((80, 20, 20)), "image/jpeg")),
@@ -75,6 +179,8 @@ def test_normal_maintenance_stores_before_and_after_photos(client, db):
         EvidencePhotoStage.BEFORE,
         EvidencePhotoStage.AFTER,
     ]
+    assert [photo.is_issue_found for photo in record.work_items[0].photos] == [False, True]
+    assert record.work_items[0].photos[1].description == "Loose solar panel connection"
     assert record.quotation_id is None
     assert record.quotation_number is None
     assert record.work_items[0].quotation_id is None
@@ -129,7 +235,7 @@ def test_normal_maintenance_allows_blank_notes(client, db):
     assert db.query(GeneralMaintenanceRecord).one().notes == ""
 
 
-def test_normal_maintenance_lists_and_accepts_uninstalled_catalog_item(client, db):
+def test_normal_maintenance_has_no_item_selector_and_ignores_forged_item(client, db):
     device = DeviceCatalog(name="Generator", model="GEN-20")
     item = PricingItem(
         name="Generator",
@@ -145,8 +251,8 @@ def test_normal_maintenance_lists_and_accepts_uninstalled_catalog_item(client, d
     login(client, *LEADER_A)
     page = client.get("/general-maintenance")
     assert page.status_code == 200
-    assert f'value="catalog:{item.id}"' in page.text
-    assert "Generator" in page.text
+    assert 'name="installed_device_id"' not in page.text
+    assert f'value="catalog:{item.id}"' not in page.text
     assert "BASE-SN-001" not in page.text
     assert "Installed items" not in page.text
     csrf, form_token = _tokens(client)
@@ -166,25 +272,11 @@ def test_normal_maintenance_lists_and_accepts_uninstalled_catalog_item(client, d
     )
     assert response.status_code == 303
     record = db.query(GeneralMaintenanceRecord).one()
-    assert record.work_items[0].device_name == "Generator"
+    assert record.work_items[0].device_name == "Camera Service"
     assert record.work_items[0].installed_device_id is None
 
 
-def test_one_maintenance_record_contains_independent_device_evidence(client, db):
-    second = InstalledDevice(
-        site_id=1,
-        device_id=1,
-        customer_name="Tower A",
-        site_name="Gate 1",
-        device_name="IP Camera",
-        manufacturer="Axis",
-        device_model="P3265-LV",
-        serial_number="NORMAL-MAINT-SN-002",
-    )
-    second.work_site_evidence = InstalledDeviceSite(site_id=1, site_name="Gate 1")
-    db.add(second)
-    db.commit()
-
+def test_one_maintenance_record_contains_independent_services(client, db):
     login(client, *LEADER_A)
     csrf, form_token = _tokens(client)
     response = client.post(
@@ -195,7 +287,7 @@ def test_one_maintenance_record_contains_independent_device_evidence(client, db)
             "project_id": "1",
             "work_site_id": "1",
             "service_type_id": ["1", "1"],
-            "installed_device_id": ["1", str(second.id)],
+            "item_scope_index": ["0", "0"],
             "result_0": "completed_successfully",
             "result_1": "further_action_required",
             "notes": ["Repaired camera one.", "Repaired camera two."],
@@ -237,7 +329,7 @@ def test_one_maintenance_record_contains_independent_device_evidence(client, db)
     assert record.record_number in client.get(
         "/records?type=general_maintenance"
     ).text
-    assert record.record_number in client.get("/records?q=NORMAL-MAINT-SN-002").text
+    assert all(item.installed_device_id is None for item in record.work_items)
 
     photo_id = record.work_items[1].photos[0].id
     assert client.get(f"/media/general-maintenance-photo/{photo_id}").status_code == 200
@@ -251,7 +343,7 @@ def test_one_maintenance_record_contains_independent_device_evidence(client, db)
     assert client.get(f"/media/general-maintenance-photo/{photo_id}").status_code == 200
 
 
-def test_each_maintenance_item_requires_its_own_result_notes_and_photo(client, db):
+def test_each_maintenance_item_requires_its_own_result_and_photo(client, db):
     login(client, *LEADER_A)
     csrf, form_token = _tokens(client)
     response = client.post(
@@ -270,11 +362,36 @@ def test_each_maintenance_item_requires_its_own_result_notes_and_photo(client, d
     )
     assert response.status_code == 422
     assert "Select the maintenance result" in response.text
-    assert "Describe the maintenance" in response.text
     assert "Attach at least one proof photo" in response.text
 
 
-def test_normal_maintenance_requires_issue_detail_for_unable_result(client, db):
+def test_maintenance_entry_does_not_show_workflow_notes_field(client, db):
+    login(client, *LEADER_A)
+    entry = client.get("/general-maintenance")
+    assert entry.status_code == 200
+    assert '<textarea name="notes"' not in entry.text
+
+    csrf, form_token = _tokens(client)
+    created = client.post(
+        "/general-maintenance/submit",
+        data={
+            "csrf_token": csrf,
+            "form_token": form_token,
+            "project_id": "1",
+            "work_site_id": "1",
+            "service_type_id": "1",
+            "result_0": "completed_successfully",
+        },
+        files=[("photos_0", ("proof.jpg", make_image(), "image/jpeg"))],
+    )
+    assert created.status_code == 303
+    record = db.query(GeneralMaintenanceRecord).one()
+    edit = client.get(f"/general-maintenance/records/{record.id}/edit")
+    assert f'name="existing_notes_{record.work_items[0].id}"' in edit.text
+    assert f'<textarea name="existing_notes_{record.work_items[0].id}"' not in edit.text
+
+
+def test_normal_maintenance_allows_blank_issue_detail_for_unable_result(client, db):
     login(client, *LEADER_A)
     csrf, form_token = _tokens(client)
     response = client.post(
@@ -292,10 +409,9 @@ def test_normal_maintenance_requires_issue_detail_for_unable_result(client, db):
         },
         files=[("photos_0", ("normal.jpg", make_image(), "image/jpeg"))],
     )
-    assert response.status_code == 422
-    assert 'data-error-for="issue_description_0"' in response.text
-    assert "Describe the issue or observation for this result." in response.text
-    assert db.query(GeneralMaintenanceRecord).count() == 0
+    assert response.status_code == 303
+    record = db.query(GeneralMaintenanceRecord).one()
+    assert not record.work_items[0].issue_description
 
 
 def test_normal_maintenance_can_be_edited_and_deleted_by_the_right_roles(client, db):
@@ -327,6 +443,7 @@ def test_normal_maintenance_can_be_edited_and_deleted_by_the_right_roles(client,
             "recommendations_0": "Check alignment next month.",
             "participant_ids": ["3"],
             "add_after_photo_descriptions_0": "Alignment after correction.",
+            "add_after_photo_issue_found_0_0": "1",
         },
         files=[
             ("add_after_photos_0", ("after-edit.jpg", make_image(), "image/jpeg"))
@@ -340,6 +457,7 @@ def test_normal_maintenance_can_be_edited_and_deleted_by_the_right_roles(client,
     assert any(
         photo.description == "Alignment after correction."
         and photo.stage == EvidencePhotoStage.AFTER
+        and photo.is_issue_found
         for photo in db.get(GeneralMaintenanceRecord, record.id).work_items[0].photos
     )
     assert db.query(RecordRevision).one().record_type == "maintenance"

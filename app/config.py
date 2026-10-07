@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -9,6 +10,13 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _static_asset_version() -> str:
+    digest = hashlib.sha256()
+    for relative_path in ("app/static/css/app.css", "app/static/js/app.js"):
+        digest.update((BASE_DIR / relative_path).read_bytes())
+    return digest.hexdigest()[:12]
 
 
 def _load_environment() -> Path:
@@ -48,6 +56,7 @@ class Settings:
 
     def __init__(self) -> None:
         self.app_name: str = os.getenv("APP_NAME", "Service Management System")
+        self.static_asset_version: str = _static_asset_version()
         self.environment: str = os.getenv("ENVIRONMENT", "development")
         self.app_host: str = os.getenv("APP_HOST", "0.0.0.0")
         self.app_port: int = int(os.getenv("APP_PORT", "8993"))

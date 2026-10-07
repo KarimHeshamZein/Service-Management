@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..deps import get_current_user
+from ..access_control import require_permission
 from ..helpers import render
 from ..models import User
 from ..record_views import load_record_page, normalize_record_filters
@@ -20,6 +21,8 @@ def all_records(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if not user.is_customer:
+        require_permission(request, db, user, "records.view")
     filters = normalize_record_filters(
         request.query_params.get("q") or "",
         request.query_params.get("type") or "",

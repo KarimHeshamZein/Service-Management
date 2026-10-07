@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ department.name }} · {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ department.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><span class="eyebrow">{{ 'مساحة عمل القسم' if lang == 'ar' else 'Department workspace' }}</span><h1>{{ department.name }}</h1><p class="lede">{{ department.code }} · {{ department.memberships|length }} {{ 'مستخدم' if lang == 'ar' else 'members' }}</p></div>
+  <a class="btn btn-secondary" href="/departments">{{ 'كل الأقسام' if lang == 'ar' else 'All Departments' }}</a>
+</div>
+
+<div class="exclusive-accordion" data-exclusive-accordion>
+  <details class="settings-card" open>
+    <summary><span><strong>{{ 'بيانات القسم' if lang == 'ar' else 'Department details' }}</strong><small>{{ 'الاسم والكود وحالة مساحة العمل' if lang == 'ar' else 'Name, code and workspace status' }}</small></span><span class="disclosure-chevron"></span></summary>
+    <form method="post" action="/departments/{{ department.id }}/details" class="settings-card-body">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="grid cols-2"><div class="field"><label>{{ 'الاسم' if lang == 'ar' else 'Name' }} <span class="req">*</span></label><input name="name" value="{{ department.name }}" required></div><div class="field"><label>{{ 'الكود' if lang == 'ar' else 'Code' }} <span class="req">*</span></label><input name="code" value="{{ department.code }}" required></div><div class="field"><label>{{ 'الوصف' if lang == 'ar' else 'Description' }}</label><textarea name="description" rows="3">{{ department.description or '' }}</textarea></div>{% if not department.is_general %}<div class="field"><label class="choice-card"><input type="checkbox" name="is_active" value="1" {{ 'checked' if department.is_active }}><span><strong>{{ 'قسم نشط' if lang == 'ar' else 'Active Department' }}</strong><small>{{ 'يمكن للمستخدمين الدخول إلى مساحة العمل.' if lang == 'ar' else 'Members can enter this workspace.' }}</small></span></label></div>{% endif %}</div>
+      <div class="form-actions"><button class="btn btn-primary" type="submit">{{ t('ui.save.changes') }}</button></div>
+    </form>
+  </details>
+
+  <details class="settings-card">
+    <summary><span><strong>{{ 'الأعضاء' if lang == 'ar' else 'Members' }}</strong><small>{{ 'المستخدم يمكن أن ينتمي لأكثر من قسم.' if lang == 'ar' else 'A user may belong to more than one Department.' }}</small></span><span class="badge note">{{ department.memberships|length }}</span><span class="disclosure-chevron"></span></summary>
+    <div class="settings-card-body">
+      <div class="member-card-grid">{% for membership in department.memberships %}<a class="member-card" href="/users/{{ membership.user_id }}/access"><span class="avatar-initial">{{ membership.user.full_name[:1]|upper }}</span><span><strong>{{ membership.user.full_name }}</strong><small>{{ membership.job_title or ('الوظيفة غير محددة' if lang == 'ar' else 'No job title') }}{% if membership.is_primary %} · {{ 'القسم الأساسي' if lang == 'ar' else 'Primary' }}{% endif %}</small></span></a>{% endfor %}</div>
+      <form method="post" action="/departments/{{ department.id }}/members" class="inline-panel">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="grid cols-3"><div class="field"><label>{{ 'إضافة مستخدم' if lang == 'ar' else 'Add user' }}</label><select name="user_id" required><option value="">{{ 'اختر مستخدمًا' if lang == 'ar' else 'Choose a user' }}</option>{% for candidate in users %}<option value="{{ candidate.id }}">{{ candidate.full_name }}</option>{% endfor %}</select></div><div class="field"><label>{{ 'المسمى الوظيفي' if lang == 'ar' else 'Job title' }}</label><input name="job_title"></div><div class="field"><label class="choice-card compact"><input type="checkbox" name="is_primary" value="1"><span>{{ 'اجعله القسم الأساسي' if lang == 'ar' else 'Make primary Department' }}</span></label></div></div><button class="btn btn-secondary" type="submit">{{ 'إضافة العضو' if lang == 'ar' else 'Add member' }}</button>
+      </form>
+    </div>
+  </details>
+
+</div>
+{% endblock %}

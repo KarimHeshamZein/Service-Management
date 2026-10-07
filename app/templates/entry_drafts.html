@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}{{ t('ui.my.drafts') }} · {{ settings.app_name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><span class="eyebrow">{{ t('nav.group.data_entry') }}</span><h1>{{ t('ui.my.drafts') }}</h1><p>{{ t('ui.drafts.help') }}</p></div>
+</div>
+<section class="card">
+  {% if drafts %}
+  <div class="table-wrap"><table class="data-table"><thead><tr><th>{{ t('ui.draft.page') }}</th><th>{{ t('ui.last.saved') }}</th><th>{{ t('ui.expires') }}</th><th>{{ t('ui.actions') }}</th></tr></thead><tbody>
+  {% for draft in drafts %}<tr><td><strong>{{ draft.page_url }}</strong></td><td>{{ fmt_datetime(draft.updated_at) }}</td><td>{{ fmt_datetime(draft.expires_at) }}</td><td><div class="row-actions"><a class="btn btn-primary btn-sm" href="{{ draft.page_url }}">{{ t('ui.continue.draft') }}</a><form method="post" action="/drafts/{{ draft.id }}/delete"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="btn btn-danger btn-sm" type="submit" data-confirm="{{ t('ui.delete.draft.confirm') }}">{{ t('ui.delete') }}</button></form></div></td></tr>{% endfor %}
+  </tbody></table></div>
+  {% else %}<div class="empty"><h2>{{ t('ui.no.saved.drafts') }}</h2><p>{{ t('ui.no.saved.drafts.help') }}</p></div>{% endif %}
+</section>
+{% endblock %}

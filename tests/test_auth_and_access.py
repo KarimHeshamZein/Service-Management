@@ -25,6 +25,15 @@ def test_login_succeeds_with_valid_credentials(client):
     assert client.get("/dashboard").status_code == 200
 
 
+def test_authenticated_pages_include_global_back_navigation(client):
+    login(client, *ADMIN)
+    page = client.get("/projects")
+    assert page.status_code == 200
+    assert 'data-page-back' in page.text
+    assert 'data-fallback-url="/dashboard"' in page.text
+    assert ">Back<" in page.text
+
+
 def test_login_fails_with_wrong_password(client):
     response = login(client, ADMIN[0], "not-the-password")
     assert response.status_code == 401
@@ -89,10 +98,16 @@ def test_pages_require_authentication(client, path):
     assert response.headers["location"].startswith("/login")
 
 
-@pytest.mark.parametrize("path", ["/projects", "/sites", "/service-types"])
-def test_technical_user_can_open_catalog_pages(client, path):
+@pytest.mark.parametrize("path", ["/projects"])
+def test_technical_user_can_open_project_pages(client, path):
     login(client, *LEADER_A)
     assert client.get(path).status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/sites", "/service-types"])
+def test_global_catalog_pages_are_administrator_only(client, path):
+    login(client, *LEADER_A)
+    assert client.get(path).status_code == 403
 
 
 def test_technical_user_can_create_but_cannot_deactivate_catalog_data(client):
@@ -131,27 +146,17 @@ def test_data_entry_modules_open_their_forms(client):
     assert 'action="/installations/submit"' in installations.text
     assert "Submit installation" in installations.text
     assert 'class="workflow-jumpbar no-print"' in installations.text
-    assert 'class="card workflow-section entry-import-disclosure"' in installations.text
-    assert not re.search(
-        r'<details class="card workflow-section entry-import-disclosure"[^>]*\sopen>',
-        installations.text,
-    )
+    assert 'data-add-data-row' in installations.text
     assert 'class="sticky-form-actions no-print"' in installations.text
 
     maintenance = client.get("/maintenance")
     assert maintenance.status_code == 200
     assert 'action="/maintenance/submit"' in maintenance.text
     assert "Submit preventive maintenance" in maintenance.text
-    assert not re.search(
-        r'<details class="card workflow-section entry-import-disclosure"[^>]*\sopen>',
-        maintenance.text,
-    )
+    assert 'data-add-data-row' in maintenance.text
 
     general = client.get("/general-maintenance")
-    assert not re.search(
-        r'<details class="card workflow-section entry-import-disclosure"[^>]*\sopen>',
-        general.text,
-    )
+    assert 'data-add-data-row' in general.text
     assert general.status_code == 200
     for page in (maintenance.text, general.text):
         assert 'href="#entry-scope"' in page
@@ -180,7 +185,8 @@ def test_administrator_navigation_has_all_collapsible_groups(client):
         assert f'aria-controls="nav-{section}"' in page
         assert f'id="nav-{section}"' in page
 
-    assert 'href="/reports/technician-audit"' in page
+    assert 'href="/management/logs-report"' in page
+    assert 'href="/reports/technician-audit"' not in page
     assert 'href="/users"' in page
     assert 'href="/settings"' in page
     assert 'class="quick-create no-print"' in page
@@ -195,6 +201,7 @@ def test_collapsible_navigation_preserves_role_visibility(client):
     assert 'data-nav-section="reports"' in technical_page
     assert 'data-nav-section="management"' in technical_page
     assert 'href="/reports/technician-audit"' not in technical_page
+    assert 'href="/management/logs-report"' not in technical_page
     assert 'href="/users"' not in technical_page
     assert 'href="/settings"' not in technical_page
 
@@ -248,11 +255,11 @@ def test_session_dies_when_account_is_deactivated_mid_session(client, db):
     assert client.get("/dashboard").status_code == 303
 
 
-def test_technical_navigation_shows_catalogs_but_hides_users(client):
+def test_navigation_hides_global_catalogs_and_users_from_technical_accounts(client):
     login(client, *LEADER_A)
     page = client.get("/dashboard").text
     assert 'href="/projects"' in page
-    assert 'href="/sites"' in page
+    assert 'href="/sites"' not in page
     assert 'href="/devices"' not in page
     assert 'href="/users"' not in page
 
@@ -284,7 +291,9 @@ def test_customer_only_reaches_records_reports_and_assigned_navigation(client):
 
     page = client.get("/records").text
     assert 'href="/records"' in page
-    assert 'href="/reports"' in page
+    assert 'href="/reports/installation"' in page
+    assert 'href="/reports/preventive-maintenance"' in page
+    assert 'href="/reports/maintenance"' in page
     assert 'href="/dashboard"' not in page
     assert 'href="/installations"' not in page
     assert 'href="/projects"' not in page

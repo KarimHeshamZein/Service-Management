@@ -105,6 +105,16 @@ def fmt_datetime(value: datetime | None, lang: str = DEFAULT_LANGUAGE) -> str:
     )
 
 
+def fmt_datetime_seconds(value: datetime | None, lang: str = DEFAULT_LANGUAGE) -> str:
+    if value is None:
+        return "—"
+    displayed = to_display(value)
+    return (
+        f"{displayed.day:02d} {_localized_month(displayed, lang)} "
+        f"{displayed.year}, {displayed:%H:%M:%S}"
+    )
+
+
 def fmt_date(
     value: datetime | date | None, lang: str = DEFAULT_LANGUAGE
 ) -> str:
@@ -145,7 +155,16 @@ def fmt_money(value: object) -> str:
 
 def request_language(request: Request) -> str:
     user = getattr(request.state, "user", None)
-    requested = user.language if user is not None else request.session.get("language")
+    # Exception handlers may run after the request database Session has already
+    # detached/expired the ORM user. Never let localization hide the original
+    # error with a DetachedInstanceError.
+    requested = (
+        getattr(user, "__dict__", {}).get("language")
+        if user is not None
+        else request.session.get("language")
+    )
+    if not requested:
+        requested = request.session.get("language")
     return supported_language(requested or DEFAULT_LANGUAGE)
 
 
@@ -219,6 +238,10 @@ def render(request: Request, template: str, context: dict | None = None, status_
         "request": request,
         "settings": settings,
         "user": user,
+        "department": getattr(request.state, "department", None),
+        "department_choices": getattr(request.state, "department_choices", ()),
+        "can": getattr(request.state, "can", lambda _permission_key: False),
+        "unread_notifications": getattr(request.state, "unread_notifications", 0),
         "csrf_token": csrf_token(request),
         "flashes": pop_flash(request, lang),
         "MaintenanceResult": MaintenanceResult,
@@ -230,6 +253,7 @@ def render(request: Request, template: str, context: dict | None = None, status_
         "dir": language_direction(lang),
         "languages": language_choices(),
         "language_next": language_next,
+        "workspace_next": language_next,
     }
     supplied = dict(context or {})
     for key, value in list(supplied.items()):
@@ -268,6 +292,12 @@ def _register_filters() -> None:
         return fmt_date(value, context.get("lang", DEFAULT_LANGUAGE))
 
     env.filters["datetime"] = localized_datetime
+
+    @pass_context
+    def localized_datetime_seconds(context, value):
+        return fmt_datetime_seconds(value, context.get("lang", DEFAULT_LANGUAGE))
+
+    env.filters["datetime_seconds"] = localized_datetime_seconds
     env.filters["date"] = localized_date
     env.filters["filesize"] = fmt_filesize
     env.filters["money"] = fmt_money

@@ -6,7 +6,7 @@
 {% block content %}
 <div class="page-head">
   <div><span class="eyebrow">{{ t('nav.group.pricing') }}</span><h1>{{ t('nav.pricing.quotations') }}</h1><p class="lede">{{ t('ui.create.and.search.project.quotations.with.fixed.historical.item.and.price.snapshots') }}</p></div>
-  <a class="btn btn-primary" href="/pricing/quotations/new">{{ t('ui.create.quotation') }}</a>
+  <div class="action-row"><a class="btn btn-secondary" href="/pricing/quotations/departments">{{ t('pricing.departments.back') }}</a>{% if can('quotations.create') %}<a class="btn btn-primary" href="/pricing/quotations/new">{{ t('ui.create.quotation') }}</a>{% endif %}</div>
 </div>
 
 <div class="card">
@@ -33,7 +33,7 @@
           <td class="num">{{ quotation.quotation_date|date }}</td>
           <td class="num">{{ quotation.valid_until|date }}</td>
           <td>{{ quotation.created_by_name }}</td>
-          <td><div class="actions-row" style="flex-wrap:nowrap;"><a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}">{{ t('ui.view') }}</a><a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}/edit">{{ t('ui.edit') }}</a>{% if can_delete %}<button class="btn btn-danger btn-sm" type="submit" formaction="/pricing/quotations/{{ quotation.id }}/delete" onclick="return confirm('{{ t("ui.permanently.delete.this.quotation") }}');">{{ t('ui.delete') }}</button>{% endif %}</div></td>
+          <td><div class="actions-row" style="flex-wrap:nowrap;"><a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}">{{ t('ui.view') }}</a>{% if can('quotations.edit') %}<a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}/edit">{{ t('ui.edit') }}</a>{% endif %}{% if can_delete %}<button class="btn btn-danger btn-sm" type="submit" formaction="/pricing/quotations/{{ quotation.id }}/delete" onclick="return confirm('{{ t("ui.permanently.delete.this.quotation") }}');">{{ t('ui.delete') }}</button>{% endif %}</div></td>
         </tr>
       {% endfor %}</tbody>
     </table></div></form>
@@ -45,7 +45,7 @@
     </nav>
     {% endif %}
     {% else %}
-    {{ ui.empty_state(t('ui.no.quotations.found'), t('ui.create.the.first.quotation.or.try.a.different.search'), '/pricing/quotations/new', t('ui.create.quotation')) }}
+    {% if can('quotations.create') %}{{ ui.empty_state(t('ui.no.quotations.found'), t('ui.create.the.first.quotation.or.try.a.different.search'), '/pricing/quotations/new', t('ui.create.quotation')) }}{% else %}{{ ui.empty_state(t('ui.no.quotations.found'), t('ui.create.the.first.quotation.or.try.a.different.search')) }}{% endif %}
     {% endif %}
   </div>
 </div>

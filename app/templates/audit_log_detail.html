@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% from "partials/audit_changes.html" import render_changes with context %}
+{% block title %}{{ t('audit.event') }} #{{ event.id }} · {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ t('audit.event.details') }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><a href="/management/logs-report">← {{ t('logs.report.back') }}</a><h1>{{ summary }}</h1><p class="lede">{{ t('audit.permanent.event', id=event.id, at=event.created_at|datetime_seconds) }}</p></div></div>
+<div class="grid cols-2">
+  <section class="card"><div class="card-head"><h2>{{ t('audit.who.when') }}</h2></div><div class="card-body"><dl class="kv"><dt>{{ t('ui.user') }}</dt><dd>{{ event.actor_name }}</dd><dt>{{ t('audit.role') }}</dt><dd>{{ event.actor_role or '—' }}</dd><dt>{{ t('ui.date.and.time') }}</dt><dd>{{ event.created_at|datetime_seconds }}</dd><dt>{{ t('audit.ip.address') }}</dt><dd class="mono">{{ event.ip_address or '—' }}</dd><dt>{{ t('audit.browser.device') }}</dt><dd>{{ event.user_agent or '—' }}</dd></dl></div></section>
+  <section class="card"><div class="card-head"><h2>{{ t('audit.request.record') }}</h2></div><div class="card-body"><dl class="kv"><dt>{{ t('ui.action') }}</dt><dd>{{ event.action|replace('_', ' ')|title }}</dd><dt>{{ t('ui.module') }}</dt><dd>{{ event.module|replace('_', ' ')|title }}</dd><dt>{{ t('audit.record.type') }}</dt><dd>{{ (event.entity_type or '—')|replace('_', ' ')|title }}</dd><dt>{{ t('ui.record') }}</dt><dd>{{ event.entity_label or '—' }}{% if event.entity_id %} <span class="mono">#{{ event.entity_id }}</span>{% endif %}</dd><dt>{{ t('ui.request') }}</dt><dd class="mono">{{ event.method }} {{ event.path }}</dd><dt>{{ t('audit.outcome') }}</dt><dd>{{ t('audit.successful') if event.status_code < 400 else t('audit.failed') }} · {{ t('audit.http.status', status=event.status_code) }}</dd></dl></div></section>
+</div>
+<section class="card"><div class="card-head"><h2>{{ t('audit.recorded.changes') }}</h2></div><div class="card-body">{{ render_changes(event.changes) }}</div></section>
+{% endblock %}

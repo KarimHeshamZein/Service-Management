@@ -21,6 +21,10 @@ _ARABIC = re.compile(
 )
 _INVISIBLE_FORMATTING = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]")
 _UNSUPPORTED_SYMBOLS = re.compile("[\u2600-\u27bf\U0001f000-\U0001faff]")
+_FULLWIDTH_ASCII = str.maketrans(
+    {codepoint: codepoint - 0xFEE0 for codepoint in range(0xFF01, 0xFF5F)}
+    | {0x3000: 0x20}
+)
 
 
 def register_pdf_fonts() -> None:
@@ -74,6 +78,7 @@ def pdf_text(value: Any, fallback: str = "-") -> str:
         value = fallback
     normalized = (
         str(value)
+        .translate(_FULLWIDTH_ASCII)
         .replace("\u2010", "-")
         .replace("\u2011", "-")
         .replace("\u2012", "-")

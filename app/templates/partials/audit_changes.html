@@ -1,0 +1,16 @@
+{% macro render_value(value) -%}
+  {% if value is mapping %}
+    {% if 'before' in value or 'after' in value %}
+      <div class="audit-diff"><div><small>{{ t('audit.before') }}</small><div class="audit-value">{{ value.get('before') if value.get('before') not in [none, ''] else '—' }}</div></div><span aria-hidden="true">→</span><div><small>{{ t('audit.after') }}</small><div class="audit-value">{{ value.get('after') if value.get('after') not in [none, ''] else '—' }}</div></div></div>
+    {% else %}
+      <dl class="kv audit-nested">{% for key, child in value.items() %}<dt>{{ key|replace('_', ' ')|title }}</dt><dd>{{ render_value(child) }}</dd>{% endfor %}</dl>
+    {% endif %}
+  {% elif value is sequence and value is not string %}
+    {% if value %}<ol class="audit-list">{% for child in value %}<li>{{ render_value(child) }}</li>{% endfor %}</ol>{% else %}<span class="muted">{{ t('ui.none') }}</span>{% endif %}
+  {% elif value in [none, ''] %}<span class="muted">—</span>
+  {% else %}<span class="audit-value">{{ value }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro render_changes(changes) -%}
+  {% if changes %}<dl class="kv audit-changes">{% for key, value in changes.items() %}<dt>{{ key|replace('_', ' ')|title }}</dt><dd>{{ render_value(value) }}</dd>{% endfor %}</dl>{% else %}<p class="empty">{{ t('audit.no.field.changes') }}</p>{% endif %}
+{%- endmacro %}

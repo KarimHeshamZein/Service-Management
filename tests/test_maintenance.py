@@ -20,6 +20,8 @@ from app.models import (
     RecordRevision,
     ServiceType,
     Site,
+    SubProject,
+    SubProjectSite,
     WorkSite,
 )
 from tests.conftest import (
@@ -42,18 +44,289 @@ def _record(db) -> MaintenanceRecord:
     return db.query(MaintenanceRecord).order_by(MaintenanceRecord.id.desc()).first()
 
 
+def test_edit_flow_can_append_a_complete_site_service_to_same_preventive_record(client, db):
+    login(client, *LEADER_A)
+    original = submit_record(client, notes="Original preventive work")
+    record = _record(db)
+    page = client.get(f"/maintenance/records/{record.id}/edit")
+    assert "data-add-to-existing-site" in page.text
+    script = client.get("/static/js/app.js")
+    assert script.status_code == 200
+    assert 'scope.querySelector("select[name=project_id]")' in script.text
+    assert 'scope.querySelector("select[name=sub_project_id]")' in script.text
+    assert 'scope.querySelector("select[name=work_site_id]")' in script.text
+    assert 'scope.querySelectorAll("[data-entry-data-scope]")' in script.text
+    assert "prepareNestedEditSubmission(submitForm)" in script.text
+    assert 'field.name.indexOf("existing_remove_photo_") !== 0' in script.text
+    assert 'new DOMParser().parseFromString(xhr.responseText, "text/html")' in script.text
+    assert f"/maintenance/submit?append_to={record.id}" not in page.text
+    csrf = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    form_token = re.search(r'name="form_token" value="([^"]+)"', page.text).group(1)
+    item_id = record.work_items[0].id
+    response = client.post(
+        f"/maintenance/records/{record.id}/edit",
+        data={
+            "csrf_token": csrf, "form_token": form_token, "append_record_id": str(record.id),
+            "existing_item_id": str(item_id), f"existing_result_{item_id}": "completed_successfully",
+            f"existing_notes_{item_id}": record.work_items[0].notes,
+            "append_scope_position": "0", "project_id": "1", "work_site_id": "1",
+            "item_scope_index": "0", "service_type_id": "1",
+            "result_0": "completed_successfully", "notes": "Added preventive work",
+            "existing_data_scope_position": "0", "existing_data_item_name": "Camera cleaning",
+            "existing_data_quantity": "2", "existing_data_notes": "Edited online table",
+        },
+        files=[("photos_0", ("added.jpg", make_image(), "image/jpeg"))],
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == original.headers["location"]
+    db.expire_all()
+    record = db.get(MaintenanceRecord, record.id)
+    assert db.query(MaintenanceRecord).count() == 1
+    assert [item.notes for item in record.work_items] == [
+        "Original preventive work",
+        "Added preventive work",
+    ]
+    assert [item.scope_position for item in record.work_items] == [0, 0]
+    assert [(row.item_name, row.quantity, row.scope_position) for row in record.device_data_rows] == [
+        ("Camera cleaning", 2, 0)
+    ]
+    assert db.query(RecordRevision).filter_by(
+        record_type="preventive_maintenance", action="items_added"
+    ).count() == 1
+    detail = client.get(f"/maintenance/records/{record.id}")
+    assert detail.status_code == 200
+    assert "Change history" not in detail.text
+
+
+def test_edit_flow_can_add_two_new_sites_to_same_preventive_record(client, db):
+    login(client, *LEADER_A)
+    submit_record(client, notes="Gate 1 service")
+    record = _record(db)
+    page = client.get(f"/maintenance/records/{record.id}/edit")
+    assert "data-async-form" in page.text
+    csrf = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    form_token = re.search(r'name="form_token" value="([^"]+)"', page.text).group(1)
+    item = record.work_items[0]
+
+    response = client.post(
+        f"/maintenance/records/{record.id}/edit",
+        data={
+            "csrf_token": csrf, "form_token": form_token, "append_record_id": str(record.id),
+            "existing_item_id": str(item.id), f"existing_result_{item.id}": item.result.value,
+            f"existing_notes_{item.id}": item.notes,
+            "append_scope_position": ["", ""],
+            "project_id": ["1", "1"],
+            "work_site_id": ["2", "3"],
+            "item_scope_index": ["0", "1"],
+            "service_type_id": ["1", "1"],
+            "result_0": "completed_successfully", "notes": "Gate 2 service",
+            "result_1": "completed_with_observations",
+            "data_scope_index": ["0", "1"],
+            "data_item_name": ["Gate 2 checklist", "Gate 3 checklist"],
+            "data_quantity": ["2", "3"],
+            "data_notes": ["Gate 2 rows", "Gate 3 rows"],
+        },
+        files=[
+            ("photos_0", ("gate-2.jpg", make_image(), "image/jpeg")),
+            ("photos_1", ("gate-3.jpg", make_image(), "image/jpeg")),
+        ],
+        headers={"X-Requested-With": "XMLHttpRequest"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["redirect"] == f"/maintenance/records/{record.id}"
+    db.expire_all()
+    record = db.get(MaintenanceRecord, record.id)
+    assert [(item.scope_position, item.work_site_name) for item in record.work_items] == [
+        (0, "Gate 1"), (1, "Gate 2"), (2, "Gate 3")
+    ]
+    assert [(row.scope_position, row.work_site_name, row.item_name) for row in record.device_data_rows] == [
+        (1, "Gate 2", "Gate 2 checklist"),
+        (2, "Gate 3", "Gate 3 checklist"),
+    ]
+
+
+def test_edit_append_validation_stays_in_edit_and_preserves_saved_record(client, db):
+    login(client, *LEADER_A)
+    submit_record(client, notes="Saved preventive work")
+    record = _record(db)
+    page = client.get(f"/maintenance/records/{record.id}/edit")
+    csrf = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    form_token = re.search(r'name="form_token" value="([^"]+)"', page.text).group(1)
+    item = record.work_items[0]
+
+    response = client.post(
+        f"/maintenance/records/{record.id}/edit",
+        data={
+            "csrf_token": csrf,
+            "form_token": form_token,
+            "append_record_id": str(record.id),
+            "existing_item_id": str(item.id),
+            f"existing_result_{item.id}": item.result.value,
+            f"existing_notes_{item.id}": item.notes,
+            "append_scope_position": "",
+            "project_id": "1",
+            "work_site_id": "2",
+            "item_scope_index": "0",
+            "service_type_id": "1",
+            "result_0": "completed_successfully",
+            "notes": "Unsaved Gate 2 service",
+        },
+        headers={"X-Requested-With": "XMLHttpRequest"},
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["ok"] is False
+    assert "new Site or service was not saved" in payload["errors"]["form"]
+    assert "Attach at least one proof photo" in payload["errors"]["form"]
+    assert "preventive_maintenance_entry" not in response.text
+    db.expire_all()
+    saved = db.get(MaintenanceRecord, record.id)
+    assert db.query(MaintenanceRecord).count() == 1
+    assert [(entry.work_site_name, entry.notes) for entry in saved.work_items] == [
+        ("Gate 1", "Saved preventive work")
+    ]
+
+
+def test_edit_new_site_without_service_returns_exact_error_instead_of_no_changes(client, db):
+    login(client, *LEADER_A)
+    submit_record(client, notes="Saved preventive work")
+    record = _record(db)
+    original_item = record.work_items[0]
+    page = client.get(f"/maintenance/records/{record.id}/edit")
+
+    response = client.post(
+        f"/maintenance/records/{record.id}/edit",
+        data={
+            "csrf_token": re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1),
+            "form_token": re.search(r'name="form_token" value="([^"]+)"', page.text).group(1),
+            "append_record_id": str(record.id),
+            "existing_item_id": str(original_item.id),
+            f"existing_result_{original_item.id}": original_item.result.value,
+            f"existing_notes_{original_item.id}": original_item.notes,
+            "append_scope_position": "",
+            "project_id": "1",
+            "work_site_id": "2",
+            "item_scope_index": "0",
+            "service_type_id": "",
+            "result_0": "completed_successfully",
+        },
+        files=[("photos_0", ("unsaved.jpg", make_image(), "image/jpeg"))],
+        headers={"X-Requested-With": "XMLHttpRequest"},
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["errors"]["service_type_id_0"] == "Select the service performed."
+    assert "No changes were made" not in response.text
+    db.expire_all()
+    saved = db.get(MaintenanceRecord, record.id)
+    assert [(item.work_site_name, item.notes) for item in saved.work_items] == [
+        ("Gate 1", "Saved preventive work")
+    ]
+
+
+def test_admin_can_append_then_remove_a_cross_project_site_from_same_preventive_record(client, db):
+    """Clean Edit flow: keep the old Site, add another Main/Sub/Site, then remove it."""
+    added_sub = SubProject(project_id=3, name="Added preventive Sub Project")
+    added_sub.site_assignments = [SubProjectSite(site_id=2)]
+    db.add(added_sub)
+    db.commit()
+
+    login(client, *ADMIN)
+    submit_record(client, notes="Original Site remains")
+    record = _record(db)
+    original_item = record.work_items[0]
+    page = client.get(f"/maintenance/records/{record.id}/edit")
+    csrf = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    form_token = re.search(r'name="form_token" value="([^"]+)"', page.text).group(1)
+
+    appended = client.post(
+        f"/maintenance/records/{record.id}/edit",
+        data={
+            "csrf_token": csrf,
+            "form_token": form_token,
+            "append_record_id": str(record.id),
+            "existing_item_id": str(original_item.id),
+            f"existing_result_{original_item.id}": original_item.result.value,
+            f"existing_notes_{original_item.id}": original_item.notes,
+            "append_scope_position": "",
+            "project_id": "3",
+            "sub_project_id": str(added_sub.id),
+            "work_site_id": "2",
+            "item_scope_index": "0",
+            "service_type_id": "1",
+            "result_0": "completed_successfully",
+            "issue_description": "Added Site test",
+            "data_scope_index": "0",
+            "data_item_name": "Added Site table",
+            "data_quantity": "1",
+            "data_notes": "Remove this Site next",
+        },
+        files=[("photos_0", ("added-site.jpg", make_image(), "image/jpeg"))],
+        headers={"X-Requested-With": "XMLHttpRequest"},
+    )
+    assert appended.status_code == 201, appended.text
+
+    db.expire_all()
+    record = db.get(MaintenanceRecord, record.id)
+    assert db.query(MaintenanceRecord).count() == 1
+    assert [(item.project_id, item.sub_project_id, item.work_site_id) for item in record.work_items] == [
+        (1, original_item.sub_project_id, 1),
+        (3, added_sub.id, 2),
+    ]
+    added_item_id = record.work_items[1].id
+
+    page = client.get(f"/maintenance/records/{record.id}/edit")
+    csrf = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    form_token = re.search(r'name="form_token" value="([^"]+)"', page.text).group(1)
+    original_item = record.work_items[0]
+    removed = client.post(
+        f"/maintenance/records/{record.id}/edit",
+        data={
+            "csrf_token": csrf,
+            "form_token": form_token,
+            "append_record_id": str(record.id),
+            "existing_item_id": str(original_item.id),
+            f"existing_result_{original_item.id}": original_item.result.value,
+            f"existing_notes_{original_item.id}": original_item.notes,
+        },
+        headers={"X-Requested-With": "XMLHttpRequest"},
+    )
+    assert removed.status_code == 200, removed.text
+    assert removed.json()["redirect"] == f"/maintenance/records/{record.id}"
+
+    db.expire_all()
+    record = db.get(MaintenanceRecord, record.id)
+    assert db.query(MaintenanceRecord).count() == 1
+    assert record.record_number.startswith("PM-")
+    assert [(item.project_id, item.work_site_id, item.notes) for item in record.work_items] == [
+        (1, 1, "Original Site remains")
+    ]
+    assert db.get(type(original_item), added_item_id) is None
+    assert not record.device_data_rows
+
+
 def test_preventive_maintenance_stores_before_and_after_photos(client, db):
     login(client, *LEADER_A)
     response = submit_record(
         client,
+        before_photo_descriptions_0="General site view",
+        after_photo_descriptions_0="Battery terminal corrosion",
+        after_photo_issue_found_0_0="1",
         photos=[
             ("before_photos_0", ("before.jpg", make_image((80, 20, 20)), "image/jpeg")),
             ("after_photos_0", ("after.jpg", make_image((20, 80, 20)), "image/jpeg")),
         ],
     )
     assert response.status_code == 303
-    stages = [photo.stage for photo in _record(db).work_items[0].photos]
+    photos = _record(db).work_items[0].photos
+    stages = [photo.stage for photo in photos]
     assert stages == [EvidencePhotoStage.BEFORE, EvidencePhotoStage.AFTER]
+    assert [photo.is_issue_found for photo in photos] == [False, True]
+    assert photos[1].description == "Battery terminal corrosion"
 
 
 def test_preventive_maintenance_stores_direct_site_table_without_asset_link(client, db):
@@ -73,7 +346,7 @@ def test_preventive_maintenance_stores_direct_site_table_without_asset_link(clie
     assert record.device_data_rows[0].quantity == 3
 
 
-def test_preventive_maintenance_lists_and_accepts_uninstalled_catalog_item(client, db):
+def test_preventive_maintenance_has_no_item_selector_and_ignores_forged_item(client, db):
     device = DeviceCatalog(name="Solar Panel", model="SP-500")
     item = PricingItem(
         name="Solar Panel",
@@ -89,17 +362,17 @@ def test_preventive_maintenance_lists_and_accepts_uninstalled_catalog_item(clien
     login(client, *LEADER_A)
     page = client.get("/maintenance")
     assert page.status_code == 200
-    assert f'value="catalog:{item.id}"' in page.text
-    assert "Solar Panel" in page.text
+    assert 'name="installed_device_id"' not in page.text
+    assert f'value="catalog:{item.id}"' not in page.text
     assert "BASE-SN-001" not in page.text
     assert "Installed items" not in page.text
 
     response = submit_record(client, installed_device_id=f"catalog:{item.id}")
     assert response.status_code == 303
     record = _record(db)
-    assert record.work_items[0].device_name == "Solar Panel"
+    assert record.work_items[0].device_name == "Camera Service"
     assert record.work_items[0].installed_device_id is None
-    assert record.device_evidence.installed_device_id is None
+    assert record.device_evidence is None
 
 
 # ------------------------------------------------------------ happy path
@@ -218,33 +491,39 @@ def test_submission_fails_without_a_result(client, db):
     assert db.query(MaintenanceRecord).count() == 0
 
 
+def test_preventive_entry_does_not_show_workflow_notes_field(client, db):
+    login(client, *LEADER_A)
+    entry = client.get("/maintenance")
+    assert entry.status_code == 200
+    assert '<textarea name="notes"' not in entry.text
+
+    created = submit_record(client, notes="")
+    assert created.status_code == 303
+    record = _record(db)
+    assert record.notes == ""
+    edit = client.get(f"/maintenance/records/{record.id}/edit")
+    assert f'name="existing_notes_{record.work_items[0].id}"' in edit.text
+    assert f'<textarea name="existing_notes_{record.work_items[0].id}"' not in edit.text
+
+
 def test_submission_fails_with_an_invalid_result(client, db):
     login(client, *LEADER_A)
     assert submit_record(client, result="completed_perfectly").status_code == 422
     assert db.query(MaintenanceRecord).count() == 0
 
 
-def test_issue_detail_is_required_only_for_results_that_need_it(client, db):
+def test_issue_detail_is_optional_for_any_result(client, db):
     login(client, *LEADER_A)
-    missing = submit_record(
+    created = submit_record(
         client,
         result="unable_to_complete",
         issue_description="",
     )
-    assert missing.status_code == 422
-    assert 'data-error-for="issue_description_0"' in missing.text
-    assert "Describe the issue or observation for this result." in missing.text
-    assert db.query(MaintenanceRecord).count() == 0
-
-    completed = submit_record(
-        client,
-        result="completed_successfully",
-        issue_description="",
-    )
-    assert completed.status_code == 303
+    assert created.status_code == 303
+    assert not _record(db).work_items[0].issue_description
 
 
-def test_grouped_issue_detail_error_is_keyed_to_the_correct_device(client, db):
+def test_grouped_services_allow_blank_issue_detail(client, db):
     second = InstalledDevice(
         site_id=1,
         device_id=1,
@@ -275,14 +554,10 @@ def test_grouped_issue_detail_error_is_keyed_to_the_correct_device(client, db):
         ],
     )
 
-    assert response.status_code == 422
-    assert response.text.count("Describe the issue or observation for this result.") == 1
-    marker = 'data-error-for="issue_description_1"'
-    assert marker in response.text
-    assert response.text.index(marker) < response.text.index(
-        "Describe the issue or observation for this result."
-    )
-    assert db.query(MaintenanceRecord).count() == 0
+    assert response.status_code == 303
+    record = _record(db)
+    assert len(record.work_items) == 2
+    assert all(not item.issue_description for item in record.work_items)
 
 
 def test_out_of_range_project_id_returns_field_error(client, db):
@@ -407,18 +682,23 @@ def test_duplicate_submission_is_prevented(client, db):
 # ------------------------------------------------------------ visibility
 
 
-def test_technical_user_sees_all_technical_records(client, db):
+def test_technical_user_sees_records_for_assigned_projects(client, db):
     login(client, *LEADER_A)
     submit_record(client, notes="Leader One was here and cleaned the cameras.")
-    mine = _record(db).id
+    mine_record = _record(db)
+    mine, mine_number = mine_record.id, mine_record.record_number
     logout(client)
 
     login(client, *LEADER_B)
     submit_record(client, notes="Leader Two was here and checked the recordings.")
-    theirs = _record(db).id
+    their_record = _record(db)
+    theirs, their_number = their_record.id, their_record.record_number
 
-    listing = client.get("/maintenance/records").text
-    assert "Leader One" in listing
+    listing_response = client.get("/maintenance/records")
+    assert listing_response.status_code == 200
+    listing = listing_response.text
+    assert mine_number in listing
+    assert their_number in listing
     assert client.get(f"/maintenance/records/{theirs}").status_code == 200
     assert client.get(f"/maintenance/records/{mine}").status_code == 200
 
@@ -488,6 +768,7 @@ def test_preventive_maintenance_edit_is_saved_and_audited(client, db):
             "recommendations_0": "Inspect the enclosure during the next visit.",
             "participant_ids": ["3"],
             "add_after_photo_descriptions_0": "Enclosure after cleaning.",
+            "add_after_photo_issue_found_0_0": "1",
         },
         files=[
             ("add_after_photos_0", ("after-edit.jpg", make_image(), "image/jpeg"))
@@ -504,6 +785,7 @@ def test_preventive_maintenance_edit_is_saved_and_audited(client, db):
     assert any(
         photo.description == "Enclosure after cleaning."
         and photo.stage == EvidencePhotoStage.AFTER
+        and photo.is_issue_found
         for photo in record.work_items[0].photos
     )
     revision = db.query(RecordRevision).one()
@@ -631,7 +913,7 @@ def test_dashboard_statistics_update_after_a_submission(client, db):
         issue_description="The camera mount needs replacement.",
     )
     technical_dashboard = client.get("/dashboard").text
-    assert "All submitted field-service evidence" in technical_dashboard
+    assert "Your records" in technical_dashboard
     assert ">1<" in technical_dashboard
     logout(client)
 
@@ -694,53 +976,37 @@ def test_dashboard_combines_all_record_types_and_uses_correct_recent_links(clien
 def test_technical_dashboard_includes_other_technical_users_work(client, db):
     login(client, *LEADER_B)
     submit_record(client)
+    record_number = _record(db).record_number
     logout(client)
 
     login(client, *LEADER_A)
     dashboard = client.get("/dashboard").text
-    assert "Leader Two" in dashboard
+    assert record_number in dashboard
 
 
-def test_maintenance_records_capture_and_search_installed_device(client, db):
+def test_preventive_records_search_service_project_and_site_without_device_link(client, db):
     login(client, *LEADER_A)
     response = submit_record(client)
     assert response.status_code == 303
 
     record = _record(db)
-    assert record.device_evidence.device_name == "IP Camera"
-    assert record.device_evidence.device_model == "P3265-LV"
-    assert record.device_evidence.serial_number == "BASE-SN-001"
+    assert record.device_evidence is None
+    assert record.work_items[0].installed_device_id is None
 
-    assert record.record_number in client.get("/maintenance/records?q=BASE-SN-001").text
-    assert record.record_number in client.get("/maintenance/records?q=P3265-LV").text
+    assert record.record_number in client.get("/maintenance/records?q=Camera+Service").text
     assert record.record_number in client.get("/maintenance/records?q=Tower+A").text
     assert record.record_number in client.get("/maintenance/records?q=Gate+1").text
     assert record.record_number in client.get("/maintenance/records?project_id=1").text
     assert record.record_number in client.get("/maintenance/records?work_site_id=1").text
-    assert record.record_number in client.get("/maintenance/records?device_id=1").text
-    assert record.record_number in client.get("/records?q=BASE-SN-001").text
+    assert record.record_number in client.get("/records?q=Camera+Service").text
 
 
-def test_one_maintenance_record_can_contain_multiple_devices(client, db):
-    second = InstalledDevice(
-        site_id=1,
-        device_id=1,
-        customer_name="Tower A",
-        site_name="Gate 1",
-        device_name="IP Camera",
-        manufacturer="Axis",
-        device_model="P3265-LV",
-        serial_number="BASE-SN-002",
-    )
-    second.work_site_evidence = InstalledDeviceSite(site_id=1, site_name="Gate 1")
-    db.add(second)
-    db.commit()
-
+def test_one_preventive_record_can_contain_multiple_services(client, db):
     login(client, *LEADER_A)
     response = submit_record(
         client,
         service_type_id=["1", "1"],
-        installed_device_id=["1", str(second.id)],
+        item_scope_index=["0", "0"],
         notes=["Cleaned the first camera.", "Adjusted the second camera."],
         result_0="completed_successfully",
         result_1="further_action_required",
@@ -754,9 +1020,8 @@ def test_one_maintenance_record_can_contain_multiple_devices(client, db):
     assert response.status_code == 303
 
     record = _record(db)
-    assert record.device_evidence.serial_number == "BASE-SN-001"
-    assert len(record.additional_device_evidence) == 1
-    assert record.additional_device_evidence[0].serial_number == "BASE-SN-002"
+    assert record.device_evidence is None
+    assert all(item.installed_device_id is None for item in record.work_items)
     assert [item.notes for item in record.work_items] == [
         "Cleaned the first camera.",
         "Adjusted the second camera.",
@@ -768,17 +1033,11 @@ def test_one_maintenance_record_can_contain_multiple_devices(client, db):
     assert [len(item.photos) for item in record.work_items] == [1, 1]
 
     detail = client.get(response.headers["location"]).text
-    assert "BASE-SN-001" in detail
-    assert "BASE-SN-002" in detail
     assert "Cleaned the first camera." in detail
     assert "The second camera mount is loose." in detail
     assert record.record_number in client.get(
-        "/maintenance/records?q=BASE-SN-002"
-    ).text
-    assert record.record_number in client.get(
         "/maintenance/records?q=mounting+bracket"
     ).text
-    assert record.record_number in client.get("/records?q=BASE-SN-002").text
     item_photo_id = record.work_items[1].photos[0].id
     assert client.get(f"/media/maintenance-item-photo/{item_photo_id}").status_code == 200
     logout(client)
@@ -786,13 +1045,18 @@ def test_one_maintenance_record_can_contain_multiple_devices(client, db):
     assert client.get(f"/media/maintenance-item-photo/{item_photo_id}").status_code == 403
 
 
-def test_grouped_maintenance_rejects_the_same_device_twice(client, db):
+def test_grouped_preventive_allows_the_same_service_more_than_once(client, db):
     login(client, *LEADER_A)
     response = submit_record(
         client,
         service_type_id=["1", "1"],
-        installed_device_id=["1", "1"],
+        item_scope_index=["0", "0"],
+        result_1="completed_successfully",
+        notes=["First unit", "Second unit"],
+        photos=[
+            ("photos_0", ("first.jpg", make_image(), "image/jpeg")),
+            ("photos_1", ("second.jpg", make_image(), "image/jpeg")),
+        ],
     )
-    assert response.status_code == 422
-    assert "Each device can appear only once" in response.text
-    assert db.query(MaintenanceRecord).count() == 0
+    assert response.status_code == 303
+    assert [item.notes for item in _record(db).work_items] == ["First unit", "Second unit"]

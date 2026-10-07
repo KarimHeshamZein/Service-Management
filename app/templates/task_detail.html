@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ task.task_number }}{% endblock %}
+{% block topbar_title %}{{ task.task_number }}{% endblock %}
+{% block content %}
+{% set status_ar = {'new':'جديدة','in_progress':'قيد التنفيذ','blocked':'متوقفة','completed':'مكتملة','cancelled':'ملغاة'} %}{% set priority_ar = {'normal':'عادية','important':'مهمة','urgent':'عاجلة'} %}
+<div class="page-head">
+  <div><span class="eyebrow">{{ task.department.name }}</span><h1>{{ task.title }}</h1><p class="lede">{{ task.task_number }} · {{ status_ar.get(task.status.value, task.status.value) if lang == 'ar' else task.status.value|replace('_',' ')|title }}</p></div>
+  <a class="btn btn-secondary" href="/tasks">{{ 'كل المهام' if lang == 'ar' else 'All tasks' }}</a>
+</div>
+<div class="detail-layout">
+  <div class="exclusive-accordion" data-exclusive-accordion>
+    <details class="settings-card" open>
+      <summary><span><strong>{{ 'التفاصيل' if lang == 'ar' else 'Details' }}</strong><small>{{ task.created_by_name }} · {{ task.created_at|datetime }}</small></span><span class="disclosure-chevron"></span></summary>
+      <div class="settings-card-body">
+        <p class="rich-text">{{ task.description or '—' }}</p>
+        <div class="metric-grid">
+          <div class="metric-card"><span>{{ 'المسؤول' if lang == 'ar' else 'Assignee' }}</span><strong>{{ task.assigned_to_name }}</strong></div>
+          <div class="metric-card"><span>{{ 'الأولوية' if lang == 'ar' else 'Priority' }}</span><strong>{{ priority_ar.get(task.priority.value, task.priority.value) if lang == 'ar' else task.priority.value|title }}</strong></div>
+          <div class="metric-card"><span>{{ 'المشروع' if lang == 'ar' else 'Project' }}</span><strong>{{ task.project.name if task.project else '—' }}</strong></div>
+          <div class="metric-card"><span>{{ 'الاستحقاق' if lang == 'ar' else 'Due' }}</span><strong>{{ task.due_at|datetime if task.due_at else '—' }}</strong></div>
+        </div>
+      </div>
+    </details>
+    {% if can_assign_task %}
+    <details class="settings-card">
+      <summary><span><strong>{{ 'التوجيه والجدولة' if lang == 'ar' else 'Assignment & schedule' }}</strong><small>{{ 'تعديل المسؤول أو المشروع أو الموعد' if lang == 'ar' else 'Reassign the owner, Project, priority or due date' }}</small></span><span class="disclosure-chevron"></span></summary>
+      <form class="settings-card-body" method="post" action="/tasks/{{ task.id }}/assignment">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="field"><label>{{ 'العنوان' if lang == 'ar' else 'Title' }} <span class="req">*</span></label><input name="title" value="{{ task.title }}" required maxlength="220"></div>
+        <div class="field"><label>{{ 'الوصف' if lang == 'ar' else 'Description' }}</label><textarea name="description" rows="4">{{ task.description or '' }}</textarea></div>
+        <div class="grid cols-2">
+          <div class="field"><label>{{ 'موجهة إلى' if lang == 'ar' else 'Assign to' }} <span class="req">*</span></label><select name="assigned_to_id" required>{% for member in members %}<option value="{{ member.id }}" {{ 'selected' if member.id == task.assigned_to_id }}>{{ member.full_name }}</option>{% endfor %}</select></div>
+          <div class="field"><label>{{ 'المشروع (اختياري)' if lang == 'ar' else 'Project (optional)' }}</label><select name="project_id"><option value="">{{ 'بدون مشروع' if lang == 'ar' else 'No Project' }}</option>{% for project in projects %}<option value="{{ project.id }}" {{ 'selected' if task.project_id == project.id }}>{{ project.name }}</option>{% endfor %}</select></div>
+          <div class="field"><label>{{ 'الأولوية' if lang == 'ar' else 'Priority' }}</label><select name="priority">{% for priority in priorities %}<option value="{{ priority.value }}" {{ 'selected' if priority == task.priority }}>{{ priority_ar.get(priority.value, priority.value) if lang == 'ar' else priority.value|title }}</option>{% endfor %}</select></div>
+          <div class="field"><label>{{ 'موعد الاستحقاق' if lang == 'ar' else 'Due date and time' }}</label><input type="datetime-local" name="due_at" value="{{ due_input }}"></div>
+        </div>
+        <button class="btn btn-primary" type="submit">{{ 'حفظ التوجيه' if lang == 'ar' else 'Save assignment' }}</button>
+      </form>
+    </details>
+    {% endif %}
+    <details class="settings-card">
+      <summary><span><strong>{{ 'التعليقات' if lang == 'ar' else 'Comments' }}</strong><small>{{ task.comments|length }}</small></span><span class="disclosure-chevron"></span></summary>
+      <div class="settings-card-body">
+        <div class="comment-list">{% for comment in task.comments %}<article><header><strong>{{ comment.author_name }}</strong><time>{{ comment.created_at|datetime }}</time></header><p>{{ comment.body }}</p></article>{% else %}<p class="empty-state">{{ 'لا توجد تعليقات بعد' if lang == 'ar' else 'No comments yet' }}</p>{% endfor %}</div>
+        <form method="post" action="/tasks/{{ task.id }}/comments"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="field"><label>{{ 'إضافة تعليق' if lang == 'ar' else 'Add comment' }}</label><textarea name="body" rows="3" required></textarea></div><button class="btn btn-secondary">{{ 'إرسال التعليق' if lang == 'ar' else 'Post comment' }}</button></form>
+      </div>
+    </details>
+  </div>
+  <aside class="card">
+    <div class="card-head"><h2>{{ 'تحديث الحالة' if lang == 'ar' else 'Update status' }}</h2></div>
+    <form class="card-body" method="post" action="/tasks/{{ task.id }}/status"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><div class="field"><select name="status_value">{% for status in statuses %}<option value="{{ status.value }}" {{ 'selected' if status == task.status }}>{{ status_ar.get(status.value, status.value) if lang == 'ar' else status.value|replace('_',' ')|title }}</option>{% endfor %}</select></div><button class="btn btn-primary">{{ t('ui.save.changes') }}</button></form>
+  </aside>
+</div>
+{% endblock %}

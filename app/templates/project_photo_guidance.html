@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{{ t('ui.photo.guidance') }} · {{ project.name }}{% endblock %}
+{% block topbar_title %}{{ t('ui.photo.guidance') }}{% endblock %}
+
+{% macro description_editor(name, options, stage) %}
+<div class="field photo-guidance-descriptions" data-description-editor data-description-name="{{ name }}" data-description-stage="{{ stage }}" data-description-label="{{ t('ui.standard.description') }}" data-max-descriptions="30">
+  <div class="photo-guidance-field-heading">
+    <label>{{ t('ui.standard.descriptions') }}</label>
+    <span class="photo-guidance-description-count"><span data-description-count>{{ options|length }}</span>/30</span>
+  </div>
+  <div class="photo-guidance-description-list" data-description-list>
+    {% for description in options %}
+    <div class="photo-guidance-description-row" data-description-row>
+      <span class="photo-guidance-description-number" data-description-number>{{ loop.index }}</span>
+      <input type="text" name="{{ name }}" value="{{ description }}" maxlength="1000" dir="auto" aria-label="{{ t('ui.standard.description.number', number=loop.index) }}">
+      <button class="btn btn-quiet btn-sm" type="button" data-remove-description>{{ t('ui.remove') }}</button>
+    </div>
+    {% else %}
+    <div class="photo-guidance-description-row" data-description-row>
+      <span class="photo-guidance-description-number" data-description-number>1</span>
+      <input type="text" name="{{ name }}" maxlength="1000" dir="auto" aria-label="{{ t('ui.standard.description.number', number=1) }}">
+      <button class="btn btn-quiet btn-sm" type="button" data-remove-description>{{ t('ui.remove') }}</button>
+    </div>
+    {% endfor %}
+  </div>
+  <button class="btn btn-secondary btn-sm photo-guidance-add-description" type="button" data-add-description>+ {{ t('ui.add.description') }}</button>
+  <p class="hint">{{ t('ui.standard.descriptions.help') }}</p>
+</div>
+{% endmacro %}
+
+{% macro rule_form(rule=None) %}
+{% set before_options = rule.descriptions|selectattr('stage', 'equalto', 'before')|map(attribute='description')|list if rule else [] %}
+{% set after_options = rule.descriptions|selectattr('stage', 'equalto', 'after')|map(attribute='description')|list if rule else [] %}
+<form method="post" action="/projects/{{ project.id }}/photo-guidance/rules" class="photo-guidance-rule-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="rule_id" value="{{ rule.id if rule else '' }}">
+  <label class="choice photo-guidance-inline-toggle"><input type="checkbox" name="guidance_enabled" {{ 'checked' if (setting and setting.enabled) or (not setting and (rules or not rule)) }}><span><span class="choice-title">{{ t('ui.use.photo.guidance.in.data.entry') }}</span><span class="choice-help"><strong>{{ t('ui.project.wide.setting') }}</strong> {{ t('ui.photo.guidance.disabled.help') }}</span></span></label>
+  <div class="field">
+    <label>{{ t('ui.photo.guidance.profile.name') }} <span class="req">*</span></label>
+    <input name="profile_name" maxlength="160" required value="{{ rule.name if rule else '' }}" placeholder="{{ t('ui.photo.guidance.profile.example') }}">
+    <p class="hint">{{ t('ui.photo.guidance.profile.help') }}</p>
+  </div>
+  <div class="photo-guidance-stage-grid">
+    <fieldset class="photo-guidance-stage">
+      <legend>{{ t('ui.before.photos') }}</legend>
+      <div class="field"><label>{{ t('ui.photo.alert.optional') }}</label><textarea name="before_alert" maxlength="1000" rows="2" dir="auto">{{ rule.before_alert or '' if rule else '' }}</textarea><p class="hint">{{ t('ui.photo.alert.help') }}</p></div>
+      {{ description_editor('before_descriptions', before_options, 'before') }}
+      <div class="photo-guidance-technician-preview" data-guidance-preview="before">
+        <span class="photo-guidance-preview-label">{{ t('ui.technician.preview') }}</span>
+        <div class="photo-guidance-preview-control"><span class="photo-guidance-preview-alert" data-preview-alert hidden aria-hidden="true"></span><select data-preview-select disabled><option>{{ t('ui.select.standard.description') }}</option></select></div>
+      </div>
+    </fieldset>
+    <fieldset class="photo-guidance-stage">
+      <legend>{{ t('ui.after.photos') }}</legend>
+      <div class="field"><label>{{ t('ui.photo.alert.optional') }}</label><textarea name="after_alert" maxlength="1000" rows="2" dir="auto">{{ rule.after_alert or '' if rule else '' }}</textarea><p class="hint">{{ t('ui.photo.alert.help') }}</p></div>
+      {{ description_editor('after_descriptions', after_options, 'after') }}
+      <div class="photo-guidance-technician-preview" data-guidance-preview="after">
+        <span class="photo-guidance-preview-label">{{ t('ui.technician.preview') }}</span>
+        <div class="photo-guidance-preview-control"><span class="photo-guidance-preview-alert" data-preview-alert hidden aria-hidden="true"></span><select data-preview-select disabled><option>{{ t('ui.select.standard.description') }}</option></select></div>
+      </div>
+    </fieldset>
+  </div>
+  <div class="actions-row">
+    <button class="btn btn-primary btn-sm">{{ t('ui.save.guidance.rule') }}</button>
+    {% if rule %}<button class="btn btn-danger btn-sm" type="submit" formaction="/projects/{{ project.id }}/photo-guidance/rules/{{ rule.id }}/delete" formnovalidate onclick="return confirm('{{ t('ui.delete.guidance.rule.confirm') }}');">{{ t('ui.delete') }}</button>{% endif %}
+  </div>
+</form>
+{% endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div><span class="eyebrow">{{ t('ui.main.project') }} · {{ project.name }}</span><h1>{{ t('ui.photo.guidance') }}</h1><p class="lede">{{ t('ui.photo.guidance.help') }}</p></div>
+  <a class="btn btn-secondary" href="/projects?project_id={{ project.id }}">{{ t('ui.back.to.project') }}</a>
+</div>
+
+<section class="card">
+  <div class="card-head"><div><h2>{{ t('ui.feature.status') }}</h2><p class="hint">{{ t('ui.photo.guidance.toggle.help') }}</p></div></div>
+  <div class="card-body">
+    <form method="post" action="/projects/{{ project.id }}/photo-guidance/settings">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label class="choice"><input type="checkbox" name="enabled" {{ 'checked' if (setting and setting.enabled) or (not setting and rules) }}><span><span class="choice-title">{{ t('ui.use.photo.guidance.in.data.entry') }}</span><span class="choice-help">{{ t('ui.photo.guidance.disabled.help') }}</span></span></label>
+      <div class="actions-row"><button class="btn btn-primary btn-sm">{{ t('ui.save.setting') }}</button></div>
+    </form>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head"><div><h2>{{ t('ui.add.guidance.rule') }}</h2><p class="hint">{{ t('ui.guidance.rule.help') }}</p></div></div>
+  <div class="card-body">{{ rule_form() }}</div>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>{{ t('ui.saved.guidance.rules') }}</h2><span class="badge">{{ rules|length }}</span></div>
+  <div class="card-body photo-guidance-rule-list">
+    {% for rule in rules %}
+    <details class="management-section">
+      {% set before_count = rule.descriptions|selectattr('stage', 'equalto', 'before')|list|length %}
+      {% set after_count = rule.descriptions|selectattr('stage', 'equalto', 'after')|list|length %}
+      <summary><strong>{{ rule.name }}</strong><span class="photo-guidance-rule-meta"><span class="muted">{{ t('ui.all.project.sites') }}</span><span class="tag">{{ t('ui.before.count', count=before_count) }}</span><span class="tag">{{ t('ui.after.count', count=after_count) }}</span></span></summary>
+      {{ rule_form(rule) }}
+    </details>
+    {% else %}<div class="empty-state"><h3>{{ t('ui.no.guidance.rules') }}</h3><p>{{ t('ui.add.first.guidance.rule.help') }}</p></div>{% endfor %}
+  </div>
+</section>
+{% endblock %}

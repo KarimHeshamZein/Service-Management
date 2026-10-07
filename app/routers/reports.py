@@ -4,14 +4,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..config import settings
+from ..access_control import require_permission
 from ..database import get_db
 from ..deps import get_current_user, require_admin
 from ..helpers import entity_id, render
+from ..logs_report_exports import build_technician_activity_xlsx
 from ..models import Site, User, UserRole
 from ..record_views import (
     count_record_views,
@@ -41,6 +43,8 @@ def reports_page(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if not user.is_customer:
+        require_permission(request, db, user, "records.view")
     filters = _filters(request)
     try:
         page = max(1, int(request.query_params.get("page", 1)))
@@ -74,6 +78,8 @@ def reports_pdf(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    if not user.is_customer:
+        require_permission(request, db, user, "reports.download")
     filters = _filters(request)
     total = count_record_views(
         db,
@@ -118,7 +124,7 @@ def reports_pdf(
         include_evidence=True,
     )
     include_quotation = (
-        user.can_access_pricing
+        bool(getattr(request.state, "can", lambda _key: False)("quotations.view"))
         and (request.query_params.get("include_quotation") or "").lower()
         in {"1", "true", "on", "yes"}
     )
@@ -182,38 +188,16 @@ def technician_audit_page(
     admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
-    technician_id = (request.query_params.get("technician_id") or "").strip()
-    technician = _selected_technician(db, technician_id)
-    filters = _audit_filters(request)
-    projects = list(db.scalars(select(Site).order_by(Site.name)))
-    project = (
-        db.get(Site, filters["project_id"])
-        if filters["project_id"] is not None
-        else None
-    )
-    if filters["project_id"] is not None and project is None:
-        filters["project_id"] = None
-        filters["project_id_value"] = ""
-    filters["project_name"] = project.name if project else ""
-    audit = (
-        load_technician_audit(db, admin, technician, filters)
-        if technician is not None
-        else None
-    )
-    return render(
-        request,
-        "technician_audit.html",
-        {
-            "active_nav": "technician_audit",
-            "technicians": _technical_users(db),
-            "technician_id": technician_id if technician else "",
-            "projects": projects,
-            "filters": filters,
-            "audit": audit,
-        },
-    )
+    target = "/management/logs-report?view=technician"
+    if request.url.query:
+        target += f"&searched=1&{request.url.query}"
+    return RedirectResponse(target, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
 
+@router.get(
+    "/management/logs-report/technician.pdf",
+    dependencies=[Depends(require_admin)],
+)
 @router.get(
     "/reports/technician-audit/pdf",
     dependencies=[Depends(require_admin)],
@@ -252,7 +236,10 @@ def technician_audit_pdf(
             request,
             "technician_audit.html",
             {
-                "active_nav": "technician_audit",
+                "active_nav": "logs_report",
+                "logs_report_view": "technician",
+                "searched": True,
+                "missing_technician": False,
                 "technicians": _technical_users(db),
                 "technician_id": str(technician.id),
                 "projects": list(db.scalars(select(Site).order_by(Site.name))),
@@ -284,6 +271,46 @@ def technician_audit_pdf(
             "Content-Disposition": (
                 f'attachment; filename="technician-activity-'
                 f'{technician.id}-{timestamp}.pdf"'
+            ),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.get(
+    "/management/logs-report/technician.xlsx",
+    dependencies=[Depends(require_admin)],
+)
+def technician_audit_excel(
+    request: Request,
+    admin: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    technician = _selected_technician(
+        db, (request.query_params.get("technician_id") or "").strip()
+    )
+    if technician is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Select a Technical user.")
+    filters = _audit_filters(request)
+    project = db.get(Site, filters["project_id"]) if filters["project_id"] else None
+    if filters["project_id"] and project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Project does not exist.")
+    filters["project_name"] = project.name if project else ""
+    total = technician_audit_record_count(db, admin, technician, filters)
+    if total > 5000:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "The export exceeds 5000 records. Narrow the filters and try again.",
+        )
+    audit = load_technician_audit(db, admin, technician, filters)
+    content = build_technician_activity_xlsx(audit, admin.full_name)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="technician-activity-{technician.id}-{timestamp}.xlsx"'
             ),
             "Cache-Control": "no-store",
         },

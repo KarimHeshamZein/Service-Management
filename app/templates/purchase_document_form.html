@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ t('ui.edit.purchase.document') if document else t('ui.add.purchase.document') }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><span class="eyebrow">{{ t('ui.purchase.documents') }}</span><h1>{{ t('ui.edit.purchase.document') if document else t('ui.add.purchase.document') }}</h1><p class="lede">{{ t('ui.purchase.documents.help') }}</p></div><a class="btn btn-secondary" href="/pricing/purchase-documents">{{ t('ui.back') }}</a></div>
+
+<form method="post" enctype="multipart/form-data" action="{{ '/pricing/purchase-documents/' ~ document.id ~ '/edit' if document else '/pricing/purchase-documents' }}" class="purchase-document-form" data-purchase-document-form data-remove-label="{{ t('ui.remove') }}" data-related-label="{{ t('ui.related.item') }}" data-unit-price-label="{{ t('ui.unit.price.optional') }}" data-currency-label="{{ t('ui.currency') }}" data-uncategorized-label="{{ t('ui.uncategorized') }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="selected_items_json" value='{{ selected_items_json|e }}' data-purchase-selected-json>
+  <section class="card">
+    <div class="section-head"><h2>1. {{ t('ui.purchase.document.archive') }}</h2></div>
+    <div class="form-grid three">
+      <div class="field"><label for="document-type">{{ t('ui.document.type') }} *</label><select id="document-type" name="document_type" required><option value="">{{ t('ui.choose') }}</option>{% for type in document_types %}<option value="{{ type.value }}" {{ 'selected' if document and document.document_type == type }}>{{ t('ui.purchase.invoice') if type.value == 'purchase_invoice' else t('ui.supplier.quotation') }}</option>{% endfor %}</select></div>
+      <div class="field"><label for="supplier-name">{{ t('ui.supplier.name') }} *</label><input id="supplier-name" name="supplier_name" maxlength="160" required value="{{ document.supplier_name if document else '' }}"></div>
+      <div class="field"><label for="document-date">{{ t('ui.document.date') }} *</label><input id="document-date" type="date" name="document_date" required value="{{ document.document_date.isoformat() if document else '' }}"></div>
+    </div>
+    <div class="field"><label for="purchase-files">{{ t('ui.purchase.files') }} {{ '' if document else '*' }}</label><input id="purchase-files" type="file" name="files" accept=".pdf,.jpg,.jpeg,.png,.webp" multiple {{ '' if document else 'required' }}><p class="hint">{{ t('ui.purchase.files.help') }}</p></div>
+    {% if document and document.files %}<div class="purchase-existing-files"><strong>{{ t('ui.existing.files') }}</strong>{% for file in document.files %}<a href="/pricing/purchase-documents/files/{{ file.id }}/download">{{ file.original_filename }} · {{ file.file_size|filesize }}</a>{% endfor %}</div>{% endif %}
+  </section>
+
+  <section class="card">
+    <div class="section-head"><div><h2>2. {{ t('ui.selected.items') }}</h2><p class="hint">{{ t('ui.unit.price.optional') }}</p></div><button type="button" class="btn btn-primary" data-open-purchase-picker>+ {{ t('ui.add.items') }}</button></div>
+    <div class="purchase-selected-items" data-purchase-selected-items><p class="empty-state" data-purchase-empty>{{ t('ui.no.items.selected') }}</p></div>
+  </section>
+  <div class="sticky-actions"><a class="btn btn-secondary" href="/pricing/purchase-documents">{{ t('ui.cancel') }}</a><button class="btn btn-primary" type="submit">{{ t('ui.save.purchase.document') }}</button></div>
+</form>
+
+<div class="modal-backdrop purchase-picker-backdrop" hidden data-purchase-picker>
+  <section class="modal purchase-picker-modal" role="dialog" aria-modal="true" aria-labelledby="purchase-picker-title">
+    <div class="modal-head"><div><span class="eyebrow">{{ t('ui.purchase.documents') }}</span><h2 id="purchase-picker-title">{{ t('ui.choose.items') }}</h2></div><button type="button" class="btn btn-quiet" data-close-purchase-picker>{{ t('ui.close') }}</button></div>
+    <div class="purchase-picker-toolbar"><button type="button" class="btn btn-secondary btn-sm" data-purchase-picker-back hidden>{{ t('ui.back') }}</button><input type="search" placeholder="{{ t('ui.search.items.by.name.or.model') }}" data-purchase-picker-search><span class="badge" data-purchase-selected-count>0</span></div>
+    <div class="purchase-picker-content" data-purchase-picker-content></div>
+    <div class="modal-actions"><button type="button" class="btn btn-primary" data-close-purchase-picker>{{ t('ui.done') }}</button></div>
+  </section>
+</div>
+<script type="application/json" id="purchase-catalogue-data">{{ catalogue|tojson }}</script>
+<script type="application/json" id="purchase-category-data">{{ category_tree|tojson }}</script>
+{% endblock %}

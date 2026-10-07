@@ -12,7 +12,16 @@ from .models import AuditEvent, User, utcnow
 from .security import current_user_id
 
 
-SENSITIVE_DOWNLOAD_MARKERS = ("/pdf", "/export", "/device-template", "/diagnostics", "/backup")
+SENSITIVE_DOWNLOAD_MARKERS = (
+    "/pdf",
+    "/excel",
+    "/export",
+    "/download",
+    "/preview",
+    "/device-template",
+    "/diagnostics",
+    "/backup",
+)
 ENTITY_ID_RE = re.compile(r"/(\d+)(?:/|$)")
 
 

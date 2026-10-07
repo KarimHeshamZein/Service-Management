@@ -18,6 +18,10 @@ from tests.conftest import ADMIN, LEADER_A, csrf_of, login, logout
 def test_admin_can_add_and_edit_a_project(client, db):
     login(client, *ADMIN)
     token = csrf_of(client, "/projects")
+    form_page = client.get("/projects")
+    assert 'class="project-form-shell"' in form_page.text
+    assert "Project identity and location" in form_page.text
+    assert 'placeholder="For example, Qiddiya Security Systems"' in form_page.text
 
     created = client.post(
         "/projects",
@@ -72,10 +76,7 @@ def test_new_main_project_gets_metadata_and_general_site_hierarchy(client, db):
     assert project.start_date == date(2026, 1, 10)
     assert project.end_date == date(2026, 12, 31)
     assert [sub_project.name for sub_project in project.sub_projects] == ["General"]
-    assert {
-        assignment.site_id
-        for assignment in project.sub_projects[0].site_assignments
-    } == {1, 2, 3}
+    assert project.sub_projects[0].site_assignments == []
 
     page = client.get(f"/projects?project_id={project.id}")
     assert page.status_code == 200
@@ -84,6 +85,7 @@ def test_new_main_project_gets_metadata_and_general_site_hierarchy(client, db):
     assert "Project type" in page.text
     assert "Created at" in page.text
     assert f'id="sub-project-{project.sub_projects[0].id}"' in page.text
+    assert 'data-deselect-sites' in page.text
 
 
 def test_main_project_rejects_invalid_date_range(client, db):
@@ -138,6 +140,7 @@ def test_sub_project_crud_and_site_assignment_preserve_role_boundaries(client, d
     assert {
         assignment.site_id for assignment in db.get(SubProject, sub_project.id).site_assignments
     } == {1, 3}
+
     rejected = client.post(
         f"/sub-projects/{sub_project.id}/sites",
         data={"site_ids": ["2", "999999"], "csrf_token": token},
@@ -147,6 +150,13 @@ def test_sub_project_crud_and_site_assignment_preserve_role_boundaries(client, d
     assert {
         assignment.site_id for assignment in db.get(SubProject, sub_project.id).site_assignments
     } == {1, 3}
+    cleared = client.post(
+        f"/sub-projects/{sub_project.id}/sites",
+        data={"csrf_token": token},
+    )
+    assert cleared.status_code == 303
+    db.expire_all()
+    assert db.get(SubProject, sub_project.id).site_assignments == []
 
     edited = client.post(
         f"/sub-projects/{sub_project.id}/edit",
@@ -316,6 +326,7 @@ def test_admin_can_create_a_technical_user_who_can_then_log_in(client, db):
             "username": "omar@test.local",
             "password": "Onsite@2026",
             "role": "technical",
+            "department_ids": "1",
             "phone": "+966 55 402 8811",
             "csrf_token": token,
         },
@@ -462,6 +473,7 @@ def test_admin_deletes_unused_catalog_rows_and_users(client, db):
             "username": "disposable@test.local",
             "password": "Disposable@2026",
             "role": "technical",
+            "department_ids": "1",
             "csrf_token": token,
         },
     )
@@ -487,11 +499,15 @@ def test_referenced_catalog_rows_are_deactivated_instead_of_deleted(client, db):
 
 def test_technical_users_have_edit_but_not_delete_catalog_controls(client, db):
     login(client, *LEADER_A)
-    for path in ("/projects", "/sites", "/service-types"):
-        page = client.get(path)
-        assert page.status_code == 200
-        assert ">Edit<" in page.text
-        assert "/delete" not in page.text
+    page = client.get("/projects")
+    assert page.status_code == 200
+    assert ">Edit<" in page.text
+    assert "/delete" not in page.text
+
+    # The global Site and Service Type catalogues are shared system setup,
+    # not Department resources. Keep those Administrator-only.
+    assert client.get("/sites").status_code == 403
+    assert client.get("/service-types").status_code == 403
 
     token = csrf_of(client, "/projects")
     for path in (

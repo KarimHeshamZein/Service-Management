@@ -14,7 +14,7 @@
   <form method="get" action="/reports/pdf" class="no-print record-export-actions">
     <input type="hidden" name="q" value="{{ filters.q }}">
     <input type="hidden" name="type" value="{{ filters.type }}">
-    {% if user.can_access_pricing %}<label class="choice-inline"><input type="checkbox" name="include_quotation" value="1"> {{ t('ui.include.quotation.id') }}</label>{% endif %}
+    {% if can('quotations.view') %}<label class="choice-inline"><input type="checkbox" name="include_quotation" value="1"> {{ t('ui.include.quotation.id') }}</label>{% endif %}
     <button class="btn btn-primary" type="submit">{{ t('ui.export.filtered.records.pdf') }}</button>
   </form>
 </div>

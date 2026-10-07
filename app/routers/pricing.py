@@ -1,25 +1,30 @@
 """Permission-controlled item catalogue and commercial quotations."""
 from __future__ import annotations
 
+import io
 import re
+import uuid
+import zipfile
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 from starlette.datastructures import UploadFile
 
 from ..config import settings as app_settings
+from ..access_control import available_departments, permission_allowed, require_permission
 from ..database import get_db
 from ..deps import require_admin, require_pricing_access
 from ..helpers import entity_id, flash, paginate, render
 from ..audit import set_audit_context
 from ..models import (
     CustomerProjectAssignment,
+    Department,
     DeviceCatalog,
     GeneralMaintenanceItem,
     GeneralMaintenanceRecord,
@@ -27,7 +32,9 @@ from ..models import (
     MaintenanceRecordItem,
     PricingItem,
     PricingItemCategory,
+    PricingCategoryUserAccess,
     PricingItemPriceHistory,
+    PricingItemUserAccess,
     PricingQuotation,
     PricingQuotationCharge,
     PricingQuotationInvoiceImage,
@@ -36,12 +43,29 @@ from ..models import (
     PricingQuotationSiteSurveyImage,
     PricingRelatedItem,
     PricingSettings,
+    ProjectTeamMember,
+    PurchaseDocument,
+    PurchaseDocumentItem,
+    QuotationTechnicalAttachment,
     Site,
+    TechnicalDocument,
+    TechnicalRecommendation,
     User,
+    UserDepartment,
     utcnow,
 )
 from ..pricing import money, next_quotation_number, percentage, quantity
+from ..pricing_categories import (
+    MAX_CATEGORY_DEPTH,
+    category_ancestry,
+    category_depth,
+    category_descendants,
+    category_path_label,
+    category_subtree_height,
+)
 from ..pricing_pdf import build_quotation_pdf
+from ..purchase_documents import delete_purchase_files
+from ..technical_documents import delete_quotation_technical_files, recommendation_pdf, resolve_technical_file
 from ..quotation_planner import (
     InstallationPlanSubmission,
     validate_installation_plan_submission,
@@ -85,6 +109,7 @@ MAX_QUOTATION_INVOICE_IMAGES = 20
 MAX_INVOICE_UPLOAD_BATCH = 10
 MAX_QUOTATION_SITE_SURVEY_IMAGES = 20
 MAX_SITE_SURVEY_UPLOAD_BATCH = 10
+MAX_PRICING_ITEM_DESCRIPTION_LENGTH = 5000
 LINE_ITEM_RE = re.compile(r"^line_(\d+)_item_id$")
 PLANNER_HTML = Path(__file__).resolve().parents[1] / "static" / "camera-planner.html"
 
@@ -269,6 +294,34 @@ def _sync_legacy_device(db: Session, item: PricingItem) -> None:
     device.updated_at = utcnow()
 
 
+def _remove_orphan_purchase_documents(
+    db: Session, document_ids: set[int]
+) -> list[str]:
+    """Delete a document only when deleting an Item removed its final link."""
+    if not document_ids:
+        return []
+    db.flush()
+    stored_keys: list[str] = []
+    for document_id in document_ids:
+        remaining = db.scalar(
+            select(func.count(PurchaseDocumentItem.id)).where(
+                PurchaseDocumentItem.document_id == document_id
+            )
+        ) or 0
+        if remaining:
+            continue
+        document = db.scalar(
+            select(PurchaseDocument)
+            .options(selectinload(PurchaseDocument.files))
+            .where(PurchaseDocument.id == document_id)
+        )
+        if document is None:
+            continue
+        stored_keys.extend(entry.storage_key for entry in document.files)
+        db.delete(document)
+    return stored_keys
+
+
 def _redirect(path: str) -> RedirectResponse:
     return RedirectResponse(path, status_code=status.HTTP_303_SEE_OTHER)
 
@@ -293,6 +346,34 @@ def _pricing_settings(db: Session) -> dict:
     return _settings_values(db.get(PricingSettings, 1))
 
 
+def _category_parent_error(
+    category: PricingItemCategory | None,
+    parent: PricingItemCategory | None,
+) -> str | None:
+    """Validate a move/create against the fixed Main/Sub/Sub-sub hierarchy."""
+    if parent is None:
+        new_depth = 0
+    else:
+        if category is not None and (
+            parent.id == category.id
+            or parent.id in {entry.id for entry in category_descendants(category)}
+        ):
+            return "A Category cannot be placed inside itself or one of its child folders."
+        if category is not None and parent.department_id != category.department_id:
+            return "The parent Category must belong to the same Department."
+        new_depth = category_depth(parent) + 1
+    subtree_height = category_subtree_height(category) if category is not None else 0
+    if new_depth + subtree_height > MAX_CATEGORY_DEPTH:
+        return "Pricing Categories support Main Category, Subcategory, and Sub-subcategory only."
+    return None
+
+
+def _category_item_count(category: PricingItemCategory) -> int:
+    return len(category.items) + sum(
+        _category_item_count(child) for child in category.children
+    )
+
+
 def _catalogue(db: Session, *, include_inactive: bool = False) -> list[PricingItem]:
     stmt = (
         select(PricingItem)
@@ -300,7 +381,9 @@ def _catalogue(db: Session, *, include_inactive: bool = False) -> list[PricingIt
             selectinload(PricingItem.related_items),
             selectinload(PricingItem.price_history),
             selectinload(PricingItem.related_items).selectinload(PricingRelatedItem.price_history),
-            selectinload(PricingItem.category),
+            selectinload(PricingItem.category)
+            .selectinload(PricingItemCategory.parent)
+            .selectinload(PricingItemCategory.parent),
         )
         .order_by(PricingItem.name, PricingItem.model)
     )
@@ -318,13 +401,26 @@ def _catalogue(db: Session, *, include_inactive: bool = False) -> list[PricingIt
 
 
 def _catalogue_payload(items: list[PricingItem]) -> list[dict]:
-    return [
-        {
+    payload: list[dict] = []
+    for item in items:
+        path = item.category_path
+        payload.append({
             "id": item.id,
             "label": item.display_label,
+            "description": item.description,
             "price": str(item.unit_price),
             "currency": item.currency,
             "category_name": item.category_name,
+            "category_id": item.category_id,
+            "main_category_name": item.main_category_name,
+            "subcategory_name": item.subcategory_name,
+            "subsubcategory_name": item.subsubcategory_name,
+            "parent_category_id": item.category.parent_id if item.category else None,
+            "category_path": [
+                {"id": entry.id, "name": entry.name}
+                for entry in path
+            ],
+            "category_path_label": category_path_label(item.category),
             "image_url": (
                 f"/pricing/items/{item.id}/image?size=thumb"
                 if item.image_storage_key
@@ -340,10 +436,166 @@ def _catalogue_payload(items: list[PricingItem]) -> list[dict]:
                 for related in item.related_items
                 if related.is_active
             ],
-        }
-        for item in items
-        if item.is_active
+        })
+    return payload
+
+
+def _catalogue_tree(catalogue: list[dict]) -> list[dict]:
+    roots: dict[str, dict] = {}
+    for item in catalogue:
+        path = item["category_path"]
+        if not path:
+            root = roots.setdefault(
+                "uncategorized",
+                {
+                    "key": "uncategorized",
+                    "name": "",
+                    "category_id": None,
+                    "parent_key": None,
+                    "depth": 0,
+                    "items": [],
+                    "children": {},
+                },
+            )
+            root["items"].append(item)
+            continue
+        children = roots
+        parent_key = None
+        node = None
+        for depth, category in enumerate(path):
+            key = f"category-{category['id']}"
+            node = children.setdefault(
+                key,
+                {
+                    "key": key,
+                    "name": category["name"],
+                    "category_id": category["id"],
+                    "parent_key": parent_key,
+                    "depth": depth,
+                    "items": [],
+                    "children": {},
+                },
+            )
+            children = node["children"]
+            parent_key = key
+        node["items"].append(item)
+
+    def finalize(node: dict) -> dict:
+        children = [finalize(child) for child in node["children"].values()]
+        children.sort(key=lambda entry: entry["name"].casefold())
+        node["children"] = children
+        node["item_count"] = len(node["items"]) + sum(
+            child["item_count"] for child in children
+        )
+        return node
+
+    result = [finalize(root) for root in roots.values()]
+    result.sort(key=lambda entry: (entry["key"] == "uncategorized", entry["name"].casefold()))
+    return result
+
+
+def _catalogue_folders(roots: list[dict]) -> list[dict]:
+    folders: list[dict] = []
+    pending = list(roots)
+    while pending:
+        folder = pending.pop(0)
+        folders.append(folder)
+        pending[0:0] = folder["children"]
+    return folders
+
+
+def _department_folder_rows(
+    db: Session,
+    user: User,
+    *,
+    permission_key: str,
+    model,
+) -> list[dict]:
+    """Return only workspaces where this user may open the requested Pricing module."""
+    departments = [
+        department
+        for department in available_departments(db, user)
+        if permission_allowed(db, user, department.id, permission_key)
     ]
+    department_ids = [department.id for department in departments]
+    counts = dict(
+        db.execute(
+            select(model.department_id, func.count(model.id))
+            .where(model.department_id.in_(department_ids))
+            .group_by(model.department_id)
+            .execution_options(include_all_departments=True)
+        ).all()
+    ) if department_ids and user.is_admin else {}
+    return [
+        {
+            "department": department,
+            "count": int(counts.get(department.id, 0)) if user.is_admin else None,
+        }
+        for department in departments
+    ]
+
+
+def _move_linked_item_resources(
+    db: Session,
+    *,
+    items: list[PricingItem],
+    target_department: Department,
+) -> None:
+    """Move item-owned resources while refusing to split a shared purchase document."""
+    item_ids = {item.id for item in items}
+    related = [entry for item in items for entry in item.related_items]
+    related_ids = {entry.id for entry in related}
+    document_ids = set(db.scalars(
+        select(PurchaseDocumentItem.document_id).where(or_(
+            PurchaseDocumentItem.pricing_item_id.in_(item_ids),
+            PurchaseDocumentItem.related_item_id.in_(related_ids),
+        ))
+    )) if item_ids else set()
+    documents = list(db.scalars(
+        select(PurchaseDocument)
+        .where(PurchaseDocument.id.in_(document_ids))
+        .options(selectinload(PurchaseDocument.item_links))
+    )) if document_ids else []
+    for document in documents:
+        outside_link = any(
+            (link.pricing_item_id is not None and link.pricing_item_id not in item_ids)
+            or (link.related_item_id is not None and link.related_item_id not in related_ids)
+            for link in document.item_links
+        )
+        if outside_link:
+            raise ValueError(
+                f'Purchase document from "{document.supplier_name}" is shared with an Item outside this move. '
+                "Move the Items together or separate that document first."
+            )
+
+    for item in items:
+        item.department_id = target_department.id
+    for entry in related:
+        entry.department_id = target_department.id
+    for document in documents:
+        document.department_id = target_department.id
+    if item_ids or related_ids:
+        technical_filter = or_(
+            TechnicalDocument.pricing_item_id.in_(item_ids),
+            TechnicalDocument.related_item_id.in_(related_ids),
+        )
+        for document in db.scalars(select(TechnicalDocument).where(technical_filter)):
+            document.department_id = target_department.id
+        recommendation_filter = or_(
+            TechnicalRecommendation.pricing_item_id.in_(item_ids),
+            TechnicalRecommendation.related_item_id.in_(related_ids),
+        )
+        for recommendation in db.scalars(
+            select(TechnicalRecommendation).where(recommendation_filter)
+        ):
+            recommendation.department_id = target_department.id
+    if item_ids:
+        db.execute(delete(PricingItemUserAccess).where(PricingItemUserAccess.item_id.in_(item_ids)))
+
+
+def _move_target(db: Session, target_department_id: int | None) -> Department | None:
+    target = db.get(Department, target_department_id) if target_department_id else None
+    return target if target and target.is_active else None
 
 
 def _item_context(
@@ -351,25 +603,64 @@ def _item_context(
     user: User,
     *,
     q: str = "",
+    category: str = "",
 ) -> dict:
     term = q.strip()
+    category_key = category.strip()
+    categories = list(
+        db.scalars(
+            select(PricingItemCategory)
+            .options(
+                selectinload(PricingItemCategory.items),
+                selectinload(PricingItemCategory.parent).selectinload(
+                    PricingItemCategory.parent
+                ),
+                selectinload(PricingItemCategory.children).selectinload(
+                    PricingItemCategory.children
+                ),
+                selectinload(PricingItemCategory.user_access),
+            )
+            .order_by(PricingItemCategory.name)
+        )
+    )
+    selected_category = None
+    if category_key and category_key != "uncategorized":
+        selected_category_id = entity_id(category_key)
+        selected_category = next(
+            (entry for entry in categories if entry.id == selected_category_id),
+            None,
+        )
+        if selected_category is None:
+            raise HTTPException(status_code=404, detail="Item category not found")
     stmt = (
         select(PricingItem)
         .options(
             selectinload(PricingItem.related_items).selectinload(
                 PricingRelatedItem.price_history
             ),
-            selectinload(PricingItem.category),
+            selectinload(PricingItem.category)
+            .selectinload(PricingItemCategory.parent)
+            .selectinload(PricingItemCategory.parent),
             selectinload(PricingItem.price_history),
         )
         .order_by(PricingItem.is_active.desc(), PricingItem.name, PricingItem.model)
     )
+    if category_key == "uncategorized":
+        stmt = stmt.where(PricingItem.category_id.is_(None))
+    elif selected_category is not None:
+        category_ids = [selected_category.id]
+        if term:
+            category_ids.extend(
+                child.id for child in category_descendants(selected_category)
+            )
+        stmt = stmt.where(PricingItem.category_id.in_(category_ids))
     if term:
         like = f"%{term}%"
         stmt = stmt.where(
             or_(
                 PricingItem.name.ilike(like),
                 PricingItem.model.ilike(like),
+                PricingItem.description.ilike(like),
                 PricingItem.category.has(PricingItemCategory.name.ilike(like)),
             )
         )
@@ -405,33 +696,109 @@ def _item_context(
         "quoted_main_history": quoted_main,
         "quoted_related_history": quoted_related,
         "active_items": _catalogue(db),
-        "categories": list(
-            db.scalars(
-                select(PricingItemCategory)
-                .options(selectinload(PricingItemCategory.items))
-                .order_by(PricingItemCategory.name)
-            )
+        "categories": categories,
+        "root_categories": [entry for entry in categories if entry.parent_id is None],
+        "root_category_item_counts": {
+            entry.id: _category_item_count(entry)
+            for entry in categories
+            if entry.parent_id is None
+        },
+        "category_item_counts": {
+            entry.id: _category_item_count(entry)
+            for entry in categories
+        },
+        "selected_child_categories": (
+            selected_category.children if selected_category else []
         ),
+        "category_parent_options": [
+            entry for entry in categories
+            if category_depth(entry) < MAX_CATEGORY_DEPTH
+        ],
+        "category_depths": {
+            entry.id: category_depth(entry) for entry in categories
+        },
+        "category_valid_parent_ids": {
+            entry.id: {
+                candidate.id
+                for candidate in categories
+                if _category_parent_error(entry, candidate) is None
+            }
+            for entry in categories
+        },
         "q": term,
+        "selected_category": selected_category,
+        "selected_category_key": category_key,
+        "show_category_overview": not term and not category_key,
+        "uncategorized_count": db.scalar(
+            select(func.count(PricingItem.id)).where(PricingItem.category_id.is_(None))
+        ) or 0,
         "currency": _pricing_settings(db)["currency"],
         "currencies": CURRENCIES,
         "can_delete": user.is_admin,
+        "department_options": (
+            list(available_departments(db, user)) if user.is_admin else []
+        ),
+        "department_users": list(
+            db.scalars(
+                select(User)
+                .join(UserDepartment, UserDepartment.user_id == User.id)
+                .where(
+                    UserDepartment.department_id == db.info.get("department_id"),
+                    User.is_active.is_(True),
+                )
+                .order_by(User.full_name)
+            )
+        ),
+        "category_access": {
+            entry.id: {grant.user_id for grant in entry.user_access}
+            for entry in categories
+        },
     }
 
 
 @router.get("")
 def pricing_root(user: User = Depends(require_pricing_access)):
-    return _redirect("/pricing/quotations")
+    return _redirect("/pricing/quotations/departments")
 
 
 @router.get("/items")
 def items_page(
     request: Request,
     q: str = "",
+    category: str = "",
+    prefill_name: str = "",
+    prefill_model: str = "",
+    source: str = "",
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
-    return render(request, "pricing_items.html", _item_context(db, user, q=q))
+    context = _item_context(db, user, q=q, category=category)
+    context.update({
+        "prefill_name": prefill_name.strip()[:160],
+        "prefill_model": prefill_model.strip()[:120],
+        "prefill_from_evaluation": source == "product_evaluation",
+    })
+    return render(request, "pricing_items.html", context)
+
+
+@router.get("/items/departments")
+def item_department_folders(
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    rows = _department_folder_rows(
+        db,
+        user,
+        permission_key="pricing_items.view",
+        model=PricingItem,
+    )
+    return render(request, "pricing_department_folders.html", {
+        "active_nav": "pricing_items",
+        "rows": rows,
+        "kind": "items",
+        "next_url": "/pricing/items",
+    })
 
 
 @router.post("/categories")
@@ -440,22 +807,59 @@ async def create_category(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "pricing_items.manage")
     form = await request.form()
     if _csrf_error(request, form.get("csrf_token")):
         return _redirect("/pricing/items")
     name = str(form.get("name") or "").strip()
+    parent_id = entity_id(str(form.get("parent_category_id") or ""))
+    parent = db.get(PricingItemCategory, parent_id) if parent_id else None
     if not name:
         flash(request, "Enter a category name.", "error")
         return _redirect("/pricing/items")
+    if parent_id and parent is None:
+        flash(request, "Choose an existing Category.", "error")
+        return _redirect("/pricing/items")
+    parent_error = _category_parent_error(None, parent)
+    if parent_error:
+        flash(request, parent_error, "error")
+        return _redirect("/pricing/items")
     clash = db.scalar(
         select(PricingItemCategory).where(
-            func.lower(PricingItemCategory.name) == name.lower()
+            PricingItemCategory.parent_id == (parent.id if parent else None),
+            func.lower(PricingItemCategory.name) == name.lower(),
         )
     )
     if clash:
         flash(request, f"Category “{clash.name}” already exists.", "error")
         return _redirect("/pricing/items")
-    db.add(PricingItemCategory(name=name))
+    visibility = str(form.get("visibility") or "department")
+    if visibility not in {"department", "selected_users"}:
+        visibility = "department"
+    category = PricingItemCategory(
+        name=name,
+        parent=parent,
+        visibility=visibility,
+        created_by_id=user.id,
+    )
+    if visibility == "selected_users":
+        requested_ids = {
+            parsed for raw in form.getlist("category_user_ids")
+            if (parsed := entity_id(str(raw))) is not None
+        }
+        valid_ids = set(
+            db.scalars(
+                select(UserDepartment.user_id).where(
+                    UserDepartment.department_id == db.info.get("department_id"),
+                    UserDepartment.user_id.in_(requested_ids),
+                )
+            )
+        )
+        category.user_access = [
+            PricingCategoryUserAccess(user_id=member_id, granted_by_id=user.id)
+            for member_id in valid_ids
+        ]
+    db.add(category)
     db.commit()
     flash(request, f"Category “{name}” created.")
     return _redirect("/pricing/items")
@@ -468,20 +872,31 @@ async def edit_category(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "pricing_items.manage")
     form = await request.form()
     if _csrf_error(request, form.get("csrf_token")):
         return _redirect("/pricing/items")
     category = db.get(PricingItemCategory, category_id)
     name = str(form.get("name") or "").strip()
+    parent_id = entity_id(str(form.get("parent_category_id") or ""))
     if category is None:
         flash(request, "That category no longer exists.", "error")
         return _redirect("/pricing/items")
     if not name:
         flash(request, "Enter a category name.", "error")
         return _redirect("/pricing/items")
+    parent = db.get(PricingItemCategory, parent_id) if parent_id else None
+    if parent_id and parent is None:
+        flash(request, "Choose an existing Category.", "error")
+        return _redirect("/pricing/items")
+    parent_error = _category_parent_error(category, parent)
+    if parent_error:
+        flash(request, parent_error, "error")
+        return _redirect("/pricing/items")
     clash = db.scalar(
         select(PricingItemCategory).where(
             PricingItemCategory.id != category.id,
+            PricingItemCategory.parent_id == (parent.id if parent else None),
             func.lower(PricingItemCategory.name) == name.lower(),
         )
     )
@@ -489,19 +904,38 @@ async def edit_category(
         flash(request, f"Category “{clash.name}” already exists.", "error")
         return _redirect("/pricing/items")
     category.name = name
+    category.parent = parent
+    visibility = str(form.get("visibility") or "department")
+    category.visibility = visibility if visibility in {"department", "selected_users"} else "department"
+    category.user_access.clear()
+    if category.visibility == "selected_users":
+        requested_ids = {
+            parsed for raw in form.getlist("category_user_ids")
+            if (parsed := entity_id(str(raw))) is not None
+        }
+        valid_ids = set(
+            db.scalars(
+                select(UserDepartment.user_id).where(
+                    UserDepartment.department_id == db.info.get("department_id"),
+                    UserDepartment.user_id.in_(requested_ids),
+                )
+            )
+        )
+        category.user_access.extend(
+            PricingCategoryUserAccess(user_id=member_id, granted_by_id=user.id)
+            for member_id in valid_ids
+        )
     category.updated_at = utcnow()
     db.commit()
     flash(request, "Item category updated.")
     return _redirect("/pricing/items")
 
 
-@router.post(
-    "/categories/{category_id}/delete",
-    dependencies=[Depends(require_admin)],
-)
+@router.post("/categories/{category_id}/delete", dependencies=[Depends(require_admin)])
 async def delete_category(
     category_id: int,
     request: Request,
+    user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     form = await request.form()
@@ -518,11 +952,78 @@ async def delete_category(
             "error",
         )
         return _redirect("/pricing/items")
+    if category.children:
+        flash(
+            request,
+            "Delete or move its child Categories before deleting this folder.",
+            "error",
+        )
+        return _redirect("/pricing/items")
     name = category.name
     db.delete(category)
     db.commit()
     flash(request, f"Category “{name}” deleted.")
     return _redirect("/pricing/items")
+
+
+@router.post("/categories/{category_id}/move-department", dependencies=[Depends(require_admin)])
+async def move_category_department(
+    category_id: int,
+    request: Request,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    category = db.get(PricingItemCategory, category_id)
+    target = _move_target(db, entity_id(str(form.get("target_department_id") or "")))
+    if category is None or target is None:
+        flash(request, "Choose an existing active Department.", "error")
+        return _redirect("/pricing/items")
+    if target.id == category.department_id:
+        flash(request, "The Category is already in that Department.", "error")
+        return _redirect("/pricing/items")
+    target_clash = db.scalar(
+        select(PricingItemCategory)
+        .where(
+            PricingItemCategory.department_id == target.id,
+            PricingItemCategory.parent_id.is_(None),
+            func.lower(PricingItemCategory.name) == category.name.lower(),
+        )
+        .execution_options(include_all_departments=True)
+    )
+    if target_clash:
+        flash(request, f'The target Department already has a Main Category named "{category.name}".', "error")
+        return _redirect("/pricing/items")
+    categories = [category, *category_descendants(category)]
+    items = [item for entry in categories for item in entry.items]
+    source_department_id = category.department_id
+    try:
+        _move_linked_item_resources(db, items=items, target_department=target)
+        if category.parent_id is not None:
+            category.parent = None
+        for entry in categories:
+            entry.department_id = target.id
+            entry.user_access.clear()
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        flash(request, str(exc), "error")
+        return _redirect("/pricing/items")
+    set_audit_context(
+        request,
+        action="pricing_category_department_moved",
+        entity_type="pricing_item_category",
+        entity_id=category.id,
+        entity_label=category.name,
+        changes={
+            "department_id": {"before": source_department_id, "after": target.id},
+            "items_moved": len(items),
+        },
+    )
+    flash(request, f'Category "{category.name}" and its Items moved to {target.name}.')
+    return _redirect("/pricing/items/departments")
 
 
 @router.post("/items")
@@ -531,11 +1032,13 @@ async def create_item(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "pricing_items.manage")
     form = await request.form()
     if _csrf_error(request, form.get("csrf_token")):
         return _redirect("/pricing/items")
     name = str(form.get("name") or "").strip()
     model = str(form.get("model") or "").strip()
+    description = str(form.get("description") or "").strip()
     unit_price = money(form.get("unit_price"))
     currency = _currency(form.get("currency"), _pricing_settings(db)["currency"])
     service_enabled = (
@@ -549,6 +1052,13 @@ async def create_item(
     image = form.get("image")
     if not name:
         flash(request, "Enter the main item name.", "error")
+        return _redirect("/pricing/items")
+    if len(description) > MAX_PRICING_ITEM_DESCRIPTION_LENGTH:
+        flash(
+            request,
+            f"Keep the item description under {MAX_PRICING_ITEM_DESCRIPTION_LENGTH} characters.",
+            "error",
+        )
         return _redirect("/pricing/items")
     if unit_price is None or currency is None:
         flash(request, "Enter a valid non-negative item price.", "error")
@@ -575,10 +1085,12 @@ async def create_item(
     item = PricingItem(
         name=name,
         model=model,
+        description=description,
         unit_price=unit_price,
         currency=currency,
         service_enabled=service_enabled,
         category=category,
+        created_by_id=user.id,
     )
     _sync_legacy_device(db, item)
     if stored:
@@ -613,12 +1125,14 @@ async def edit_item(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "pricing_items.manage")
     form = await request.form()
     if _csrf_error(request, form.get("csrf_token")):
         return _redirect("/pricing/items")
     item = db.get(PricingItem, item_id)
     name = str(form.get("name") or "").strip()
     model = str(form.get("model") or "").strip()
+    description = str(form.get("description") or "").strip()
     unit_price = money(form.get("unit_price"))
     image = form.get("image")
     if item is None:
@@ -635,6 +1149,13 @@ async def edit_item(
     category = db.get(PricingItemCategory, category_id) if category_id else None
     if not name or unit_price is None or currency is None:
         flash(request, "Enter a valid item name and non-negative price.", "error")
+        return _redirect("/pricing/items")
+    if len(description) > MAX_PRICING_ITEM_DESCRIPTION_LENGTH:
+        flash(
+            request,
+            f"Keep the item description under {MAX_PRICING_ITEM_DESCRIPTION_LENGTH} characters.",
+            "error",
+        )
         return _redirect("/pricing/items")
     if raw_category_id and category is None:
         flash(request, "Choose an existing item category.", "error")
@@ -672,8 +1193,10 @@ async def edit_item(
             return _redirect("/pricing/items")
     old_keys = (item.image_storage_key, item.image_thumbnail_key)
     old_price, old_currency = item.unit_price, item.currency
+    old_description = item.description
     item.name = name
     item.model = model
+    item.description = description
     item.unit_price = unit_price
     item.currency = currency
     item.service_enabled = service_enabled
@@ -703,6 +1226,8 @@ async def edit_item(
     changes = {}
     if old_price != unit_price or old_currency != currency:
         changes["price"] = {"before": f"{old_price} {old_currency}", "after": f"{unit_price} {currency}"}
+    if old_description != description:
+        changes["description"] = {"before": old_description, "after": description}
     set_audit_context(request, action="update", entity_type="pricing_item", entity_id=item.id, entity_label=item.display_label, changes=changes)
     if stored:
         delete_stored(*old_keys)
@@ -710,15 +1235,14 @@ async def edit_item(
     return _redirect("/pricing/items")
 
 
-@router.post(
-    "/items/{item_id}/toggle",
-    dependencies=[Depends(require_admin)],
-)
+@router.post("/items/{item_id}/toggle")
 async def toggle_item(
     item_id: int,
     request: Request,
+    user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "pricing_items.manage")
     form = await request.form()
     if _csrf_error(request, form.get("csrf_token")):
         return _redirect("/pricing/items")
@@ -734,13 +1258,62 @@ async def toggle_item(
     return _redirect("/pricing/items")
 
 
-@router.post(
-    "/items/{item_id}/delete",
-    dependencies=[Depends(require_admin)],
-)
+@router.post("/items/{item_id}/move-department", dependencies=[Depends(require_admin)])
+async def move_item_department(
+    item_id: int,
+    request: Request,
+    user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    item = db.get(PricingItem, item_id)
+    target = _move_target(db, entity_id(str(form.get("target_department_id") or "")))
+    if item is None or target is None:
+        flash(request, "Choose an existing active Department.", "error")
+        return _redirect("/pricing/items")
+    if target.id == item.department_id:
+        flash(request, "The Item is already in that Department.", "error")
+        return _redirect("/pricing/items")
+    clash = db.scalar(
+        select(PricingItem)
+        .where(
+            PricingItem.department_id == target.id,
+            func.lower(PricingItem.name) == item.name.lower(),
+            func.lower(PricingItem.model) == item.model.lower(),
+        )
+        .execution_options(include_all_departments=True)
+    )
+    if clash:
+        flash(request, f'The target Department already has "{item.display_label}".', "error")
+        return _redirect("/pricing/items")
+    source_department_id = item.department_id
+    try:
+        _move_linked_item_resources(db, items=[item], target_department=target)
+        item.category = None
+        db.commit()
+    except ValueError as exc:
+        db.rollback()
+        flash(request, str(exc), "error")
+        return _redirect("/pricing/items")
+    set_audit_context(
+        request,
+        action="pricing_item_department_moved",
+        entity_type="pricing_item",
+        entity_id=item.id,
+        entity_label=item.display_label,
+        changes={"department_id": {"before": source_department_id, "after": target.id}},
+    )
+    flash(request, f'Item "{item.display_label}" moved to {target.name} as Uncategorized.')
+    return _redirect("/pricing/items/departments")
+
+
+@router.post("/items/{item_id}/delete", dependencies=[Depends(require_admin)])
 async def delete_item(
     item_id: int,
     request: Request,
+    user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     form = await request.form()
@@ -752,9 +1325,24 @@ async def delete_item(
         return _redirect("/pricing/items")
     label = item.display_label
     stored_keys = (item.image_storage_key, item.image_thumbnail_key)
+    related_ids = [related.id for related in item.related_items]
+    purchase_document_ids = set(
+        db.scalars(
+            select(PurchaseDocumentItem.document_id).where(
+                or_(
+                    PurchaseDocumentItem.pricing_item_id == item.id,
+                    PurchaseDocumentItem.related_item_id.in_(related_ids),
+                )
+            )
+        )
+    )
     db.delete(item)
+    purchase_storage_keys = _remove_orphan_purchase_documents(
+        db, purchase_document_ids
+    )
     db.commit()
     delete_stored(*stored_keys)
+    delete_purchase_files(*purchase_storage_keys)
     flash(request, f"Pricing item “{label}” deleted. Quotations keep their snapshots.")
     return _redirect("/pricing/items")
 
@@ -766,6 +1354,7 @@ async def remove_item_image(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "pricing_items.manage")
     form = await request.form()
     if _csrf_error(request, form.get("csrf_token")):
         return _redirect("/pricing/items")
@@ -818,6 +1407,7 @@ async def create_related_item(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "pricing_items.manage")
     form = await request.form()
     if _csrf_error(request, form.get("csrf_token")):
         return _redirect("/pricing/items")
@@ -874,6 +1464,7 @@ async def edit_related_item(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "pricing_items.manage")
     form = await request.form()
     if _csrf_error(request, form.get("csrf_token")):
         return _redirect("/pricing/items")
@@ -924,15 +1515,14 @@ async def edit_related_item(
     return _redirect("/pricing/items")
 
 
-@router.post(
-    "/related-items/{related_id}/toggle",
-    dependencies=[Depends(require_admin)],
-)
+@router.post("/related-items/{related_id}/toggle")
 async def toggle_related_item(
     related_id: int,
     request: Request,
+    user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "pricing_items.manage")
     form = await request.form()
     if _csrf_error(request, form.get("csrf_token")):
         return _redirect("/pricing/items")
@@ -947,13 +1537,11 @@ async def toggle_related_item(
     return _redirect("/pricing/items")
 
 
-@router.post(
-    "/related-items/{related_id}/delete",
-    dependencies=[Depends(require_admin)],
-)
+@router.post("/related-items/{related_id}/delete", dependencies=[Depends(require_admin)])
 async def delete_related_item(
     related_id: int,
     request: Request,
+    user: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     form = await request.form()
@@ -964,8 +1552,19 @@ async def delete_related_item(
         flash(request, "That related item no longer exists.", "error")
         return _redirect("/pricing/items")
     name = related.name
+    purchase_document_ids = set(
+        db.scalars(
+            select(PurchaseDocumentItem.document_id).where(
+                PurchaseDocumentItem.related_item_id == related.id
+            )
+        )
+    )
     db.delete(related)
+    purchase_storage_keys = _remove_orphan_purchase_documents(
+        db, purchase_document_ids
+    )
     db.commit()
+    delete_purchase_files(*purchase_storage_keys)
     flash(request, f"Related item “{name}” deleted. Quotations keep their snapshots.")
     return _redirect("/pricing/items")
 
@@ -990,6 +1589,13 @@ def _quotation_or_404(db: Session, quotation_id: int) -> PricingQuotation:
     )
     if quotation is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Quotation not found.")
+    allowed_projects = db.info.get("project_ids_by_module", {}).get("quotations", set())
+    if (
+        not db.info.get("is_admin")
+        and quotation.created_by_id != db.info.get("user_id")
+        and quotation.project_id not in allowed_projects
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Quotation not found.")
     return quotation
 
 
@@ -1001,6 +1607,7 @@ def quotations_page(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.view")
     term = q.strip()
     stmt = _quotation_query().order_by(
         PricingQuotation.quotation_date.desc(),
@@ -1016,6 +1623,14 @@ def quotations_page(
             )
         )
     count_stmt = select(func.count(PricingQuotation.id))
+    if not user.is_admin:
+        allowed_projects = request.state.project_ids["quotations"]
+        visibility = or_(
+            PricingQuotation.created_by_id == user.id,
+            PricingQuotation.project_id.in_(allowed_projects),
+        )
+        stmt = stmt.where(visibility)
+        count_stmt = count_stmt.where(visibility)
     if term:
         count_stmt = count_stmt.where(
             or_(
@@ -1039,7 +1654,7 @@ def quotations_page(
             "quotations": visible,
             "page_info": page_info,
             "q": term,
-            "can_delete": user.is_admin,
+            "can_delete": request.state.can("quotations.delete"),
         },
     )
 
@@ -1101,16 +1716,22 @@ def _quotation_form_context(
             .order_by(User.full_name, CustomerProjectAssignment.project_id)
         )
     )
+    catalogue = _catalogue_payload(items)
+    catalogue_tree = _catalogue_tree(catalogue)
     return {
         "active_nav": "pricing_quotations",
         "quotation": quotation,
-        "projects": list(
-            db.scalars(
-                select(Site).where(Site.is_active.is_(True)).order_by(Site.name)
-            )
-        ),
+        "projects": list(db.scalars(
+            select(Site).where(
+                Site.is_active.is_(True),
+                Site.id.in_(request.state.project_ids["quotations"])
+                if not request.state.user.is_admin else Site.id.is_not(None),
+            ).order_by(Site.name)
+        )),
         "quotation_addressees": addressees,
-        "catalogue": _catalogue_payload(items),
+        "catalogue": catalogue,
+        "catalogue_tree": catalogue_tree,
+        "catalogue_folders": _catalogue_folders(catalogue_tree),
         "form": form or _default_quote_form(db),
         "errors": errors or {},
         "form_token": form_token or issue_form_token(request),
@@ -1204,7 +1825,6 @@ def _build_quote_lines(
         if line_currency is None:
             errors[f"line_{index}_currency"] = "Choose SAR or USD."
             continue
-
         active_related_ids = {
             related.id
             for related in item.related_items
@@ -1232,6 +1852,7 @@ def _build_quote_lines(
             source_item_id=item.id,
             item_name=item.name,
             item_model=item.model,
+            item_description=item.description,
             quantity=line_quantity,
             unit_price=line_price,
             currency=line_currency,
@@ -1502,6 +2123,11 @@ def _validate_quote_header(form, db: Session) -> tuple[dict, dict]:
         valid_until = None
     if project is None or not project.is_active:
         errors["project_id"] = "Choose an active Project."
+    elif (
+        not db.info.get("is_admin")
+        and project.id not in db.info.get("project_ids_by_module", {}).get("quotations", set())
+    ):
+        errors["project_id"] = "Choose a Project assigned to you for quotations."
     if addressee_source == "project":
         addressee_name = project.contact_person if project else ""
         addressee_phone = project.contact_number if project else ""
@@ -1606,6 +2232,7 @@ def new_quotation_page(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.create")
     return render(
         request,
         "pricing_quotation_form.html",
@@ -1619,6 +2246,7 @@ async def create_quotation(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.create")
     form = await request.form()
     submitted = _submitted_lines(form)
     form_values = _quote_form_values(form, submitted)
@@ -1802,6 +2430,26 @@ async def create_quotation(
     return _redirect(f"/pricing/quotations/{quotation.id}")
 
 
+@router.get("/quotations/departments")
+def quotation_department_folders(
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    rows = _department_folder_rows(
+        db,
+        user,
+        permission_key="quotations.view",
+        model=PricingQuotation,
+    )
+    return render(request, "pricing_department_folders.html", {
+        "active_nav": "pricing_quotations",
+        "rows": rows,
+        "kind": "quotations",
+        "next_url": "/pricing/quotations",
+    })
+
+
 @router.get("/quotations/{quotation_id}")
 def quotation_detail(
     quotation_id: int,
@@ -1809,16 +2457,84 @@ def quotation_detail(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.view")
     quotation = _quotation_or_404(db, quotation_id)
+    main_ids = {line.source_item_id for line in quotation.lines if line.source_item_id}
+    related_ids = {related.source_related_item_id for line in quotation.lines for related in line.related_items if related.source_related_item_id}
+    technical_documents = list(db.scalars(select(TechnicalDocument).where(or_(TechnicalDocument.pricing_item_id.in_(main_ids), TechnicalDocument.related_item_id.in_(related_ids))).order_by(TechnicalDocument.title))) if main_ids or related_ids else []
+    recommendations = list(db.scalars(select(TechnicalRecommendation).where(or_(TechnicalRecommendation.pricing_item_id.in_(main_ids), TechnicalRecommendation.related_item_id.in_(related_ids))))) if main_ids or related_ids else []
+    technical_attachments = list(db.scalars(select(QuotationTechnicalAttachment).where(QuotationTechnicalAttachment.quotation_id == quotation.id).order_by(QuotationTechnicalAttachment.position)))
     return render(
         request,
         "pricing_quotation_detail.html",
         {
             "active_nav": "pricing_quotations",
             "quotation": quotation,
-            "can_delete": user.is_admin,
+            "can_delete": request.state.can("quotations.delete"),
+            "technical_documents": technical_documents,
+            "technical_recommendations": recommendations,
+            "technical_attachments": technical_attachments,
         },
     )
+
+
+@router.post("/quotations/{quotation_id}/technical-attachments")
+async def save_quotation_technical_attachments(quotation_id: int, request: Request, user: User = Depends(require_pricing_access), db: Session = Depends(get_db)):
+    require_permission(request, db, user, "quotations.edit")
+    quotation = _quotation_or_404(db, quotation_id)
+    form = await request.form()
+    if not csrf_valid(request, str(form.get("csrf_token") or "")):
+        flash(request, "Your form expired. Refresh and try again.", "error")
+        return _redirect(f"/pricing/quotations/{quotation_id}")
+    document_ids = {entity_id(value) for value in form.getlist("technical_document_ids")} - {None}
+    recommendation_keys = {str(value) for value in form.getlist("technical_recommendations")}
+    old_technical_keys = list(db.scalars(select(QuotationTechnicalAttachment.storage_key).where(QuotationTechnicalAttachment.quotation_id == quotation_id)))
+    db.query(QuotationTechnicalAttachment).filter(QuotationTechnicalAttachment.quotation_id == quotation_id).delete(synchronize_session=False)
+    position = 0
+    target_names = {("main", line.source_item_id): line.item_name for line in quotation.lines if line.source_item_id}
+    target_names.update({("related", rel.source_related_item_id): rel.item_name for line in quotation.lines for rel in line.related_items if rel.source_related_item_id})
+    for document_id in sorted(document_ids):
+        document = db.get(TechnicalDocument, document_id)
+        if not document: continue
+        kind, target_id = ("main", document.pricing_item_id) if document.pricing_item_id else ("related", document.related_item_id)
+        if (kind, target_id) not in target_names: continue
+        source = resolve_technical_file(document.storage_key)
+        suffix = source.suffix.lower()
+        key = f"quotation-technical/{quotation_id}/{uuid.uuid4().hex}{suffix}"
+        target = app_settings.upload_dir / key; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(source.read_bytes())
+        db.add(QuotationTechnicalAttachment(quotation_id=quotation_id, source_document_id=document.id, target_kind=kind, target_id=target_id, item_name=target_names[(kind,target_id)], title=document.title, storage_key=key, original_filename=document.original_filename, content_type=document.content_type, position=position)); position += 1
+    for key in sorted(recommendation_keys):
+        try: kind, raw_id = key.split(":", 1); target_id = int(raw_id)
+        except (ValueError, TypeError): continue
+        if (kind,target_id) not in target_names: continue
+        rec = db.scalar(select(TechnicalRecommendation).where((TechnicalRecommendation.pricing_item_id == target_id) if kind == "main" else (TechnicalRecommendation.related_item_id == target_id)))
+        if rec: db.add(QuotationTechnicalAttachment(quotation_id=quotation_id, target_kind=kind, target_id=target_id, item_name=target_names[(kind,target_id)], title="Technical Recommendation", recommendation_snapshot=rec.recommendation, position=position)); position += 1
+    db.commit()
+    delete_quotation_technical_files(*old_technical_keys)
+    set_audit_context(request, action="update", entity_type="quotation_technical_package", entity_id=quotation_id, entity_label=quotation.quotation_number, changes={"attachments":position})
+    flash(request, "Quotation technical package updated.")
+    return _redirect(f"/pricing/quotations/{quotation_id}")
+
+
+@router.get("/quotations/{quotation_id}/technical-package.zip")
+def quotation_technical_package(quotation_id: int, request: Request, user: User = Depends(require_pricing_access), db: Session = Depends(get_db)):
+    require_permission(request, db, user, "quotations.view")
+    quotation = _quotation_or_404(db, quotation_id)
+    attachments = list(db.scalars(select(QuotationTechnicalAttachment).where(QuotationTechnicalAttachment.quotation_id == quotation_id).order_by(QuotationTechnicalAttachment.position)))
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(f"{quotation.quotation_number}.pdf", build_quotation_pdf(quotation))
+        for attachment in attachments:
+            folder = re.sub(r"[^A-Za-z0-9._ -]", "_", attachment.item_name).strip() or "Item"
+            if attachment.storage_key:
+                path = (app_settings.upload_dir / attachment.storage_key).resolve()
+                if path.is_file() and app_settings.upload_dir.resolve() in path.parents:
+                    archive.writestr(f"Technical Information/{folder}/{attachment.original_filename}", path.read_bytes())
+            elif attachment.recommendation_snapshot:
+                payload = recommendation_pdf(item_name=attachment.item_name, model="", category="", recommendation=attachment.recommendation_snapshot, updated_at=attachment.created_at)
+                archive.writestr(f"Technical Information/{folder}/Technical Recommendation.pdf", payload)
+    set_audit_context(request, action="download_package", entity_type="quotation_technical_package", entity_id=quotation.id, entity_label=quotation.quotation_number)
+    return Response(output.getvalue(), media_type="application/zip", headers={"Content-Disposition":f'attachment; filename="{quotation.quotation_number}-technical-package.zip"'})
 
 
 @router.get("/quotations/{quotation_id}/pdf")
@@ -1828,6 +2544,7 @@ def quotation_pdf(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.view")
     quotation = _quotation_or_404(db, quotation_id)
     return Response(
         content=build_quotation_pdf(quotation),
@@ -1845,10 +2562,12 @@ def quotation_pdf(
 def quotation_line_image(
     quotation_id: int,
     line_id: int,
+    request: Request,
     size: str = "original",
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.view")
     quotation = _quotation_or_404(db, quotation_id)
     line = next((candidate for candidate in quotation.lines if candidate.id == line_id), None)
     if line is None or not line.image_storage_key:
@@ -1873,10 +2592,12 @@ def quotation_line_image(
 def quotation_installation_plan_image(
     quotation_id: int,
     asset: str,
+    request: Request,
     size: str = "original",
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.view")
     quotation = _quotation_or_404(db, quotation_id)
     if asset == "background":
         original = quotation.plan_background_storage_key
@@ -1909,6 +2630,7 @@ async def upload_quotation_invoice_images(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.edit")
     quotation = _quotation_or_404(db, quotation_id)
     form = await request.form()
     return_path = (
@@ -1986,6 +2708,7 @@ async def upload_quotation_site_survey_images(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.edit")
     quotation = _quotation_or_404(db, quotation_id)
     form = await request.form()
     return_path = (
@@ -2063,10 +2786,12 @@ async def upload_quotation_site_survey_images(
 def quotation_site_survey_image(
     quotation_id: int,
     image_id: int,
+    request: Request,
     size: str = "original",
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.view")
     quotation = _quotation_or_404(db, quotation_id)
     survey_image = next(
         (
@@ -2104,6 +2829,7 @@ async def delete_quotation_site_survey_image(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.edit")
     quotation = _quotation_or_404(db, quotation_id)
     form = await request.form()
     return_path = (
@@ -2136,10 +2862,12 @@ async def delete_quotation_site_survey_image(
 def quotation_invoice_image(
     quotation_id: int,
     invoice_id: int,
+    request: Request,
     size: str = "original",
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.view")
     quotation = _quotation_or_404(db, quotation_id)
     invoice = next(
         (candidate for candidate in quotation.invoice_images if candidate.id == invoice_id),
@@ -2167,6 +2895,7 @@ async def delete_quotation_invoice_image(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.edit")
     quotation = _quotation_or_404(db, quotation_id)
     form = await request.form()
     return_path = (
@@ -2252,6 +2981,7 @@ def edit_quotation_page(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.edit")
     quotation = _quotation_or_404(db, quotation_id)
     return render(
         request,
@@ -2272,6 +3002,7 @@ async def edit_quotation(
     user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.edit")
     quotation = _quotation_or_404(db, quotation_id)
     old_audit_values = {
         "project": quotation.project_name,
@@ -2401,15 +3132,14 @@ async def edit_quotation(
     return _redirect(f"/pricing/quotations/{quotation.id}")
 
 
-@router.post(
-    "/quotations/{quotation_id}/delete",
-    dependencies=[Depends(require_admin)],
-)
+@router.post("/quotations/{quotation_id}/delete")
 async def delete_quotation(
     quotation_id: int,
     request: Request,
+    user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.delete")
     form = await request.form()
     if _csrf_error(request, form.get("csrf_token")):
         return _redirect("/pricing/quotations")
@@ -2436,6 +3166,8 @@ def _delete_quotations(
         stored_keys.extend(_stored_plan_keys(quotation))
         stored_keys.extend(_invoice_image_keys(quotation))
         stored_keys.extend(_site_survey_image_keys(quotation))
+        technical_keys = list(db.scalars(select(QuotationTechnicalAttachment.storage_key).where(QuotationTechnicalAttachment.quotation_id == quotation.id)))
+        delete_quotation_technical_files(*technical_keys)
     # Maintenance is intentionally independent from commercial quotations.
     # Clear both the live link and the old snapshot for records created before
     # that separation; the records and any saved reports remain untouched.
@@ -2454,14 +3186,13 @@ def _delete_quotations(
     return stored_keys
 
 
-@router.post(
-    "/quotations/bulk-delete",
-    dependencies=[Depends(require_admin)],
-)
+@router.post("/quotations/bulk-delete")
 async def bulk_delete_quotations(
     request: Request,
+    user: User = Depends(require_pricing_access),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "quotations.delete")
     form = await request.form()
     if _csrf_error(request, form.get("csrf_token")):
         return _redirect("/pricing/quotations")
@@ -2482,7 +3213,13 @@ async def bulk_delete_quotations(
 
     quotations = list(
         db.scalars(
-            _quotation_query().where(PricingQuotation.id.in_(quotation_ids))
+            _quotation_query().where(
+                PricingQuotation.id.in_(quotation_ids),
+                *([] if user.is_admin else [or_(
+                    PricingQuotation.created_by_id == user.id,
+                    PricingQuotation.project_id.in_(request.state.project_ids["quotations"]),
+                )]),
+            )
         )
     )
     if len(quotations) != len(quotation_ids):

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ 'الأقسام' if lang == 'ar' else 'Departments' }} · {{ settings.app_name }}{% endblock %}
+{% block topbar_title %}{{ 'الأقسام' if lang == 'ar' else 'Departments' }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">{{ 'الإدارة' if lang == 'ar' else 'Management' }}</span>
+    <h1>{{ 'مساحات عمل الأقسام' if lang == 'ar' else 'Department workspaces' }}</h1>
+    <p class="lede">{{ 'افصل البيانات والصلاحيات، مع السماح للفرق المختارة بالتعاون في المشروع نفسه.' if lang == 'ar' else 'Isolate libraries and permissions while selected cross-department teams collaborate on Projects.' }}</p>
+  </div>
+  <button class="btn btn-primary" type="button" data-toggle-target="create-department" aria-expanded="false">{{ 'إنشاء قسم' if lang == 'ar' else 'Create Department' }}</button>
+</div>
+
+<section class="card workspace-form-card" id="create-department" hidden>
+  <div class="card-head"><div><h2>{{ 'قسم جديد' if lang == 'ar' else 'New Department' }}</h2><p>{{ 'القسم مساحة عمل مستقلة. تُحدد الصلاحيات لكل مستخدم من صفحة المستخدمين.' if lang == 'ar' else 'A Department is an isolated workspace. Permissions are assigned directly from each User’s access page.' }}</p></div></div>
+  <form method="post" action="/departments" class="card-body">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="grid cols-2">
+      <div class="field"><label for="department-name">{{ 'اسم القسم' if lang == 'ar' else 'Department name' }} <span class="req">*</span></label><input id="department-name" name="name" required maxlength="160" placeholder="{{ 'مثال: الصيانة' if lang == 'ar' else 'For example, Maintenance' }}"></div>
+      <div class="field"><label for="department-code">{{ 'الكود المختصر' if lang == 'ar' else 'Short code' }} <span class="req">*</span></label><input id="department-code" name="code" required maxlength="40" placeholder="{{ 'مثال: MAINT' if lang == 'ar' else 'For example, MAINT' }}"></div>
+      <div class="field"><label for="department-description">{{ 'الوصف' if lang == 'ar' else 'Description' }}</label><textarea id="department-description" name="description" rows="3"></textarea></div>
+    </div>
+    <div class="form-actions"><button class="btn btn-primary" type="submit">{{ 'إنشاء القسم' if lang == 'ar' else 'Create Department' }}</button><button class="btn btn-secondary" type="button" data-toggle-target="create-department">{{ t('ui.cancel') }}</button></div>
+  </form>
+</section>
+
+<div class="workspace-card-grid">
+  {% for department in departments %}
+  <a class="workspace-card" href="/departments/{{ department.id }}">
+    <span class="workspace-card-icon" aria-hidden="true">{{ department.code[:2] }}</span>
+    <span class="workspace-card-content"><strong>{{ department.name }}</strong><small>{{ department.code }} · {{ department.memberships|length }} {{ 'مستخدم' if lang == 'ar' else 'members' }}</small><span>{{ department.description or ('قسم General للحفاظ على البيانات الحالية' if lang == 'ar' and department.is_general else 'Existing data compatibility workspace' if department.is_general else '') }}</span></span>
+    <span class="badge {{ 'ok' if department.is_active else 'muted' }}">{{ 'نشط' if department.is_active and lang == 'ar' else 'Active' if department.is_active else 'غير نشط' if lang == 'ar' else 'Inactive' }}</span>
+  </a>
+  {% else %}
+  <div class="empty-state"><h2>{{ 'لا توجد أقسام' if lang == 'ar' else 'No Departments yet' }}</h2></div>
+  {% endfor %}
+</div>
+{% endblock %}

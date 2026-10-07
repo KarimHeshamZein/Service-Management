@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, Depends, Form, Request, status
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -22,30 +22,36 @@ from ..account_recovery import (
     send_verification_email,
     valid_email,
 )
+from ..access_control import permission_allowed, project_access_allowed, require_permission
+from ..audit import set_audit_context
 from ..database import get_db
 from ..deps import require_admin, require_catalog_manager
 from ..helpers import entity_id, flash, render
+from ..notifications import create_notification, deliver_notification_email
 from ..models import (
     CustomerProjectAssignment,
     AdminRecoveryContact,
     DeviceCatalog,
+    Department,
     GeneralMaintenanceRecord,
     InstalledDevice,
     InstallationRecord,
     InstallationRecordSite,
     MaintenanceRecord,
+    ProjectTeamMember,
     ServiceType,
     Site,
     SubProject,
     SubProjectSite,
     User,
+    UserDepartment,
     UserRole,
     WorkSite,
     utcnow,
 )
 from ..security import csrf_valid, hash_password
 
-router = APIRouter(dependencies=[Depends(require_catalog_manager)])
+router = APIRouter()
 
 MIN_PASSWORD_LENGTH = 8
 MAX_DESCRIPTION_LENGTH = 5000
@@ -116,7 +122,11 @@ def _project_record_usage(db: Session) -> dict[int, int]:
 
 
 @router.get("/_legacy/sites")
-def sites_page(request: Request, q: str = "", db: Session = Depends(get_db)):
+def sites_page(
+    request: Request,
+    q: str = "",
+    user: User = Depends(require_catalog_manager),
+):
     return _redirect("/projects")
 
 
@@ -128,8 +138,10 @@ def projects_page(
     request: Request,
     q: str = "",
     project_id: str = "",
+    user: User = Depends(require_catalog_manager),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "projects.view")
     stmt = (
         select(Site)
         .options(
@@ -139,11 +151,17 @@ def projects_page(
             selectinload(Site.sub_projects)
             .selectinload(SubProject.site_assignments)
             .selectinload(SubProjectSite.site),
+            selectinload(Site.photo_guidance_setting),
+            selectinload(Site.photo_guidance_profiles),
+            selectinload(Site.team_memberships).selectinload(ProjectTeamMember.user),
+            selectinload(Site.team_memberships).selectinload(ProjectTeamMember.department),
         )
         .order_by(Site.is_active.desc(), Site.name)
     )
     term = q.strip()
-    projects = list(db.scalars(stmt))
+    if not user.is_admin:
+        stmt = stmt.where(Site.id.in_(request.state.project_ids["projects"]))
+    projects = list(db.scalars(stmt).unique())
     if term:
         needle = term.casefold()
         projects = [
@@ -190,6 +208,17 @@ def projects_page(
             ),
             "q": term,
             "usage": _project_record_usage(db),
+            "project_member_choices": list(
+                db.scalars(
+                    select(UserDepartment)
+                    .options(selectinload(UserDepartment.user), selectinload(UserDepartment.department))
+                    .join(User, User.id == UserDepartment.user_id)
+                    .where(User.is_active.is_(True))
+                    .order_by(User.full_name, UserDepartment.department_id)
+                )
+            ) if permission_allowed(
+                db, user, db.info["department_id"], "projects.manage_team"
+            ) else [],
         },
     )
 
@@ -206,8 +235,10 @@ def create_project(
     start_date: str = Form(""),
     end_date: str = Form(""),
     csrf_token: str = Form(""),
+    creator: User = Depends(require_catalog_manager),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, creator, "projects.create")
     if (bad := _guard(request, csrf_token, "/projects")):
         return bad
     name, address = name.strip(), address.strip()
@@ -237,15 +268,129 @@ def create_project(
         end_date=ends_on,
     )
     general = SubProject(name="General")
-    general.site_assignments = [
-        SubProjectSite(site_id=site.id)
-        for site in db.scalars(select(WorkSite).order_by(WorkSite.id))
-    ]
     project.sub_projects.append(general)
     db.add(project)
+    db.flush()
+    active_department = getattr(request.state, "department", None)
+    if active_department is not None and db.get(UserDepartment, (creator.id, active_department.id)):
+        project.team_memberships.append(
+            ProjectTeamMember(
+                user_id=creator.id,
+                department_id=active_department.id,
+                project_role="Project creator",
+                can_view_records=True,
+                can_create_records=True,
+                can_view_reports=True,
+                can_view_quotations=True,
+                can_manage_tasks=True,
+                added_by_id=creator.id,
+            )
+        )
     db.commit()
     flash(request, f"Project “{name}” added.")
     return _redirect("/projects")
+
+
+@router.post("/projects/{project_id}/team")
+def add_project_team_member(
+    project_id: int,
+    request: Request,
+    membership: str = Form(""),
+    project_role: str = Form(""),
+    csrf_token: str = Form(""),
+    admin: User = Depends(require_catalog_manager),
+    db: Session = Depends(get_db),
+):
+    require_permission(request, db, admin, "projects.manage_team")
+    back = f"/projects?project_id={project_id}"
+    if (bad := _guard(request, csrf_token, back)):
+        return bad
+    try:
+        user_raw, department_raw = membership.split(":", 1)
+    except ValueError:
+        user_raw = department_raw = ""
+    user_id, department_id = entity_id(user_raw), entity_id(department_raw)
+    project = db.get(Site, project_id)
+    target_membership = db.get(UserDepartment, (user_id, department_id)) if user_id and department_id else None
+    if project is None or target_membership is None:
+        flash(request, "Choose a valid user and Department membership.", "error")
+        return _redirect(back)
+    team_member = db.get(ProjectTeamMember, (project.id, target_membership.user_id))
+    is_new_member = team_member is None
+    if team_member is None:
+        team_member = ProjectTeamMember(project_id=project.id, user_id=target_membership.user_id)
+        db.add(team_member)
+    team_member.department_id = target_membership.department_id
+    team_member.project_role = project_role.strip() or None
+    team_member.can_view_records = True
+    # Project membership is only the selected-resource list.  What the user
+    # may actually do is controlled by their direct permissions and module
+    # scope on the User Roles page.
+    team_member.can_create_records = True
+    team_member.can_view_reports = True
+    team_member.can_view_quotations = True
+    team_member.can_manage_tasks = True
+    team_member.added_by_id = admin.id
+    target_user = db.get(User, target_membership.user_id)
+    notification = None
+    if is_new_member and target_user is not None and target_user.id != admin.id:
+        notification = create_notification(
+            db,
+            user=target_user,
+            kind="project_team_added",
+            title=f"Added to Project {project.name}",
+            message=f"{admin.full_name} added you to the Project team.",
+            target_url=f"/projects?project_id={project.id}",
+            department_id=target_membership.department_id,
+        )
+    set_audit_context(
+        request,
+        action="project_team_member_added" if is_new_member else "project_team_member_updated",
+        entity_type="project_team_member",
+        entity_id=f"{project.id}:{target_membership.user_id}",
+        entity_label=f"{project.name} — {target_user.full_name if target_user else target_membership.user_id}",
+        changes={
+            "department_id": target_membership.department_id,
+            "project_role": team_member.project_role,
+            "selection_only": True,
+        },
+    )
+    db.commit()
+    if notification is not None and target_user is not None:
+        deliver_notification_email(db, notification, target_user)
+    flash(request, "Project team member saved.")
+    return _redirect(back)
+
+
+@router.post("/projects/{project_id}/team/{user_id}/remove")
+def remove_project_team_member(
+    project_id: int,
+    user_id: int,
+    request: Request,
+    csrf_token: str = Form(""),
+    admin: User = Depends(require_catalog_manager),
+    db: Session = Depends(get_db),
+):
+    require_permission(request, db, admin, "projects.manage_team")
+    back = f"/projects?project_id={project_id}"
+    if (bad := _guard(request, csrf_token, back)):
+        return bad
+    member = db.get(ProjectTeamMember, (project_id, user_id))
+    if member is not None:
+        project = db.get(Site, project_id)
+        target = db.get(User, user_id)
+        set_audit_context(
+            request,
+            action="project_team_member_removed",
+            entity_type="project_team_member",
+            entity_id=f"{project_id}:{user_id}",
+            entity_label=f"{project.name if project else project_id} — {target.full_name if target else user_id}",
+            changes={"removed": True, "department_id": member.department_id},
+        )
+        db.delete(member)
+        db.commit()
+        flash(request, "Project team member removed.")
+    return _redirect(back)
 
 
 @router.post("/projects/{project_id}/edit")
@@ -261,8 +406,12 @@ def edit_project(
     start_date: str = Form(""),
     end_date: str = Form(""),
     csrf_token: str = Form(""),
+    user: User = Depends(require_catalog_manager),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "projects.edit")
+    if not project_access_allowed(db, user, project_id, module_key="projects"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Project access denied")
     if (bad := _guard(request, csrf_token, "/projects")):
         return bad
     project = db.get(Site, project_id)
@@ -312,8 +461,12 @@ def create_sub_project(
     name: str = Form(""),
     description: str = Form(""),
     csrf_token: str = Form(""),
+    user: User = Depends(require_catalog_manager),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "projects.edit")
+    if not project_access_allowed(db, user, project_id, module_key="projects"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Project access denied")
     back = f"/projects?project_id={project_id}"
     if (bad := _guard(request, csrf_token, back)):
         return bad
@@ -350,9 +503,13 @@ def edit_sub_project(
     name: str = Form(""),
     description: str = Form(""),
     csrf_token: str = Form(""),
+    user: User = Depends(require_catalog_manager),
     db: Session = Depends(get_db),
 ):
     sub_project = db.get(SubProject, sub_project_id)
+    require_permission(request, db, user, "projects.edit")
+    if sub_project and not project_access_allowed(db, user, sub_project.project_id, module_key="projects"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Project access denied")
     back = f"/projects?project_id={sub_project.project_id}" if sub_project else "/projects"
     if (bad := _guard(request, csrf_token, back)):
         return bad
@@ -381,17 +538,20 @@ def edit_sub_project(
     return _redirect(back)
 
 
-@router.post(
-    "/sub-projects/{sub_project_id}/toggle",
-    dependencies=[Depends(require_admin)],
-)
+@router.post("/sub-projects/{sub_project_id}/toggle")
 def toggle_sub_project(
     sub_project_id: int,
     request: Request,
     csrf_token: str = Form(""),
+    user: User = Depends(require_catalog_manager),
     db: Session = Depends(get_db),
 ):
     sub_project = db.get(SubProject, sub_project_id)
+    require_permission(request, db, user, "projects.edit")
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator access required")
+    if sub_project and not project_access_allowed(db, user, sub_project.project_id, module_key="projects"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Project access denied")
     back = f"/projects?project_id={sub_project.project_id}" if sub_project else "/projects"
     if (bad := _guard(request, csrf_token, back)):
         return bad
@@ -405,17 +565,20 @@ def toggle_sub_project(
     return _redirect(back)
 
 
-@router.post(
-    "/sub-projects/{sub_project_id}/delete",
-    dependencies=[Depends(require_admin)],
-)
+@router.post("/sub-projects/{sub_project_id}/delete")
 def delete_sub_project(
     sub_project_id: int,
     request: Request,
     csrf_token: str = Form(""),
+    user: User = Depends(require_catalog_manager),
     db: Session = Depends(get_db),
 ):
     sub_project = db.get(SubProject, sub_project_id)
+    require_permission(request, db, user, "projects.edit")
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator access required")
+    if sub_project and not project_access_allowed(db, user, sub_project.project_id, module_key="projects"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Project access denied")
     back = f"/projects?project_id={sub_project.project_id}" if sub_project else "/projects"
     if (bad := _guard(request, csrf_token, back)):
         return bad
@@ -435,9 +598,13 @@ def delete_sub_project(
 async def assign_sub_project_sites(
     sub_project_id: int,
     request: Request,
+    user: User = Depends(require_catalog_manager),
     db: Session = Depends(get_db),
 ):
     sub_project = db.get(SubProject, sub_project_id)
+    require_permission(request, db, user, "projects.edit")
+    if sub_project and not project_access_allowed(db, user, sub_project.project_id, module_key="projects"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Project access denied")
     back = f"/projects?project_id={sub_project.project_id}" if sub_project else "/projects"
     form = await request.form()
     if (bad := _guard(request, str(form.get("csrf_token") or ""), back)):
@@ -463,16 +630,19 @@ async def assign_sub_project_sites(
     return _redirect(back)
 
 
-@router.post(
-    "/projects/{project_id}/toggle",
-    dependencies=[Depends(require_admin)],
-)
+@router.post("/projects/{project_id}/toggle")
 def toggle_project(
     project_id: int,
     request: Request,
     csrf_token: str = Form(""),
+    user: User = Depends(require_catalog_manager),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "projects.edit")
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator access required")
+    if not project_access_allowed(db, user, project_id, module_key="projects"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Project access denied")
     if (bad := _guard(request, csrf_token, "/projects")):
         return bad
     project = db.get(Site, project_id)
@@ -489,16 +659,19 @@ def toggle_project(
     return _redirect("/projects")
 
 
-@router.post(
-    "/projects/{project_id}/delete",
-    dependencies=[Depends(require_admin)],
-)
+@router.post("/projects/{project_id}/delete")
 def delete_project(
     project_id: int,
     request: Request,
     csrf_token: str = Form(""),
+    user: User = Depends(require_catalog_manager),
     db: Session = Depends(get_db),
 ):
+    require_permission(request, db, user, "projects.edit")
+    if not user.is_admin:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Administrator access required")
+    if not project_access_allowed(db, user, project_id, module_key="projects"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Project access denied")
     if (bad := _guard(request, csrf_token, "/projects")):
         return bad
     project = db.get(Site, project_id)
@@ -520,7 +693,7 @@ def delete_project(
 # ------------------------------------------------------------------ sites
 
 
-@router.get("/sites")
+@router.get("/sites", dependencies=[Depends(require_admin)])
 def work_sites_page(request: Request, q: str = "", db: Session = Depends(get_db)):
     stmt = select(WorkSite).order_by(WorkSite.is_active.desc(), WorkSite.name)
     term = q.strip()
@@ -547,7 +720,7 @@ def work_sites_page(request: Request, q: str = "", db: Session = Depends(get_db)
     )
 
 
-@router.post("/sites")
+@router.post("/sites", dependencies=[Depends(require_admin)])
 def create_work_site(
     request: Request,
     name: str = Form(""),
@@ -569,7 +742,7 @@ def create_work_site(
     return _redirect("/sites")
 
 
-@router.post("/sites/{site_id}/edit")
+@router.post("/sites/{site_id}/edit", dependencies=[Depends(require_admin)])
 def edit_work_site(
     site_id: int,
     request: Request,
@@ -654,7 +827,7 @@ def delete_work_site(
 # ---------------------------------------------------------- service types
 
 
-@router.get("/service-types")
+@router.get("/service-types", dependencies=[Depends(require_admin)])
 def services_page(request: Request, q: str = "", db: Session = Depends(get_db)):
     stmt = select(ServiceType).order_by(ServiceType.is_active.desc(), ServiceType.name)
     term = q.strip()
@@ -677,7 +850,7 @@ def services_page(request: Request, q: str = "", db: Session = Depends(get_db)):
     )
 
 
-@router.post("/service-types")
+@router.post("/service-types", dependencies=[Depends(require_admin)])
 def create_service(
     request: Request,
     name: str = Form(""),
@@ -703,7 +876,7 @@ def create_service(
     return _redirect("/service-types")
 
 
-@router.post("/service-types/{service_id}/edit")
+@router.post("/service-types/{service_id}/edit", dependencies=[Depends(require_admin)])
 def edit_service(
     service_id: int,
     request: Request,
@@ -780,7 +953,7 @@ def delete_service(
 # ---------------------------------------------------------------- devices
 
 
-@router.get("/devices")
+@router.get("/devices", dependencies=[Depends(require_admin)])
 def devices_page(request: Request, q: str = "", db: Session = Depends(get_db)):
     return _redirect("/pricing/items")
     stmt = select(DeviceCatalog).order_by(
@@ -818,7 +991,7 @@ def devices_page(request: Request, q: str = "", db: Session = Depends(get_db)):
     )
 
 
-@router.post("/devices")
+@router.post("/devices", dependencies=[Depends(require_admin)])
 def create_device(
     request: Request,
     name: str = Form(""),
@@ -858,7 +1031,7 @@ def create_device(
     return _redirect("/devices")
 
 
-@router.post("/devices/{device_id}/edit")
+@router.post("/devices/{device_id}/edit", dependencies=[Depends(require_admin)])
 def edit_device(
     device_id: int,
     request: Request,
@@ -989,6 +1162,7 @@ def users_page(request: Request, q: str = "", db: Session = Depends(get_db)):
             "q": term,
             "usage": usage,
             "recovery_contacts": recovery_contacts,
+            "departments": list(db.scalars(select(Department).where(Department.is_active.is_(True)).order_by(Department.name))),
         },
     )
 
@@ -1000,8 +1174,22 @@ def create_user(
     username: str = Form(""),
     password: str = Form(""),
     role: str = Form(UserRole.TECHNICAL.value),
+    email: str = Form(""),
+    department_ids: list[str] = Form(default=[]),
+    primary_department_id: str = Form(""),
     project_ids: list[str] = Form(default=[]),
     pricing_access: str = Form(""),
+    technical_documents_manage: str = Form(""),
+    wiring_diagrams_manage: str = Form(""),
+    store_access: str = Form(""),
+    store_receive: str = Form(""),
+    store_issue: str = Form(""),
+    store_transfer: str = Form(""),
+    store_custody_transfer: str = Form(""),
+    store_manage_items: str = Form(""),
+    store_manage_warehouses: str = Form(""),
+    store_adjust: str = Form(""),
+    store_reports: str = Form(""),
     phone: str = Form(""),
     csrf_token: str = Form(""),
     db: Session = Depends(get_db),
@@ -1038,6 +1226,31 @@ def create_user(
     if db.scalar(select(User).where(func.lower(User.username) == username.lower())):
         flash(request, f"“{username}” is already taken.", "error")
         return _redirect("/users")
+    clean_email = email.strip().lower()
+    if clean_email and not valid_email(clean_email):
+        flash(request, "Enter a valid email address.", "error")
+        return _redirect("/users")
+    if clean_email and db.scalar(select(User.id).where(func.lower(User.email) == clean_email)):
+        flash(request, "That email address is already in use.", "error")
+        return _redirect("/users")
+    selected_department_ids = {
+        parsed for value in department_ids if (parsed := entity_id(value)) is not None
+    }
+    if role_value != UserRole.CUSTOMER:
+        valid_department_ids = set(
+            db.scalars(
+                select(Department.id).where(
+                    Department.id.in_(selected_department_ids), Department.is_active.is_(True)
+                )
+            )
+        )
+        if not valid_department_ids:
+            flash(request, "Choose at least one active Department for this user.", "error")
+            return _redirect("/users")
+        parsed_primary_id = entity_id(primary_department_id)
+        primary_id = parsed_primary_id if parsed_primary_id in valid_department_ids else min(valid_department_ids)
+    else:
+        valid_department_ids, primary_id = set(), None
 
     new_user = User(
         full_name=full_name,
@@ -1045,9 +1258,21 @@ def create_user(
         password_hash=hash_password(password),
         role=role_value,
         phone=phone.strip() or None,
+        email=clean_email or None,
         pricing_access=(
             pricing_access == "1" and role_value == UserRole.TECHNICAL
         ),
+        technical_documents_manage=technical_documents_manage == "1" and role_value == UserRole.TECHNICAL,
+        wiring_diagrams_manage=wiring_diagrams_manage == "1" and role_value == UserRole.TECHNICAL,
+        store_access=store_access == "1" and role_value == UserRole.TECHNICAL,
+        store_receive=store_receive == "1" and role_value == UserRole.TECHNICAL,
+        store_issue=store_issue == "1" and role_value == UserRole.TECHNICAL,
+        store_transfer=store_transfer == "1" and role_value == UserRole.TECHNICAL,
+        store_custody_transfer=store_custody_transfer == "1" and role_value == UserRole.TECHNICAL,
+        store_manage_items=store_manage_items == "1" and role_value == UserRole.TECHNICAL,
+        store_manage_warehouses=store_manage_warehouses == "1" and role_value == UserRole.TECHNICAL,
+        store_adjust=store_adjust == "1" and role_value == UserRole.TECHNICAL,
+        store_reports=store_reports == "1" and role_value == UserRole.TECHNICAL,
     )
     if role_value == UserRole.CUSTOMER:
         new_user.customer_project_assignments = [
@@ -1055,8 +1280,19 @@ def create_user(
             for project in selected_projects
         ]
     db.add(new_user)
+    db.flush()
+    for department_id in valid_department_ids:
+        db.add(
+            UserDepartment(
+                user_id=new_user.id,
+                department_id=department_id,
+                is_primary=department_id == primary_id,
+            )
+        )
     db.commit()
-    flash(request, f"{role_value.label} “{full_name}” created.")
+    flash(request, f"{role_value.label} “{full_name}” created. Set the user's roles and permissions.")
+    if role_value != UserRole.CUSTOMER:
+        return _redirect(f"/users/{new_user.id}/access")
     return _redirect("/users")
 
 
@@ -1128,9 +1364,21 @@ def edit_user(
     request: Request,
     full_name: str = Form(""),
     username: str = Form(""),
+    email: str = Form(""),
     role: str = Form(""),
     project_ids: list[str] = Form(default=[]),
     pricing_access: str = Form(""),
+    technical_documents_manage: str = Form(""),
+    wiring_diagrams_manage: str = Form(""),
+    store_access: str = Form(""),
+    store_receive: str = Form(""),
+    store_issue: str = Form(""),
+    store_transfer: str = Form(""),
+    store_custody_transfer: str = Form(""),
+    store_manage_items: str = Form(""),
+    store_manage_warehouses: str = Form(""),
+    store_adjust: str = Form(""),
+    store_reports: str = Form(""),
     phone: str = Form(""),
     admin: User = Depends(require_admin),
     csrf_token: str = Form(""),
@@ -1152,6 +1400,16 @@ def edit_user(
     )
     if clash:
         flash(request, f"“{username.strip()}” is already taken.", "error")
+        return _redirect("/users")
+    clean_email = email.strip().lower()
+    if clean_email and not valid_email(clean_email):
+        flash(request, "Enter a valid email address.", "error")
+        return _redirect("/users")
+    email_clash = db.scalar(
+        select(User.id).where(func.lower(User.email) == clean_email, User.id != target.id)
+    ) if clean_email else None
+    if email_clash:
+        flash(request, "That email address is already in use.", "error")
         return _redirect("/users")
 
     try:
@@ -1180,10 +1438,22 @@ def edit_user(
     target.full_name = full_name.strip()
     target.username = username.strip()
     target.phone = phone.strip() or None
+    target.email = clean_email or None
     target.role = role_value
     target.pricing_access = (
         pricing_access == "1" and role_value == UserRole.TECHNICAL
     )
+    target.technical_documents_manage = technical_documents_manage == "1" and role_value == UserRole.TECHNICAL
+    target.wiring_diagrams_manage = wiring_diagrams_manage == "1" and role_value == UserRole.TECHNICAL
+    target.store_access = store_access == "1" and role_value == UserRole.TECHNICAL
+    target.store_receive = store_receive == "1" and role_value == UserRole.TECHNICAL
+    target.store_issue = store_issue == "1" and role_value == UserRole.TECHNICAL
+    target.store_transfer = store_transfer == "1" and role_value == UserRole.TECHNICAL
+    target.store_custody_transfer = store_custody_transfer == "1" and role_value == UserRole.TECHNICAL
+    target.store_manage_items = store_manage_items == "1" and role_value == UserRole.TECHNICAL
+    target.store_manage_warehouses = store_manage_warehouses == "1" and role_value == UserRole.TECHNICAL
+    target.store_adjust = store_adjust == "1" and role_value == UserRole.TECHNICAL
+    target.store_reports = store_reports == "1" and role_value == UserRole.TECHNICAL
     target.customer_project_assignments.clear()
     db.flush()
     if role_value == UserRole.CUSTOMER:

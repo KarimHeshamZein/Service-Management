@@ -23,6 +23,8 @@
           <input id="u-name" name="full_name" type="text" required maxlength="120" dir="auto"></div>
         <div class="field"><label for="u-username">{{ t('login.field.username') }} <span class="req">*</span></label>
           <input id="u-username" name="username" type="text" required maxlength="120" autocapitalize="none" spellcheck="false" dir="auto"></div>
+        <div class="field"><label for="u-email">{{ 'البريد الإلكتروني للإشعارات' if lang == 'ar' else 'Notification email' }}</label>
+          <input id="u-email" name="email" type="email" maxlength="254" autocomplete="email"><p class="hint">{{ 'اختياري. يعمل عند إعداد SMTP.' if lang == 'ar' else 'Optional. Used when SMTP is configured.' }}</p></div>
         <div class="field"><label for="u-password">{{ t('login.table.password') }} <span class="req">*</span></label>
           <input id="u-password" name="password" type="text" required minlength="8" autocomplete="new-password" dir="auto">
           <p class="hint">{{ t('ui.at.least.8.characters.share.it.with.the.user.and.ask.them') }}</p></div>
@@ -32,16 +34,13 @@
             <option value="customer">{{ t('user.role.customer') }}</option>
             <option value="admin">{{ t('user.role.admin') }}</option>
           </select></div>
-        <div class="field"><span class="field-label">{{ t('ui.additional.access') }}</span>
-          <label class="choice"><input type="checkbox" name="pricing_access" value="1"><span>{{ t('ui.pricing.access') }}</span></label>
-          <p class="hint">{{ t('ui.applies.to.technical.users.administrators.always.have.pricing.access') }}</p>
-        </div>
         <div class="field"><span class="field-label">{{ t('ui.assigned.projects') }}</span>
           <p class="hint">{{ t('ui.required.for.customer.accounts.and.ignored.for.other.roles') }}</p>
           {% for project in projects %}
           <label class="choice"><input type="checkbox" name="project_ids" value="{{ project.id }}"><span>{{ project.name }}</span></label>
           {% endfor %}
         </div>
+        <div class="field"><label for="u-department">{{ 'القسم الأساسي' if lang == 'ar' else 'Primary Department' }}</label><p class="hint">{{ 'مطلوب للمستخدم الداخلي. بعد الإنشاء ستفتح صفحة الصلاحيات لإضافة أقسام أخرى وتحديد المشاريع والصلاحيات.' if lang == 'ar' else 'Required for an internal user. After creation, the Roles page opens to add more Departments and select Projects and permissions.' }}</p><select id="u-department" name="department_ids"><option value="">{{ 'اختر القسم' if lang == 'ar' else 'Choose a Department' }}</option>{% for department in departments %}<option value="{{ department.id }}">{{ department.name }}</option>{% endfor %}</select></div>
         <div class="field"><label for="u-phone">{{ t('ui.phone.number') }}</label>
           <input id="u-phone" name="phone" type="tel" maxlength="40"></div>
       </div>
@@ -73,13 +72,14 @@
             <td class="num">{{ u.id }}</td>
             <td><strong>{{ u.full_name }}</strong></td>
             <td class="mono" style="font-size:.82rem;">{{ u.username }}</td>
-            <td>{{ t('user.role.' ~ u.role.value) }}{% if u.can_access_pricing %}<br><span class="badge note">{{ t('nav.group.pricing') }}</span>{% endif %}</td>
+            <td>{{ t('user.role.' ~ u.role.value) }}</td>
             <td class="mono" style="font-size:.82rem;">{{ u.phone or '—' }}</td>
             <td class="num">{{ usage.get(u.id, 0) }}</td>
             <td class="num">{{ u.created_at | date }}</td>
             <td>{{ ui.status_badge(u.is_active) }}</td>
             <td style="white-space:nowrap;">
               <button class="btn btn-quiet btn-sm" data-toggle-target="user-{{ u.id }}" aria-expanded="false">{{ t('ui.manage') }}</button>
+              {% if not u.is_customer %}<a class="btn btn-secondary btn-sm" href="/users/{{ u.id }}/access">{{ 'الأقسام والصلاحيات' if lang == 'ar' else 'Departments & access' }}</a>{% endif %}
               {% if u.id != user.id %}
               <form method="post" action="/users/{{ u.id }}/toggle" style="display:inline;">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -103,6 +103,7 @@
                     <input id="un{{ u.id }}" name="full_name" value="{{ u.full_name }}" required dir="auto"></div>
                   <div class="field"><label for="uu{{ u.id }}">{{ t('login.field.username') }} <span class="req">*</span></label>
                     <input id="uu{{ u.id }}" name="username" value="{{ u.username }}" required autocapitalize="none" spellcheck="false" dir="auto"></div>
+                  <div class="field"><label for="ue{{ u.id }}">{{ 'البريد الإلكتروني للإشعارات' if lang == 'ar' else 'Notification email' }}</label><input id="ue{{ u.id }}" name="email" type="email" value="{{ u.email or '' }}" maxlength="254"></div>
                   <div class="field"><label for="up{{ u.id }}">{{ t('ui.phone.number') }}</label>
                     <input id="up{{ u.id }}" name="phone" value="{{ u.phone or '' }}" dir="auto"></div>
                   <div class="field"><label for="ur{{ u.id }}">{{ t('ui.user.type') }}</label>
@@ -111,10 +112,6 @@
                       <option value="customer" {{ "selected" if u.role.value == "customer" }}>{{ t('user.role.customer') }}</option>
                       <option value="admin" {{ "selected" if u.role.value == "admin" }}>{{ t('user.role.admin') }}</option>
                     </select></div>
-                  <div class="field"><span class="field-label">{{ t('ui.additional.access') }}</span>
-                    <label class="choice"><input type="checkbox" name="pricing_access" value="1" {{ "checked" if u.pricing_access }}><span>{{ t('ui.pricing.access') }}</span></label>
-                    <p class="hint">{{ t('ui.applies.to.technical.users.administrators.always.have.pricing.access') }}</p>
-                  </div>
                   <div class="field"><span class="field-label">{{ t('ui.assigned.projects') }}</span>
                     <p class="hint">{{ t('ui.required.for.customer.accounts.and.ignored.for.other.roles') }}</p>
                     {% for project in projects %}

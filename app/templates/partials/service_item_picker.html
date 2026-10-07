@@ -11,9 +11,9 @@
       <h3>{{ category_group.grouper or t('ui.uncategorized') }}</h3>
       <div class="pricing-item-picker-category-grid">
       {% for item in category_group.list %}
-      <button type="button" class="pricing-item-picker-choice" data-service-item-choice data-item-value="{{ value_prefix }}{{ item.id }}" data-search-text="{{ (item.display_label ~ ' ' ~ item.category_name)|lower }}">
+      <button type="button" class="pricing-item-picker-choice" data-service-item-choice data-item-value="{{ value_prefix }}{{ item.id }}" data-search-text="{{ (item.display_label ~ ' ' ~ item.description ~ ' ' ~ item.category_name)|lower }}">
         {% if item.image_storage_key %}<img src="/service-items/{{ item.id }}/image?size=thumb" alt="">{% else %}<span class="pricing-item-picker-placeholder" aria-hidden="true">{{ item.name[:1] }}</span>{% endif %}
-        <span><strong>{{ item.display_label }}</strong></span>
+        <span><strong>{{ item.display_label }}</strong>{% if item.description %}<small dir="auto">{{ item.description|truncate(140) }}</small>{% endif %}</span>
       </button>
       {% endfor %}
       </div>

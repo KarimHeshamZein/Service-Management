@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}{{ target.full_name }} · {{ 'الصلاحيات' if lang == 'ar' else 'Access' }}{% endblock %}
+{% block topbar_title %}{{ 'صلاحيات المستخدم' if lang == 'ar' else 'User roles & permissions' }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><span class="eyebrow">{{ 'المستخدمون والصلاحيات' if lang == 'ar' else 'Users & permissions' }}</span><h1>{{ target.full_name }}</h1><p class="lede">{{ target.username }} · {{ target.role.value|title }}</p></div><a class="btn btn-secondary" href="/users">{{ 'العودة للمستخدمين' if lang == 'ar' else 'Back to users' }}</a></div>
+{% if target.is_admin %}<div class="alert info">{{ 'هذا الحساب Administrator وله صلاحية كاملة دائمًا. الأقسام تحدد مساحة العمل الافتراضية فقط.' if lang == 'ar' else 'This Administrator always has unrestricted access. Departments only determine the default workspace.' }}</div>{% else %}<div class="alert info">{{ 'الصلاحيات هنا خاصة بهذا المستخدم داخل كل قسم ولا تُورث من القسم. صلاحية الإنشاء تضمن له رؤية ما أنشأه وتقاريره، بينما أعمال الآخرين تحتاج نطاق مشاهدة.' if lang == 'ar' else 'Permissions are assigned directly to this user in each Department. Create access preserves visibility of the user’s own work and its reports; other users’ work requires a view scope.' }}</div>{% endif %}
+<form method="post" action="/users/{{ target.id }}/access" data-user-access-form>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="exclusive-accordion" data-exclusive-accordion>
+    {% for department in departments %}
+    {% set membership = (target.department_memberships|selectattr('department_id','equalto',department.id)|list|first) %}
+    <details class="settings-card" data-department-access-card>
+      <summary><span class="department-summary"><input type="checkbox" name="department_id" value="{{ department.id }}" {{ 'checked' if membership }} data-membership-toggle onclick="event.stopPropagation()"><span><strong>{{ department.name }}</strong><small>{{ department.code }}{% if membership and membership.is_primary %} · {{ 'أساسي' if lang == 'ar' else 'Primary' }}{% endif %}</small></span></span><span class="disclosure-chevron"></span></summary>
+      <div class="settings-card-body" data-membership-panel>
+        <div class="grid cols-2"><div class="field"><label>{{ 'المسمى الوظيفي داخل القسم' if lang == 'ar' else 'Job title in this Department' }}</label><input name="job_title:{{ department.id }}" value="{{ membership.job_title if membership and membership.job_title else '' }}"></div><label class="choice-card"><input type="radio" name="primary_department_id" value="{{ department.id }}" {{ 'checked' if membership and membership.is_primary }}><span><strong>{{ 'القسم الأساسي' if lang == 'ar' else 'Primary Department' }}</strong><small>{{ 'يفتح عليه المستخدم بعد تسجيل الدخول.' if lang == 'ar' else 'Opened by default after sign-in.' }}</small></span></label></div>
+        {% if not target.is_admin %}
+        <details class="permission-group" open>
+          <summary><span><strong>{{ 'المشاريع المحددة' if lang == 'ar' else 'Selected Projects' }}</strong><small>{{ 'قائمة واحدة مشتركة للتركيبات والصيانة والتقارير وعروض الأسعار.' if lang == 'ar' else 'One shared Project list for records, reports, quotations and tasks.' }}</small></span><span class="disclosure-chevron"></span></summary>
+          <div class="permission-grid">{% for project in projects %}<label class="permission-card"><input type="checkbox" name="project:{{ department.id }}" value="{{ project.id }}" {{ 'checked' if (department.id, project.id) in selected_projects }}><span><strong>{{ project.name }}</strong><small>{{ project.customer_name }} · {{ project.city or project.address }}</small></span></label>{% else %}<p class="hint">{{ 'لا توجد مشاريع.' if lang == 'ar' else 'No Projects exist.' }}</p>{% endfor %}</div>
+        </details>
+        <details class="permission-group">
+          <summary><span><strong>{{ 'الأصناف والكاتجوريز المحددة' if lang == 'ar' else 'Selected Items & Categories' }}</strong><small>{{ 'اختر كاتجوري كاملة أو أصنافًا منفردة عند استخدام نطاق المحدد.' if lang == 'ar' else 'Choose complete Categories or individual Items when Selected scope is used.' }}</small></span><span class="disclosure-chevron"></span></summary>
+          <div class="permission-group-body">
+            <p class="section-title">{{ 'الكاتجوريز' if lang == 'ar' else 'Categories' }}</p>
+            <div class="permission-grid">{% for category in catalog_categories if category.department_id == department.id %}<label class="permission-card"><input type="checkbox" name="category:{{ department.id }}" value="{{ category.id }}" {{ 'checked' if category.id in selected_category_ids }}><span><strong>{{ category.name }}</strong><small>{{ 'تشمل كل الصب كاتجوريز والأصناف بداخلها.' if lang == 'ar' else 'Includes its Subcategories and Items.' }}</small></span></label>{% else %}<p class="hint">{{ 'لا توجد كاتجوريز في هذا القسم.' if lang == 'ar' else 'No Categories in this Department.' }}</p>{% endfor %}</div>
+            <p class="section-title">{{ 'أصناف منفردة' if lang == 'ar' else 'Individual Items' }}</p>
+            <div class="permission-grid">{% for item in catalog_items if item.department_id == department.id %}<label class="permission-card"><input type="checkbox" name="item:{{ department.id }}" value="{{ item.id }}" {{ 'checked' if item.id in selected_item_ids }}><span><strong>{{ item.display_label }}</strong><small>{{ item.main_category_name or ('بدون كاتجوري' if lang == 'ar' else 'Uncategorized') }}</small></span></label>{% else %}<p class="hint">{{ 'لا توجد أصناف في هذا القسم.' if lang == 'ar' else 'No Items in this Department.' }}</p>{% endfor %}</div>
+          </div>
+        </details>
+        <details class="permission-group">
+          <summary><span><strong>{{ 'المستودعات المحددة' if lang == 'ar' else 'Selected Warehouses' }}</strong><small>{{ 'حدد المستودعات التي يستطيع المستخدم رؤيتها أو تنفيذ العمليات عليها.' if lang == 'ar' else 'Choose the Warehouses this user may see or use for Store operations.' }}</small></span><span class="disclosure-chevron"></span></summary>
+          <div class="permission-grid">{% for warehouse in warehouses if warehouse.department_id == department.id %}<label class="permission-card"><input type="checkbox" name="warehouse:{{ department.id }}" value="{{ warehouse.id }}" {{ 'checked' if warehouse.id in selected_warehouse_ids }}><span><strong>{{ warehouse.name }}</strong><small>{{ warehouse.warehouse_type.value|title }}{% if warehouse.location %} · {{ warehouse.location }}{% endif %}</small></span></label>{% else %}<p class="hint">{{ 'لا توجد مستودعات في هذا القسم.' if lang == 'ar' else 'No Warehouses in this Department.' }}</p>{% endfor %}</div>
+        </details>
+        <div class="permission-group-list" data-exclusive-accordion>
+          {% for group, permissions in permission_groups.items() %}{% set module_key = permissions[0].group %}
+          <details class="permission-group"><summary><span><strong>{{ group|replace('_',' ')|title }}</strong><small>{{ 'صلاحيات مباشرة للمستخدم' if lang == 'ar' else 'Direct user permissions' }}</small></span><span class="disclosure-chevron"></span></summary>
+            <div class="permission-group-body">
+              {% if module_key in scoped_permission_groups %}<div class="field scope-field"><label>{{ 'نطاق المشاهدة' if lang == 'ar' else 'View scope' }}</label><select name="scope:{{ department.id }}:{{ module_key }}">{% for value, label in scope_choices %}<option value="{{ value }}" {{ 'selected' if scopes.get((department.id, module_key), 'none') == value }}>{% if lang == 'ar' %}{{ {'none':'لا يشاهد أعمال الآخرين','own':'أعماله فقط','selected':'المشاريع أو العناصر المحددة','department':'كل بيانات القسم'}[value] }}{% else %}{{ label }}{% endif %}</option>{% endfor %}</select>{% if module_key in project_scoped_groups %}<p class="hint">{{ 'عند اختيار المحدد، تُستخدم قائمة المشاريع الموجودة أعلى هذا القسم.' if lang == 'ar' else 'Selected scope uses the shared Project list above.' }}</p>{% endif %}</div>{% endif %}
+              <div class="permission-grid">{% for permission in permissions %}<label class="permission-card"><input type="checkbox" name="permission:{{ department.id }}:{{ permission.key }}" value="1" {{ 'checked' if (department.id, permission.key) in direct_permissions }}><span><strong>{{ permission.label }}</strong><small>{{ permission.description }}</small></span></label>{% endfor %}</div>
+            </div>
+          </details>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+    </details>
+    {% endfor %}
+  </div>
+  <div class="sticky-form-actions"><a class="btn btn-secondary" href="/users">{{ t('ui.cancel') }}</a><button class="btn btn-primary" type="submit">{{ 'حفظ الأقسام والصلاحيات' if lang == 'ar' else 'Save memberships & permissions' }}</button></div>
+</form>
+{% endblock %}
