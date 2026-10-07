@@ -5,7 +5,8 @@ This is the short progress tracker for the UI/UX and business-logic improvements
 ## Current position
 
 - [x] Complete ten bounded review batches and record their findings.
-- [x] Push the application and review checkpoint to GitHub (`feature/pre-improvement-checkpoint-2026-10-07`, `a8e677c`).
+- [x] Push the application and review checkpoint to GitHub (`feature/pre-improvement-checkpoint-2026-10-07`).
+- [x] Prepare the first implementation slice and its acceptance checks below.
 - [ ] Integrate the checkpoint into `main` through a reviewed pull request before source implementation.
 - [ ] Agree on the first implementation slice: protect Pricing Category grants (P0, B2-001/B2-002).
 - [ ] Implement and verify the first slice.
@@ -61,3 +62,14 @@ Work in small, reviewable changes. Where one phase spans unrelated risks, its pa
 4. Review the diff and record the PR/commit, test result, and any remaining limitation here. Check the item only when its acceptance criteria are met.
 
 The next concrete change is item **01**. Its proposed scope is the Category grant mutation route and the User Roles grant-saving form; it does not require a database migration or broader Pricing redesign.
+
+## First slice — Pricing Category grants (item 01)
+
+**Policy for this slice:** Only Administrators change Category grants. Pricing managers may still perform authorized catalogue edits; readable ancestor folders are for navigation, not grant mutation. Ordinary Category edits must leave grant rows unchanged. User Roles must show all three Category levels with their paths and preserve grants unless an Administrator explicitly changes them.
+
+- [ ] Update Category create/edit POST authorization so forged grant fields cannot expand a non-Administrator's access.
+- [ ] Move grant editing to the Administrator's User Roles page; show complete Category paths and existing selections.
+- [ ] Make unchanged Category and User Roles saves preserve existing grants, including nested and legacy grants. Keep explicit revocation possible.
+- [ ] Add focused regressions for self-grant attempts, unchanged saves, explicit revocation, and continued authorized Item/Category editing.
+- [ ] Verify the affected controls and error/confirmation feedback in English and Arabic; record any browser checks that remain blocked.
+- [ ] Record the resulting PR/commit and test evidence beside item 01, then check it when all criteria pass.
