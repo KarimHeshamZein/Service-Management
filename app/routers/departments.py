@@ -358,10 +358,17 @@ def user_access_page(user_id: int, request: Request, db: Session = Depends(get_d
     }
     catalog_categories = list(db.scalars(
         select(PricingItemCategory)
-        .where(PricingItemCategory.parent_id.is_(None))
+        .options(
+            selectinload(PricingItemCategory.parent).selectinload(
+                PricingItemCategory.parent
+            )
+        )
         .order_by(PricingItemCategory.name)
         .execution_options(include_all_departments=True)
     ))
+    catalog_categories.sort(
+        key=lambda category: (category.department_id, category.display_label.casefold())
+    )
     catalog_items = list(db.scalars(
         select(PricingItem)
         .options(selectinload(PricingItem.category).selectinload(PricingItemCategory.parent))
@@ -419,7 +426,9 @@ async def save_user_access(user_id: int, request: Request, db: Session = Depends
     form = await request.form()
     if (bad := _csrf_or_redirect(request, str(form.get("csrf_token") or ""), back)):
         return bad
-    target = db.get(User, user_id)
+    # Serialize access changes for this user so two Administrator saves cannot
+    # both insert the same grant after observing an empty row set.
+    target = db.scalar(select(User).where(User.id == user_id).with_for_update())
     if target is None or target.is_customer:
         flash(request, "That internal user no longer exists.", "error")
         return _redirect("/users")
@@ -556,45 +565,78 @@ async def save_user_access(user_id: int, request: Request, db: Session = Depends
             ))
             existing_project_ids.add(project_id)
 
-    db.execute(delete(PricingCategoryUserAccess).where(
-        PricingCategoryUserAccess.user_id == target.id
-    ))
-    db.execute(delete(PricingItemUserAccess).where(
-        PricingItemUserAccess.user_id == target.id
-    ))
+    if removed_ids:
+        removed_category_ids = select(PricingItemCategory.id).where(
+            PricingItemCategory.department_id.in_(removed_ids)
+        ).execution_options(include_all_departments=True)
+        removed_item_ids = select(PricingItem.id).where(
+            PricingItem.department_id.in_(removed_ids)
+        ).execution_options(include_all_departments=True)
+        db.execute(delete(PricingCategoryUserAccess).where(
+            PricingCategoryUserAccess.user_id == target.id,
+            PricingCategoryUserAccess.category_id.in_(removed_category_ids),
+        ))
+        db.execute(delete(PricingItemUserAccess).where(
+            PricingItemUserAccess.user_id == target.id,
+            PricingItemUserAccess.item_id.in_(removed_item_ids),
+        ))
+
+    def reconcile_pricing_grants(
+        department_id, *, resource_model, grant_model, grant_column, prefix
+    ):
+        requested_ids = {
+            parsed for raw in form.getlist(f"{prefix}:{department_id}")
+            if (parsed := entity_id(str(raw))) is not None
+        }
+        original_ids = {
+            parsed for raw in form.getlist(f"{prefix}_original:{department_id}")
+            if (parsed := entity_id(str(raw))) is not None
+        }
+        # Apply only changes the Administrator made on this form. Grants added
+        # after the form opened are absent from both sets and remain intact.
+        changed_ids = requested_ids | original_ids
+        valid_resource_ids = set(db.scalars(
+            select(resource_model.id).where(
+                resource_model.department_id == department_id,
+                resource_model.id.in_(changed_ids),
+            ).execution_options(include_all_departments=True)
+        )) if changed_ids else set()
+        requested_ids &= valid_resource_ids
+        original_ids &= valid_resource_ids
+        current_ids = set(db.scalars(
+            select(grant_column).where(
+                grant_model.user_id == target.id,
+                grant_column.in_(valid_resource_ids),
+            )
+        )) if valid_resource_ids else set()
+        removed_grants = original_ids - requested_ids
+        if removed_grants:
+            db.execute(delete(grant_model).where(
+                grant_model.user_id == target.id,
+                grant_column.in_(removed_grants),
+            ))
+        for resource_id in requested_ids - original_ids - current_ids:
+            db.add(grant_model(
+                **{grant_column.key: resource_id},
+                user_id=target.id,
+                granted_by_id=request.state.user.id,
+            ))
+
     for department_id in valid_ids:
-        requested_category_ids = {
-            parsed for raw in form.getlist(f"category:{department_id}")
-            if (parsed := entity_id(str(raw))) is not None
-        }
-        valid_category_ids = set(db.scalars(
-            select(PricingItemCategory.id).where(
-                PricingItemCategory.department_id == department_id,
-                PricingItemCategory.id.in_(requested_category_ids),
-            ).execution_options(include_all_departments=True)
-        ))
-        for category_id in valid_category_ids:
-            db.add(PricingCategoryUserAccess(
-                category_id=category_id,
-                user_id=target.id,
-                granted_by_id=request.state.user.id,
-            ))
-        requested_item_ids = {
-            parsed for raw in form.getlist(f"item:{department_id}")
-            if (parsed := entity_id(str(raw))) is not None
-        }
-        valid_item_ids = set(db.scalars(
-            select(PricingItem.id).where(
-                PricingItem.department_id == department_id,
-                PricingItem.id.in_(requested_item_ids),
-            ).execution_options(include_all_departments=True)
-        ))
-        for item_id in valid_item_ids:
-            db.add(PricingItemUserAccess(
-                item_id=item_id,
-                user_id=target.id,
-                granted_by_id=request.state.user.id,
-            ))
+        reconcile_pricing_grants(
+            department_id,
+            resource_model=PricingItemCategory,
+            grant_model=PricingCategoryUserAccess,
+            grant_column=PricingCategoryUserAccess.category_id,
+            prefix="category",
+        )
+        reconcile_pricing_grants(
+            department_id,
+            resource_model=PricingItem,
+            grant_model=PricingItemUserAccess,
+            grant_column=PricingItemUserAccess.item_id,
+            prefix="item",
+        )
     db.execute(delete(StoreUserWarehouse).where(StoreUserWarehouse.user_id == target.id))
     requested_warehouse_ids = {
         parsed

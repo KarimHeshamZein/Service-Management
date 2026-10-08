@@ -618,7 +618,6 @@ def _item_context(
                 selectinload(PricingItemCategory.children).selectinload(
                     PricingItemCategory.children
                 ),
-                selectinload(PricingItemCategory.user_access),
             )
             .order_by(PricingItemCategory.name)
         )
@@ -738,21 +737,6 @@ def _item_context(
         "department_options": (
             list(available_departments(db, user)) if user.is_admin else []
         ),
-        "department_users": list(
-            db.scalars(
-                select(User)
-                .join(UserDepartment, UserDepartment.user_id == User.id)
-                .where(
-                    UserDepartment.department_id == db.info.get("department_id"),
-                    User.is_active.is_(True),
-                )
-                .order_by(User.full_name)
-            )
-        ),
-        "category_access": {
-            entry.id: {grant.user_id for grant in entry.user_access}
-            for entry in categories
-        },
     }
 
 
@@ -833,32 +817,12 @@ async def create_category(
     if clash:
         flash(request, f"Category “{clash.name}” already exists.", "error")
         return _redirect("/pricing/items")
-    visibility = str(form.get("visibility") or "department")
-    if visibility not in {"department", "selected_users"}:
-        visibility = "department"
     category = PricingItemCategory(
         name=name,
         parent=parent,
-        visibility=visibility,
+        visibility="department",
         created_by_id=user.id,
     )
-    if visibility == "selected_users":
-        requested_ids = {
-            parsed for raw in form.getlist("category_user_ids")
-            if (parsed := entity_id(str(raw))) is not None
-        }
-        valid_ids = set(
-            db.scalars(
-                select(UserDepartment.user_id).where(
-                    UserDepartment.department_id == db.info.get("department_id"),
-                    UserDepartment.user_id.in_(requested_ids),
-                )
-            )
-        )
-        category.user_access = [
-            PricingCategoryUserAccess(user_id=member_id, granted_by_id=user.id)
-            for member_id in valid_ids
-        ]
     db.add(category)
     db.commit()
     flash(request, f"Category “{name}” created.")
@@ -905,26 +869,6 @@ async def edit_category(
         return _redirect("/pricing/items")
     category.name = name
     category.parent = parent
-    visibility = str(form.get("visibility") or "department")
-    category.visibility = visibility if visibility in {"department", "selected_users"} else "department"
-    category.user_access.clear()
-    if category.visibility == "selected_users":
-        requested_ids = {
-            parsed for raw in form.getlist("category_user_ids")
-            if (parsed := entity_id(str(raw))) is not None
-        }
-        valid_ids = set(
-            db.scalars(
-                select(UserDepartment.user_id).where(
-                    UserDepartment.department_id == db.info.get("department_id"),
-                    UserDepartment.user_id.in_(requested_ids),
-                )
-            )
-        )
-        category.user_access.extend(
-            PricingCategoryUserAccess(user_id=member_id, granted_by_id=user.id)
-            for member_id in valid_ids
-        )
     category.updated_at = utcnow()
     db.commit()
     flash(request, "Item category updated.")

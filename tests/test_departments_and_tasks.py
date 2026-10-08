@@ -195,6 +195,134 @@ def test_selected_pricing_scope_supports_whole_categories_and_individual_items(c
     assert "Hidden peer camera" not in direct_page.text
 
 
+def test_category_content_posts_cannot_change_user_grants(client, db):
+    manager = db.query(User).filter(User.username == LEADER_A[0]).one()
+    other_user = db.query(User).filter(User.username == LEADER_B[0]).one()
+    root = PricingItemCategory(name="Grant root", department_id=1)
+    child = PricingItemCategory(name="Grant child", department_id=1, parent=root)
+    leaf = PricingItemCategory(name="Grant leaf", department_id=1, parent=child)
+    db.add(root)
+    db.flush()
+    item = PricingItem(
+        department_id=1, category_id=leaf.id, name="Granted device",
+        model="GRANT-1", unit_price=Decimal("10"), currency="SAR",
+    )
+    db.add(item)
+    db.flush()
+    db.add_all([
+        PricingItemUserAccess(item_id=item.id, user_id=manager.id, granted_by_id=1),
+        PricingCategoryUserAccess(category_id=root.id, user_id=other_user.id, granted_by_id=1),
+    ])
+    db.get(UserDepartmentScope, (manager.id, 1, "pricing_items")).scope = AccessScope.SELECTED
+    db.commit()
+
+    login(client, *LEADER_A)
+    page = client.get(f"/pricing/items?category={root.id}")
+    assert page.status_code == 200
+    assert 'name="category_user_ids"' not in page.text
+    token = csrf_of(client, f"/pricing/items?category={root.id}")
+    renamed = client.post(f"/pricing/categories/{root.id}/edit", data={
+        "csrf_token": token, "name": "Grant root renamed",
+        "visibility": "selected_users", "category_user_ids": str(manager.id),
+    })
+    assert renamed.status_code == 303
+    db.refresh(root)
+    assert root.name == "Grant root renamed"
+    assert root.visibility == "department"
+    assert set(db.scalars(select(PricingCategoryUserAccess.user_id).where(
+        PricingCategoryUserAccess.category_id == root.id
+    ))) == {other_user.id}
+
+    created = client.post("/pricing/categories", data={
+        "csrf_token": token, "name": "Forged grant category",
+        "visibility": "selected_users", "category_user_ids": str(manager.id),
+    })
+    assert created.status_code == 303
+    category = db.scalar(select(PricingItemCategory).where(
+        PricingItemCategory.name == "Forged grant category"
+    ))
+    assert category is not None and category.visibility == "department"
+    assert not db.scalar(select(PricingCategoryUserAccess).where(
+        PricingCategoryUserAccess.category_id == category.id
+    ))
+
+
+def test_user_roles_reconciles_nested_pricing_grants_without_erasing_newer_grants(client, db):
+    target = db.query(User).filter(User.username == LEADER_A[0]).one()
+    root = PricingItemCategory(name="Roles root", department_id=1)
+    child = PricingItemCategory(name="Roles child", department_id=1, parent=root)
+    leaf = PricingItemCategory(name="Roles leaf", department_id=1, parent=child)
+    later = PricingItemCategory(name="Later grant", department_id=1)
+    db.add_all([root, later])
+    db.flush()
+    item = PricingItem(
+        department_id=1, category_id=leaf.id, name="Roles device",
+        model="ROLES-1", unit_price=Decimal("10"), currency="SAR",
+    )
+    db.add(item)
+    db.flush()
+    db.add_all([
+        PricingCategoryUserAccess(category_id=leaf.id, user_id=target.id, granted_by_id=1),
+        PricingItemUserAccess(item_id=item.id, user_id=target.id, granted_by_id=1),
+    ])
+    db.commit()
+
+    login(client, *ADMIN)
+    page = client.get(f"/users/{target.id}/access")
+    assert page.status_code == 200
+    assert "Roles root / Roles child / Roles leaf" in page.text
+    assert f'name="category_original:1" value="{leaf.id}"' in page.text
+    assert f'name="item_original:1" value="{item.id}"' in page.text
+    token = csrf_of(client, f"/users/{target.id}/access")
+    switched = client.post("/language", data={
+        "language": "ar", "next": f"/users/{target.id}/access", "csrf_token": token,
+    })
+    assert switched.status_code == 303
+    arabic_page = client.get(f"/users/{target.id}/access")
+    assert '<html lang="ar" dir="rtl">' in arabic_page.text
+    assert "Roles root / Roles child / Roles leaf" in arabic_page.text
+
+    # A second Administrator may grant another Category after this form opens.
+    db.add(PricingCategoryUserAccess(
+        category_id=later.id, user_id=target.id, granted_by_id=1,
+    ))
+    db.commit()
+    unchanged = client.post(f"/users/{target.id}/access", data={
+        "csrf_token": token, "department_id": "1", "primary_department_id": "1",
+        "category:1": str(leaf.id), "category_original:1": str(leaf.id),
+        "item:1": str(item.id), "item_original:1": str(item.id),
+    })
+    assert unchanged.status_code == 303
+    assert set(db.scalars(select(PricingCategoryUserAccess.category_id).where(
+        PricingCategoryUserAccess.user_id == target.id
+    ))) == {leaf.id, later.id}
+    assert set(db.scalars(select(PricingItemUserAccess.item_id).where(
+        PricingItemUserAccess.user_id == target.id
+    ))) == {item.id}
+
+    revoked = client.post(f"/users/{target.id}/access", data={
+        "csrf_token": token, "department_id": "1", "primary_department_id": "1",
+        "category_original:1": str(leaf.id),
+        "item_original:1": str(item.id),
+    })
+    assert revoked.status_code == 303
+    assert set(db.scalars(select(PricingCategoryUserAccess.category_id).where(
+        PricingCategoryUserAccess.user_id == target.id
+    ))) == {later.id}
+    assert not db.scalar(select(PricingItemUserAccess).where(
+        PricingItemUserAccess.user_id == target.id
+    ))
+
+    granted = client.post(f"/users/{target.id}/access", data={
+        "csrf_token": token, "department_id": "1", "primary_department_id": "1",
+        "category:1": str(root.id),
+    })
+    assert granted.status_code == 303
+    assert set(db.scalars(select(PricingCategoryUserAccess.category_id).where(
+        PricingCategoryUserAccess.user_id == target.id
+    ))) == {root.id, later.id}
+
+
 def test_internal_user_creation_requires_department_and_opens_roles_page(client, db):
     login(client, *ADMIN)
     token = csrf_of(client, "/users")
