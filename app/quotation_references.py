@@ -7,11 +7,18 @@ from sqlalchemy.orm import Session
 from .models import PricingQuotation
 
 
-def quotation_choices(db: Session) -> list[PricingQuotation]:
-    """Expose identifiers and Project scope, never quotation prices."""
+def quotation_choices(
+    db: Session, allowed_project_ids: set[int] | None = None
+) -> list[PricingQuotation]:
+    """Expose permitted identifiers and Project scope, never quotation prices."""
+    statement = select(PricingQuotation)
+    if allowed_project_ids is not None:
+        statement = statement.where(
+            PricingQuotation.project_id.in_(allowed_project_ids)
+        )
     return list(
         db.scalars(
-            select(PricingQuotation).order_by(
+            statement.order_by(
                 PricingQuotation.quotation_date.desc(),
                 PricingQuotation.id.desc(),
             )
