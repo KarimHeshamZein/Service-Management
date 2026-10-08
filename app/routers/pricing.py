@@ -801,6 +801,85 @@ def item_department_folders(
     })
 
 
+def _category_manager_context(
+    db: Session, user: User, *, category_id: int | None = None,
+    parent_id: int | None = None, q: str = "", mode: str = "",
+) -> dict:
+    categories = list(db.scalars(
+        select(PricingItemCategory)
+        .options(
+            selectinload(PricingItemCategory.parent).selectinload(PricingItemCategory.parent),
+            selectinload(PricingItemCategory.children),
+            selectinload(PricingItemCategory.items),
+        )
+    ))
+    categories.sort(key=lambda entry: category_path_label(entry).casefold())
+    by_id = {entry.id: entry for entry in categories}
+    selected = by_id.get(category_id) if category_id else None
+    if category_id and selected is None:
+        raise HTTPException(status_code=404, detail="Item category not found")
+    parent = by_id.get(parent_id) if parent_id else None
+    parent_options = [entry for entry in categories if category_depth(entry) < MAX_CATEGORY_DEPTH]
+    term = q.strip()[:120]
+    return {
+        "active_nav": "pricing_items",
+        "category_rows": [entry for entry in categories if term.casefold() in category_path_label(entry).casefold()],
+        "selected_category": selected,
+        "selected_parent_id": parent.id if parent in parent_options else None,
+        "parent_options": parent_options,
+        "valid_parent_ids": {
+            entry.id for entry in categories
+            if selected is not None and _category_parent_error(selected, entry) is None
+        },
+        "category_depths": {entry.id: category_depth(entry) for entry in categories},
+        "department_options": list(available_departments(db, user)) if user.is_admin else [],
+        "department": db.get(Department, db.info.get("department_id")),
+        "create_mode": mode == "create" or selected is None,
+        "q": term,
+        "errors": {},
+    }
+
+
+@router.get("/categories/manage")
+def manage_categories_page(
+    request: Request,
+    category_id: int | None = None,
+    parent_id: int | None = None,
+    q: str = "",
+    mode: str = "",
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    require_permission(request, db, user, "pricing_items.manage")
+    return render(request, "pricing_category_manager.html", _category_manager_context(
+        db, user, category_id=category_id, parent_id=parent_id, q=q, mode=mode,
+    ))
+
+
+def _category_return(form: object, category_id: int | None = None) -> str:
+    if str(form.get("from_manager") or "") == "1":
+        suffix = f"?category_id={category_id}" if category_id else ""
+        return f"/pricing/categories/manage{suffix}"
+    return "/pricing/items"
+
+
+def _category_form_failure(
+    request: Request, db: Session, user: User, form: object,
+    message: str, *, category_id: int | None = None,
+):
+    if str(form.get("from_manager") or "") == "1":
+        selected_id = category_id if category_id and db.get(PricingItemCategory, category_id) else None
+        context = _category_manager_context(db, user, category_id=selected_id)
+        context.update({
+            "draft_name": str(form.get("name") or ""),
+            "draft_parent_id": str(form.get("parent_category_id") or ""),
+            "errors": {"form": message},
+        })
+        return render(request, "pricing_category_manager.html", context, status_code=422)
+    flash(request, message, "error")
+    return _redirect("/pricing/items")
+
+
 @router.post("/categories")
 async def create_category(
     request: Request,
@@ -809,21 +888,19 @@ async def create_category(
 ):
     require_permission(request, db, user, "pricing_items.manage")
     form = await request.form()
+    return_url = _category_return(form)
     if _csrf_error(request, form.get("csrf_token")):
-        return _redirect("/pricing/items")
+        return _redirect(return_url)
     name = str(form.get("name") or "").strip()
     parent_id = entity_id(str(form.get("parent_category_id") or ""))
     parent = db.get(PricingItemCategory, parent_id) if parent_id else None
     if not name:
-        flash(request, "Enter a category name.", "error")
-        return _redirect("/pricing/items")
+        return _category_form_failure(request, db, user, form, "Enter a category name.")
     if parent_id and parent is None:
-        flash(request, "Choose an existing Category.", "error")
-        return _redirect("/pricing/items")
+        return _category_form_failure(request, db, user, form, "Choose an existing Category.")
     parent_error = _category_parent_error(None, parent)
     if parent_error:
-        flash(request, parent_error, "error")
-        return _redirect("/pricing/items")
+        return _category_form_failure(request, db, user, form, parent_error)
     clash = db.scalar(
         select(PricingItemCategory).where(
             PricingItemCategory.parent_id == (parent.id if parent else None),
@@ -831,8 +908,7 @@ async def create_category(
         )
     )
     if clash:
-        flash(request, f"Category “{clash.name}” already exists.", "error")
-        return _redirect("/pricing/items")
+        return _category_form_failure(request, db, user, form, f"Category “{clash.name}” already exists.")
     visibility = str(form.get("visibility") or "department")
     if visibility not in {"department", "selected_users"}:
         visibility = "department"
@@ -862,7 +938,7 @@ async def create_category(
     db.add(category)
     db.commit()
     flash(request, f"Category “{name}” created.")
-    return _redirect("/pricing/items")
+    return _redirect(_category_return(form, category.id))
 
 
 @router.post("/categories/{category_id}/edit")
@@ -874,25 +950,22 @@ async def edit_category(
 ):
     require_permission(request, db, user, "pricing_items.manage")
     form = await request.form()
+    return_url = _category_return(form, category_id)
     if _csrf_error(request, form.get("csrf_token")):
-        return _redirect("/pricing/items")
+        return _redirect(return_url)
     category = db.get(PricingItemCategory, category_id)
     name = str(form.get("name") or "").strip()
     parent_id = entity_id(str(form.get("parent_category_id") or ""))
     if category is None:
-        flash(request, "That category no longer exists.", "error")
-        return _redirect("/pricing/items")
+        return _category_form_failure(request, db, user, form, "That category no longer exists.")
     if not name:
-        flash(request, "Enter a category name.", "error")
-        return _redirect("/pricing/items")
+        return _category_form_failure(request, db, user, form, "Enter a category name.", category_id=category_id)
     parent = db.get(PricingItemCategory, parent_id) if parent_id else None
     if parent_id and parent is None:
-        flash(request, "Choose an existing Category.", "error")
-        return _redirect("/pricing/items")
+        return _category_form_failure(request, db, user, form, "Choose an existing Category.", category_id=category_id)
     parent_error = _category_parent_error(category, parent)
     if parent_error:
-        flash(request, parent_error, "error")
-        return _redirect("/pricing/items")
+        return _category_form_failure(request, db, user, form, parent_error, category_id=category_id)
     clash = db.scalar(
         select(PricingItemCategory).where(
             PricingItemCategory.id != category.id,
@@ -901,8 +974,7 @@ async def edit_category(
         )
     )
     if clash:
-        flash(request, f"Category “{clash.name}” already exists.", "error")
-        return _redirect("/pricing/items")
+        return _category_form_failure(request, db, user, form, f"Category “{clash.name}” already exists.", category_id=category_id)
     category.name = name
     category.parent = parent
     visibility = str(form.get("visibility") or "department")
@@ -928,7 +1000,7 @@ async def edit_category(
     category.updated_at = utcnow()
     db.commit()
     flash(request, "Item category updated.")
-    return _redirect("/pricing/items")
+    return _redirect(return_url)
 
 
 @router.post("/categories/{category_id}/delete", dependencies=[Depends(require_admin)])
@@ -939,31 +1011,32 @@ async def delete_category(
     db: Session = Depends(get_db),
 ):
     form = await request.form()
+    return_url = _category_return(form, category_id)
     if _csrf_error(request, form.get("csrf_token")):
-        return _redirect("/pricing/items")
+        return _redirect(return_url)
     category = db.get(PricingItemCategory, category_id)
     if category is None:
         flash(request, "That category no longer exists.", "error")
-        return _redirect("/pricing/items")
+        return _redirect(_category_return(form))
     if db.scalar(select(func.count(PricingItem.id)).where(PricingItem.category_id == category.id)):
         flash(
             request,
             "Move its items to another category or Uncategorized before deleting it.",
             "error",
         )
-        return _redirect("/pricing/items")
+        return _redirect(return_url)
     if category.children:
         flash(
             request,
             "Delete or move its child Categories before deleting this folder.",
             "error",
         )
-        return _redirect("/pricing/items")
+        return _redirect(return_url)
     name = category.name
     db.delete(category)
     db.commit()
     flash(request, f"Category “{name}” deleted.")
-    return _redirect("/pricing/items")
+    return _redirect(_category_return(form))
 
 
 @router.post("/categories/{category_id}/move-department", dependencies=[Depends(require_admin)])
@@ -974,16 +1047,17 @@ async def move_category_department(
     db: Session = Depends(get_db),
 ):
     form = await request.form()
+    return_url = _category_return(form, category_id)
     if _csrf_error(request, form.get("csrf_token")):
-        return _redirect("/pricing/items")
+        return _redirect(return_url)
     category = db.get(PricingItemCategory, category_id)
     target = _move_target(db, entity_id(str(form.get("target_department_id") or "")))
     if category is None or target is None:
         flash(request, "Choose an existing active Department.", "error")
-        return _redirect("/pricing/items")
+        return _redirect(return_url)
     if target.id == category.department_id:
         flash(request, "The Category is already in that Department.", "error")
-        return _redirect("/pricing/items")
+        return _redirect(return_url)
     target_clash = db.scalar(
         select(PricingItemCategory)
         .where(
@@ -995,7 +1069,7 @@ async def move_category_department(
     )
     if target_clash:
         flash(request, f'The target Department already has a Main Category named "{category.name}".', "error")
-        return _redirect("/pricing/items")
+        return _redirect(return_url)
     categories = [category, *category_descendants(category)]
     items = [item for entry in categories for item in entry.items]
     source_department_id = category.department_id
@@ -1010,7 +1084,7 @@ async def move_category_department(
     except ValueError as exc:
         db.rollback()
         flash(request, str(exc), "error")
-        return _redirect("/pricing/items")
+        return _redirect(return_url)
     set_audit_context(
         request,
         action="pricing_category_department_moved",

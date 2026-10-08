@@ -34,7 +34,7 @@ Work in small, reviewable changes. Where one phase spans unrelated risks, its pa
 ## Priority 2 — broken workflows and everyday UX
 
 - [ ] **14 — P10:** Repair document exports, failed-upload cleanup, and form recovery.
-- [ ] **15 — P1/P2:** Repair Category form boundaries, read-only controls, scoped navigation paths, and access wording.
+- [ ] **15 — P1/P2:** Repair Category form boundaries, read-only controls, scoped navigation paths, and access wording. [Draft PR #10](https://github.com/KarimHeshamZein/Service-Management/pull/10) gives Manage Categories a searchable page with separate edit, transfer, and delete forms; focused Category checks pass. Scoped navigation, view-only Item controls, and manual English/Arabic UI verification remain open.
 - [ ] **16 — P3:** Make branch-transfer conflicts actionable and keep transfers atomic.
 - [ ] **17 — P9:** Align quotation validation and recover entered work after a failed save.
 - [ ] **18 — P17:** Finish the Excel import/preview contract after the access issue in item 06 is resolved.
@@ -46,7 +46,7 @@ Work in small, reviewable changes. Where one phase spans unrelated risks, its pa
 ## Priority 3 — larger workflow changes and measured optimization
 
 - [ ] **23 — P11:** Decide and implement document correction and deletion behavior after shared-link protection.
-- [ ] **24 — P4:** Simplify same-Department Item/Category organization and recovery.
+- [ ] **24 — P4:** Simplify same-Department Item/Category organization and recovery. [Draft PR #10](https://github.com/KarimHeshamZein/Service-Management/pull/10) makes Category reparenting a direct action with full destination paths and keeps invalid edits on the form; dedicated single/multi-Item moves remain open.
 - [ ] **25 — P5:** Add reviewable cross-Department group transfers after access and preservation safeguards.
 - [ ] **26 — P6:** Measure catalogue performance with representative data, then optimize only confirmed bottlenecks.
 
