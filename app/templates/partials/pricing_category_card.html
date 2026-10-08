@@ -1,0 +1,16 @@
+{% macro folder(category, item_count, href, move_form_id='', allow_manage=false, allow_delete=false) %}
+<div class="pricing-category-card">
+  {% if allow_manage %}
+  <div class="pricing-category-card-tools">
+    <label title="{{ t('pricing.folders.select.to.move') }}"><input type="checkbox" name="category_ids" value="{{ category.id }}" form="{{ move_form_id }}" aria-label="{{ t('pricing.folders.select.to.move') }}: {{ category.name }}"></label>
+    <button class="pricing-category-icon-button" type="button" data-rename-folder data-folder-id="{{ category.id }}" data-folder-name="{{ category.name }}" data-parent-id="{{ category.parent_id or '' }}" aria-label="{{ t('pricing.folders.rename') }}: {{ category.name }}" title="{{ t('pricing.folders.rename') }}">✎</button>
+    {% if allow_delete %}<button class="pricing-category-icon-button danger" type="button" data-delete-folder data-folder-id="{{ category.id }}" data-folder-name="{{ category.name }}" aria-label="{{ t('pricing.folders.delete') }}: {{ category.name }}" title="{{ t('pricing.folders.delete') }}">&#x1F5D1;</button>{% endif %}
+  </div>
+  {% endif %}
+  <a class="pricing-category-folder {{ 'pricing-subcategory-folder' if category.depth == 1 else ('pricing-subsubcategory-folder' if category.depth > 1 else '') }}" href="{{ href }}" aria-label="{{ category.name }}">
+    <span class="pricing-category-folder-icon" aria-hidden="true"></span>
+    <span class="pricing-category-folder-copy"><strong>{{ category.name }}</strong><span>{{ item_count }} {{ t('ui.item') if item_count == 1 else t('ui.items.lowercase') }}</span></span>
+    <span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span>
+  </a>
+</div>
+{% endmacro %}

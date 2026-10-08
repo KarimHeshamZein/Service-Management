@@ -56,12 +56,10 @@ from ..models import (
 )
 from ..pricing import money, next_quotation_number, percentage, quantity
 from ..pricing_categories import (
-    MAX_CATEGORY_DEPTH,
     category_ancestry,
     category_depth,
     category_descendants,
     category_path_label,
-    category_subtree_height,
 )
 from ..pricing_pdf import build_quotation_pdf
 from ..purchase_documents import PurchaseDocumentError, delete_purchase_files
@@ -350,10 +348,8 @@ def _category_parent_error(
     category: PricingItemCategory | None,
     parent: PricingItemCategory | None,
 ) -> str | None:
-    """Validate a move/create against the fixed Main/Sub/Sub-sub hierarchy."""
-    if parent is None:
-        new_depth = 0
-    else:
+    """Reject cycles and mixed-Department parentage without limiting nesting."""
+    if parent is not None:
         if category is not None and (
             parent.id == category.id
             or parent.id in {entry.id for entry in category_descendants(category)}
@@ -361,10 +357,6 @@ def _category_parent_error(
             return "A Category cannot be placed inside itself or one of its child folders."
         if category is not None and parent.department_id != category.department_id:
             return "The parent Category must belong to the same Department."
-        new_depth = category_depth(parent) + 1
-    subtree_height = category_subtree_height(category) if category is not None else 0
-    if new_depth + subtree_height > MAX_CATEGORY_DEPTH:
-        return "Pricing Categories support Main Category, Subcategory, and Sub-subcategory only."
     return None
 
 
@@ -535,6 +527,33 @@ def _department_folder_rows(
     ]
 
 
+def _destination_folder_context(db: Session, user: User) -> dict:
+    current_id = db.info.get("department_id")
+    departments = [
+        entry for entry in available_departments(db, user)
+        if entry.is_active and (user.is_admin or entry.id == current_id)
+    ]
+    department_ids = {entry.id for entry in departments}
+    stmt = select(PricingItemCategory).where(
+        PricingItemCategory.department_id.in_(department_ids)
+    )
+    if user.is_admin:
+        stmt = stmt.execution_options(include_all_departments=True)
+    categories = list(db.scalars(stmt)) if department_ids else []
+    categories.sort(key=lambda entry: (entry.department_id, entry.name.casefold()))
+    children: dict[int, list[PricingItemCategory]] = {}
+    for entry in categories:
+        if entry.parent_id is not None:
+            children.setdefault(entry.parent_id, []).append(entry)
+    return {
+        "destination_departments": departments,
+        "destination_categories": categories,
+        "destination_roots": [entry for entry in categories if entry.parent_id is None],
+        "destination_children": children,
+        "current_department_id": current_id,
+    }
+
+
 def _move_linked_item_resources(
     db: Session,
     *,
@@ -596,6 +615,44 @@ def _move_linked_item_resources(
 def _move_target(db: Session, target_department_id: int | None) -> Department | None:
     target = db.get(Department, target_department_id) if target_department_id else None
     return target if target and target.is_active else None
+
+
+def _chosen_ids(form: object, field: str) -> list[int] | None:
+    values = form.getlist(field)
+    if not values or len(values) > 1000:
+        return None
+    ids = [entity_id(str(value)) for value in values]
+    if any(value is None for value in ids):
+        return None
+    return list(dict.fromkeys(ids))
+
+
+def _category_in_department(
+    db: Session, user: User, category_id: int | None,
+) -> PricingItemCategory | None:
+    if category_id is None:
+        return None
+    statement = select(PricingItemCategory).where(PricingItemCategory.id == category_id)
+    if user.is_admin:
+        statement = statement.execution_options(include_all_departments=True)
+    return db.scalar(statement)
+
+
+def _folder_destination(
+    db: Session, user: User, target_department_id: int | None,
+    target_category_id: int | None,
+) -> tuple[Department | None, PricingItemCategory | None, str | None]:
+    target = _move_target(db, target_department_id)
+    if target is None:
+        return None, None, "Choose an active Department."
+    if target.id != db.info.get("department_id") and not user.is_admin:
+        return None, None, "Only an Administrator can move content between Departments."
+    parent = _category_in_department(db, user, target_category_id)
+    if target_category_id is not None and (
+        parent is None or parent.department_id != target.id
+    ):
+        return None, None, "Choose a folder in the selected Department."
+    return target, parent, None
 
 
 def _category_transfer_item_conflicts(
@@ -737,20 +794,8 @@ def _item_context(
         "selected_child_categories": (
             selected_category.children if selected_category else []
         ),
-        "category_parent_options": [
-            entry for entry in categories
-            if category_depth(entry) < MAX_CATEGORY_DEPTH
-        ],
         "category_depths": {
             entry.id: category_depth(entry) for entry in categories
-        },
-        "category_valid_parent_ids": {
-            entry.id: {
-                candidate.id
-                for candidate in categories
-                if _category_parent_error(entry, candidate) is None
-            }
-            for entry in categories
         },
         "q": term,
         "selected_category": selected_category,
@@ -764,6 +809,11 @@ def _item_context(
         "can_delete": user.is_admin,
         "department_options": (
             list(available_departments(db, user)) if user.is_admin else []
+        ),
+        **(
+            _destination_folder_context(db, user)
+            if permission_allowed(db, user, db.info.get("department_id"), "pricing_items.manage")
+            else {}
         ),
     }
 
@@ -831,24 +881,26 @@ def _category_manager_context(
     if category_id and selected is None:
         raise HTTPException(status_code=404, detail="Item category not found")
     parent = by_id.get(parent_id) if parent_id else None
-    parent_options = [entry for entry in categories if category_depth(entry) < MAX_CATEGORY_DEPTH]
+    parent_options = categories
     term = q.strip()[:120]
+    visible = (
+        [entry for entry in categories if term.casefold() in category_path_label(entry).casefold()]
+        if term else (list(selected.children) if selected else [entry for entry in categories if entry.parent_id is None])
+    )
     return {
         "active_nav": "pricing_items",
-        "category_rows": [entry for entry in categories if term.casefold() in category_path_label(entry).casefold()],
+        "visible_categories": visible,
+        "category_item_counts": {entry.id: _category_item_count(entry) for entry in categories},
+        "uncategorized_count": db.scalar(
+            select(func.count(PricingItem.id)).where(PricingItem.category_id.is_(None))
+        ) or 0,
         "selected_category": selected,
         "selected_parent_id": parent.id if parent in parent_options else None,
         "parent_options": parent_options,
-        "valid_parent_ids": {
-            entry.id for entry in categories
-            if selected is not None and _category_parent_error(selected, entry) is None
-        },
-        "category_depths": {entry.id: category_depth(entry) for entry in categories},
-        "department_options": list(available_departments(db, user)) if user.is_admin else [],
-        "department": db.get(Department, db.info.get("department_id")),
-        "create_mode": mode == "create" or selected is None,
+        "create_mode": mode == "create",
         "q": term,
         "errors": {},
+        **_destination_folder_context(db, user),
     }
 
 
@@ -881,10 +933,15 @@ def _category_form_failure(
 ):
     if str(form.get("from_manager") or "") == "1":
         selected_id = category_id if category_id and db.get(PricingItemCategory, category_id) else None
-        context = _category_manager_context(db, user, category_id=selected_id)
+        context = _category_manager_context(
+            db, user, category_id=selected_id,
+            mode="create" if selected_id is None else "",
+        )
         context.update({
             "draft_name": str(form.get("name") or ""),
             "draft_parent_id": str(form.get("parent_category_id") or ""),
+            "draft_kind": str(form.get("category_kind") or ""),
+            "open_rename_error": selected_id is not None,
             "errors": {"form": message},
         })
         return render(request, "pricing_category_manager.html", context, status_code=422)
@@ -905,6 +962,11 @@ async def create_category(
         return _redirect(return_url)
     name = str(form.get("name") or "").strip()
     parent_id = entity_id(str(form.get("parent_category_id") or ""))
+    category_kind = str(form.get("category_kind") or "")
+    if category_kind == "main":
+        parent_id = None
+    elif category_kind == "sub" and parent_id is None:
+        return _category_form_failure(request, db, user, form, "Choose a parent folder for the Subcategory.")
     parent = db.get(PricingItemCategory, parent_id) if parent_id else None
     if not name:
         return _category_form_failure(request, db, user, form, "Enter a category name.")
@@ -975,6 +1037,106 @@ async def edit_category(
     return _redirect(return_url)
 
 
+@router.post("/categories/move")
+async def move_categories(
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    require_permission(request, db, user, "pricing_items.manage")
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/categories/manage")
+    chosen_ids = _chosen_ids(form, "category_ids")
+    choice = str(form.get("move_items") or "")
+    raw_target_id = str(form.get("target_category_id") or "").strip()
+    target_id = entity_id(raw_target_id)
+    target_department_id = entity_id(str(form.get("target_department_id") or ""))
+    if raw_target_id and target_id is None:
+        flash(request, "Choose a valid destination folder.", "error")
+        return _redirect("/pricing/categories/manage")
+    if not chosen_ids or choice not in {"yes", "no"}:
+        flash(request, "Select folders and choose whether their Items move with them.", "error")
+        return _redirect("/pricing/categories/manage")
+    roots = [db.get(PricingItemCategory, category_id) for category_id in chosen_ids]
+    source_department_id = db.info.get("department_id")
+    if any(entry is None or entry.department_id != source_department_id for entry in roots):
+        flash(request, "Select existing folders from the current Department.", "error")
+        return _redirect("/pricing/categories/manage")
+    selected_ids = {entry.id for entry in roots}
+    roots = [
+        entry for entry in roots
+        if not any(ancestor.id in selected_ids for ancestor in category_ancestry(entry)[:-1])
+    ]
+    target, parent, error = _folder_destination(
+        db, user, target_department_id, target_id,
+    )
+    if error:
+        flash(request, error, "error")
+        return _redirect("/pricing/categories/manage")
+    branches = [entry for root in roots for entry in [root, *category_descendants(root)]]
+    moving_ids = {entry.id for entry in branches}
+    if parent is not None and parent.id in moving_ids:
+        flash(request, "A folder cannot move into itself or one of its child folders.", "error")
+        return _redirect("/pricing/categories/manage")
+    sibling_names = [entry.name.casefold() for entry in roots]
+    if len(sibling_names) != len(set(sibling_names)):
+        flash(request, "Selected folders have duplicate names for the same destination.", "error")
+        return _redirect("/pricing/categories/manage")
+    existing = list(db.scalars(
+        select(PricingItemCategory)
+        .where(
+            PricingItemCategory.department_id == target.id,
+            PricingItemCategory.parent_id == (parent.id if parent else None),
+        )
+        .execution_options(include_all_departments=True)
+    ))
+    if any(
+        entry.id not in moving_ids and entry.name.casefold() in sibling_names
+        for entry in existing
+    ):
+        flash(request, "A folder with the same name already exists at the destination.", "error")
+        return _redirect("/pricing/categories/manage")
+    items = [item for entry in branches for item in entry.items]
+    if choice == "yes" and target.id != source_department_id:
+        conflicts = _category_transfer_item_conflicts(
+            db, items=items, target_department_id=target.id,
+        )
+        if conflicts:
+            flash(request, "The destination has Items with the same name and model: " + "; ".join(conflicts), "error")
+            return _redirect("/pricing/categories/manage")
+    try:
+        if choice == "no":
+            for item in items:
+                item.category = None
+        elif target.id != source_department_id:
+            _move_linked_item_resources(db, items=items, target_department=target)
+        for root in roots:
+            root.parent = parent
+        if target.id != source_department_id:
+            for entry in branches:
+                entry.department_id = target.id
+                entry.user_access.clear()
+        db.commit()
+    except (ValueError, IntegrityError) as exc:
+        db.rollback()
+        flash(request, str(exc) if isinstance(exc, ValueError) else "The destination changed. No folders or Items moved; refresh and try again.", "error")
+        return _redirect("/pricing/categories/manage")
+    set_audit_context(
+        request, action="pricing_categories_moved", entity_type="pricing_item_category",
+        entity_id=roots[0].id, entity_label=roots[0].name,
+        changes={"category_ids": [entry.id for entry in roots],
+                 "target_department_id": target.id, "target_category_id": parent.id if parent else None,
+                 "items_moved": len(items) if choice == "yes" else 0,
+                 "items_uncategorized": len(items) if choice == "no" else 0},
+    )
+    if choice == "yes":
+        flash(request, f"{len(roots)} folder(s) moved with {len(items)} Item(s).")
+    else:
+        flash(request, f"{len(roots)} folder(s) moved. {len(items)} Item(s) sent to Uncategorized in the original Department.")
+    return _redirect("/pricing/categories/manage")
+
+
 @router.post("/categories/{category_id}/delete", dependencies=[Depends(require_admin)])
 async def delete_category(
     category_id: int,
@@ -990,24 +1152,49 @@ async def delete_category(
     if category is None:
         flash(request, "That category no longer exists.", "error")
         return _redirect(_category_return(form))
-    if db.scalar(select(func.count(PricingItem.id)).where(PricingItem.category_id == category.id)):
-        flash(
-            request,
-            "Move its items to another category or Uncategorized before deleting it.",
-            "error",
-        )
-        return _redirect(return_url)
-    if category.children:
-        flash(
-            request,
-            "Delete or move its child Categories before deleting this folder.",
-            "error",
-        )
+    branches = [category, *category_descendants(category)]
+    items = [item for entry in branches for item in entry.items]
+    choice = str(form.get("delete_items") or "")
+    if (items or category.children) and choice not in {"yes", "no"}:
+        flash(request, "Confirm whether to delete the Items or send them to Uncategorized.", "error")
         return _redirect(return_url)
     name = category.name
-    db.delete(category)
-    db.commit()
-    flash(request, f"Category “{name}” deleted.")
+    stored_keys: list[str | None] = []
+    purchase_storage_keys: list[str] = []
+    try:
+        if choice == "yes":
+            item_ids = {item.id for item in items}
+            related_ids = {related.id for item in items for related in item.related_items}
+            document_ids = set(db.scalars(
+                select(PurchaseDocumentItem.document_id).where(or_(
+                    PurchaseDocumentItem.pricing_item_id.in_(item_ids),
+                    PurchaseDocumentItem.related_item_id.in_(related_ids),
+                ))
+            )) if item_ids else set()
+            for item in items:
+                stored_keys.extend((item.image_storage_key, item.image_thumbnail_key))
+                db.delete(item)
+            purchase_storage_keys = _remove_orphan_purchase_documents(db, document_ids)
+        else:
+            for item in items:
+                item.category = None
+            db.flush()
+        for entry in sorted(branches, key=category_depth, reverse=True):
+            db.delete(entry)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        flash(request, "A linked record prevents deletion. No folders or Items were deleted.", "error")
+        return _redirect(return_url)
+    delete_stored(*stored_keys)
+    delete_purchase_files(*purchase_storage_keys)
+    set_audit_context(
+        request, action="pricing_category_branch_deleted", entity_type="pricing_item_category",
+        entity_id=category_id, entity_label=name,
+        changes={"folders_deleted": len(branches), "items_deleted": len(items) if choice == "yes" else 0,
+                 "items_uncategorized": len(items) if choice != "yes" else 0},
+    )
+    flash(request, f"Category “{name}” and {len(branches) - 1} child folder(s) deleted.")
     return _redirect(_category_return(form))
 
 
@@ -1098,6 +1285,66 @@ async def move_category_department(
     )
     flash(request, f'Category "{category.name}" and its Items moved to {target.name}.')
     return _redirect("/pricing/items/departments")
+
+
+@router.post("/items/move")
+async def move_items_to_folder(
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    require_permission(request, db, user, "pricing_items.manage")
+    form = await request.form()
+    if _csrf_error(request, form.get("csrf_token")):
+        return _redirect("/pricing/items")
+    chosen_ids = _chosen_ids(form, "item_ids")
+    if not chosen_ids:
+        flash(request, "Select at least one Item to move.", "error")
+        return _redirect("/pricing/items")
+    items = [db.get(PricingItem, item_id) for item_id in chosen_ids]
+    source_department_id = db.info.get("department_id")
+    if any(item is None or item.department_id != source_department_id for item in items):
+        flash(request, "Select existing Items from the current Department.", "error")
+        return _redirect("/pricing/items")
+    raw_target_id = str(form.get("target_category_id") or "").strip()
+    target_id = entity_id(raw_target_id)
+    target_department_id = entity_id(str(form.get("target_department_id") or ""))
+    if raw_target_id and target_id is None:
+        flash(request, "Choose a valid destination folder.", "error")
+        return _redirect("/pricing/items")
+    target, parent, error = _folder_destination(db, user, target_department_id, target_id)
+    if error:
+        flash(request, error, "error")
+        return _redirect("/pricing/items")
+    if target.id != source_department_id:
+        conflicts = _category_transfer_item_conflicts(
+            db, items=items, target_department_id=target.id,
+        )
+        if conflicts:
+            flash(request, "The destination has Items with the same name and model: " + "; ".join(conflicts), "error")
+            return _redirect("/pricing/items")
+    try:
+        if target.id != source_department_id:
+            _move_linked_item_resources(db, items=items, target_department=target)
+        for item in items:
+            item.category = parent
+            item.updated_at = utcnow()
+        db.commit()
+    except (ValueError, IntegrityError) as exc:
+        db.rollback()
+        flash(request, str(exc) if isinstance(exc, ValueError) else "The destination changed. No Items moved; refresh and try again.", "error")
+        return _redirect("/pricing/items")
+    set_audit_context(
+        request, action="pricing_items_moved_to_folder", entity_type="pricing_item",
+        entity_id=items[0].id, entity_label=items[0].display_label,
+        changes={"item_ids": chosen_ids, "target_department_id": target.id,
+                 "target_category_id": parent.id if parent else None},
+    )
+    if parent is None:
+        flash(request, f"{len(items)} Item(s) moved to Uncategorized in {target.name}.")
+    else:
+        flash(request, f"{len(items)} Item(s) moved to {parent.display_label} in {target.name}.")
+    return _redirect("/pricing/items")
 
 
 @router.post("/items")

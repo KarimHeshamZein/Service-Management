@@ -543,25 +543,25 @@ def test_category_manager_separates_edit_move_delete_and_keeps_category_context(
     assert 'href="/pricing/categories/manage"' in items_page.text
     page = client.get(f"/pricing/categories/manage?category_id={root.id}")
     assert page.status_code == 200
-    assert "Security / Cameras" in page.text
-    edit_form = re.search(
-        rf'<form method="post" action="/pricing/categories/{root.id}/edit">(.*?)</form>',
-        page.text, re.S,
-    ).group(1)
+    assert f'href="/pricing/categories/manage?category_id={child.id}"' in page.text
+    assert 'data-folder-destination-picker' in page.text
+    assert 'data-folder-rename-form' in page.text
+    assert 'data-folder-delete-form' in page.text
+    assert 'name="category_kind" value="main"' in page.text
+    assert 'name="category_kind" value="sub"' in page.text
     move_form = re.search(
         rf'<form method="post" action="/pricing/categories/{root.id}/move-department"(.*?)</form>',
         page.text, re.S,
-    ).group(1)
-    assert 'name="target_department_id"' not in edit_form
-    assert 'name="parent_category_id"' in edit_form
-    assert 'name="target_department_id" required' in move_form
-    assert "Move or delete the direct Items and child Categories" in page.text
-    assert 'type="button" disabled' in page.text
+    )
+    assert move_form is None
+    assert 'data-folder-id="' + str(root.id) + '"' in page.text
+    assert 'name="target_department_id"' in page.text
+    assert 'name="category_ids"' in page.text
 
     searched = client.get("/pricing/categories/manage?q=Security")
-    list_html = searched.text.split('class="pricing-category-manager-options"', 1)[1].split("</nav>", 1)[0]
-    assert "Security" in list_html and "Cameras" in list_html
-    assert "Other" not in list_html
+    browser_html = searched.text.split('<section class="pricing-category-browser"', 1)[1].split("</section>", 1)[0]
+    assert "Security" in browser_html and "Cameras" in browser_html
+    assert "Other" not in browser_html
 
     created = client.post("/pricing/categories", data={
         "csrf_token": token, "from_manager": "1", "name": "Access Control",
@@ -577,7 +577,20 @@ def test_category_manager_separates_edit_move_delete_and_keeps_category_context(
     })
     assert duplicate.status_code == 422
     assert 'value="Access Control"' in duplicate.text
-    assert f'<option value="{root.id}" selected' in duplicate.text
+    assert f'name="parent_category_id" value="{root.id}"' in duplicate.text
+
+    missing_parent = client.post("/pricing/categories", data={
+        "csrf_token": token, "from_manager": "1", "category_kind": "sub",
+        "name": "Missing parent", "parent_category_id": "",
+    })
+    assert missing_parent.status_code == 422
+    assert db.scalar(select(PricingItemCategory).where(PricingItemCategory.name == "Missing parent")) is None
+    standalone = client.post("/pricing/categories", data={
+        "csrf_token": token, "from_manager": "1", "category_kind": "main",
+        "name": "Standalone", "parent_category_id": str(root.id),
+    })
+    assert standalone.status_code == 303
+    assert db.scalar(select(PricingItemCategory).where(PricingItemCategory.name == "Standalone")).parent_id is None
 
     renamed = client.post(f"/pricing/categories/{root.id}/edit", data={
         "csrf_token": token, "from_manager": "1", "name": "Site Security",
@@ -603,7 +616,7 @@ def test_category_manager_separates_edit_move_delete_and_keeps_category_context(
     })
     assert invalid.status_code == 422
     assert 'value="Other revised"' in invalid.text
-    assert f'action="/pricing/categories/{other.id}/edit"' in invalid.text
+    assert 'data-folder-rename-form' in invalid.text
     db.expire_all()
     assert (db.get(PricingItemCategory, other.id).name, db.get(PricingItemCategory, other.id).parent_id) == ("Other", None)
 
@@ -621,6 +634,230 @@ def test_category_manager_separates_edit_move_delete_and_keeps_category_context(
     })
     assert transferred.status_code == 303
     assert transferred.headers["location"] == "/pricing/items/departments"
+
+
+def test_folder_move_nests_a_full_branch_across_departments_with_items(client, db):
+    target = _add_department(db)
+    root = PricingItemCategory(name="Cameras", department_id=1)
+    child = PricingItemCategory(name="Outdoor", department_id=1, parent=root)
+    grandchild = PricingItemCategory(name="Dome", department_id=1, parent=child)
+    source_item = PricingItem(
+        department_id=1, category=grandchild, name="Deep camera", model="DC-1",
+        unit_price=Decimal("100.00"), currency="SAR",
+    )
+    source_item.related_items.append(PricingRelatedItem(
+        department_id=1, name="Mount", unit_price=Decimal("5.00"), currency="SAR",
+    ))
+    target_root = PricingItemCategory(name="Security", department_id=target.id)
+    target_child = PricingItemCategory(name="Equipment", department_id=target.id, parent=target_root)
+    db.add_all([root, target_root])
+    db.commit()
+    root_id, child_id, grandchild_id, item_id = root.id, child.id, grandchild.id, source_item.id
+    db.add_all([
+        PricingCategoryUserAccess(category_id=child_id, user_id=2, granted_by_id=1),
+        PricingItemUserAccess(item_id=item_id, user_id=2, granted_by_id=1),
+    ])
+    db.commit()
+
+    login(client, *ADMIN)
+    token = csrf_of(client, "/pricing/categories/manage")
+    page = client.get("/pricing/categories/manage")
+    assert f'id="folder-destination-{target_child.id}"' in page.text
+    moved = client.post("/pricing/categories/move", data={
+        "csrf_token": token, "category_ids": str(root_id),
+        "target_department_id": str(target.id), "target_category_id": str(target_child.id),
+        "move_items": "yes",
+    })
+    assert moved.status_code == 303
+    db.expire_all()
+    assert db.get(PricingItemCategory, root_id).parent_id == target_child.id
+    assert db.get(PricingItemCategory, child_id).parent_id == root_id
+    assert db.get(PricingItemCategory, grandchild_id).parent_id == child_id
+    assert {db.get(PricingItemCategory, entry_id).department_id for entry_id in (root_id, child_id, grandchild_id)} == {target.id}
+    assert db.get(PricingItem, item_id).department_id == target.id
+    assert db.get(PricingItem, item_id).category_id == grandchild_id
+    assert db.get(PricingItem, item_id).related_items[0].department_id == target.id
+    assert db.get(PricingItemCategory, grandchild_id).depth == 4
+    assert db.scalar(select(PricingCategoryUserAccess).where(PricingCategoryUserAccess.category_id == child_id)) is None
+    assert db.scalar(select(PricingItemUserAccess).where(PricingItemUserAccess.item_id == item_id)) is None
+
+
+def test_multiple_folder_move_without_items_keeps_items_in_source_uncategorized(client, db):
+    target = _add_department(db)
+    root = PricingItemCategory(name="Cameras", department_id=1)
+    child = PricingItemCategory(name="Outdoor", department_id=1, parent=root)
+    peer = PricingItemCategory(name="Gates", department_id=1)
+    destination = PricingItemCategory(name="Hardware", department_id=target.id)
+    first = PricingItem(department_id=1, category=child, name="Camera", model="C1", unit_price=Decimal("10"))
+    second = PricingItem(department_id=1, category=peer, name="Gate", model="G1", unit_price=Decimal("20"))
+    db.add_all([root, peer, destination])
+    db.commit()
+    root_id, child_id, peer_id, first_id, second_id = root.id, child.id, peer.id, first.id, second.id
+
+    login(client, *ADMIN)
+    token = csrf_of(client, "/pricing/categories/manage")
+    moved = client.post("/pricing/categories/move", data={
+        "csrf_token": token,
+        "category_ids": [str(root_id), str(child_id), str(peer_id)],
+        "target_department_id": str(target.id), "target_category_id": str(destination.id),
+        "move_items": "no",
+    })
+    assert moved.status_code == 303
+    db.expire_all()
+    assert db.get(PricingItemCategory, root_id).parent_id == destination.id
+    assert db.get(PricingItemCategory, child_id).parent_id == root_id
+    assert db.get(PricingItemCategory, peer_id).parent_id == destination.id
+    assert {db.get(PricingItemCategory, entry_id).department_id for entry_id in (root_id, child_id, peer_id)} == {target.id}
+    assert {(db.get(PricingItem, entry_id).department_id, db.get(PricingItem, entry_id).category_id) for entry_id in (first_id, second_id)} == {(1, None)}
+
+
+def test_bulk_item_move_uses_only_chosen_direct_items_and_preserves_folders(client, db):
+    target = _add_department(db)
+    source = PricingItemCategory(name="Cameras", department_id=1)
+    child = PricingItemCategory(name="Indoor", department_id=1, parent=source)
+    destination = PricingItemCategory(name="Equipment", department_id=target.id)
+    first = PricingItem(department_id=1, category=source, name="Camera A", model="A", unit_price=Decimal("10"))
+    second = PricingItem(department_id=1, category=source, name="Camera B", model="B", unit_price=Decimal("20"))
+    nested = PricingItem(department_id=1, category=child, name="Indoor Camera", model="I", unit_price=Decimal("30"))
+    db.add_all([source, destination])
+    db.commit()
+    source_id, child_id, first_id, second_id, nested_id = source.id, child.id, first.id, second.id, nested.id
+
+    login(client, *ADMIN)
+    page = client.get(f"/pricing/items?category={source_id}")
+    table = page.text.split("<table>", 1)[1].split("</table>", 1)[0]
+    assert 'data-pricing-items-select-all' in table
+    assert f'name="item_ids" value="{first_id}"' in table
+    assert f'name="item_ids" value="{second_id}"' in table
+    assert f'name="item_ids" value="{nested_id}"' not in table
+    token = csrf_of(client, "/pricing/items")
+    moved = client.post("/pricing/items/move", data={
+        "csrf_token": token, "item_ids": [str(first_id), str(second_id)],
+        "target_department_id": str(target.id), "target_category_id": str(destination.id),
+    })
+    assert moved.status_code == 303
+    db.expire_all()
+    assert {(db.get(PricingItem, entry_id).department_id, db.get(PricingItem, entry_id).category_id) for entry_id in (first_id, second_id)} == {(target.id, destination.id)}
+    assert (db.get(PricingItem, nested_id).department_id, db.get(PricingItem, nested_id).category_id) == (1, child_id)
+    assert db.get(PricingItemCategory, source_id) is not None
+
+
+def test_folder_delete_removes_descendants_and_obeys_item_choice(client, db):
+    untouched_root = PricingItemCategory(name="Untouched", department_id=1)
+    deleted_sub = PricingItemCategory(name="Delete this subfolder", department_id=1, parent=untouched_root)
+    untouched_peer = PricingItemCategory(name="Keep this sibling", department_id=1, parent=untouched_root)
+    keep_root = PricingItemCategory(name="Keep Items", department_id=1)
+    keep_child = PricingItemCategory(name="Keep Child", department_id=1, parent=keep_root)
+    keep_item = PricingItem(department_id=1, category=keep_child, name="Preserved item", model="P", unit_price=Decimal("10"))
+    delete_root = PricingItemCategory(name="Delete Items", department_id=1)
+    delete_child = PricingItemCategory(name="Delete Child", department_id=1, parent=delete_root)
+    delete_item = PricingItem(department_id=1, category=delete_child, name="Deleted item", model="D", unit_price=Decimal("20"))
+    db.add_all([untouched_root, keep_root, delete_root])
+    db.commit()
+    untouched_root_id, deleted_sub_id, untouched_peer_id = untouched_root.id, deleted_sub.id, untouched_peer.id
+    keep_root_id, keep_child_id, keep_item_id = keep_root.id, keep_child.id, keep_item.id
+    delete_root_id, delete_child_id, delete_item_id = delete_root.id, delete_child.id, delete_item.id
+
+    login(client, *ADMIN)
+    token = csrf_of(client, "/pricing/categories/manage")
+    assert client.post(f"/pricing/categories/{deleted_sub_id}/delete", data={
+        "csrf_token": token, "delete_items": "no",
+    }).status_code == 303
+    db.expire_all()
+    assert db.get(PricingItemCategory, untouched_root_id) is not None
+    assert db.get(PricingItemCategory, untouched_peer_id) is not None
+    assert db.get(PricingItemCategory, deleted_sub_id) is None
+    assert client.post(f"/pricing/categories/{keep_root_id}/delete", data={
+        "csrf_token": token, "delete_items": "no",
+    }).status_code == 303
+    db.expire_all()
+    assert db.get(PricingItemCategory, keep_root_id) is None
+    assert db.get(PricingItemCategory, keep_child_id) is None
+    assert db.get(PricingItem, keep_item_id).category_id is None
+    assert client.post(f"/pricing/categories/{delete_root_id}/delete", data={
+        "csrf_token": token, "delete_items": "yes",
+    }).status_code == 303
+    db.expire_all()
+    assert db.get(PricingItemCategory, delete_root_id) is None
+    assert db.get(PricingItemCategory, delete_child_id) is None
+    assert db.get(PricingItem, delete_item_id) is None
+
+
+def test_folder_move_rejects_cycles_and_name_conflicts_without_partial_changes(client, db):
+    root = PricingItemCategory(name="Cameras", department_id=1)
+    child = PricingItemCategory(name="Outdoor", department_id=1, parent=root)
+    destination = PricingItemCategory(name="Security", department_id=1)
+    same_name = PricingItemCategory(name="Cameras", department_id=1, parent=destination)
+    item = PricingItem(department_id=1, category=child, name="Camera", model="C1", unit_price=Decimal("10"))
+    db.add_all([root, destination])
+    db.commit()
+    root_id, child_id, item_id = root.id, child.id, item.id
+    login(client, *ADMIN)
+    token = csrf_of(client, "/pricing/categories/manage")
+    for target_id in (child_id, destination.id, "invalid"):
+        response = client.post("/pricing/categories/move", data={
+            "csrf_token": token, "category_ids": str(root_id),
+            "target_department_id": "1", "target_category_id": str(target_id),
+            "move_items": "no",
+        })
+        assert response.status_code == 303
+        db.expire_all()
+        assert db.get(PricingItemCategory, root_id).parent_id is None
+        assert db.get(PricingItemCategory, child_id).parent_id == root_id
+        assert db.get(PricingItem, item_id).category_id == child_id
+
+
+def test_bulk_item_move_rejects_destination_name_conflict(client, db):
+    target = _add_department(db)
+    source = PricingItemCategory(name="Cameras", department_id=1)
+    destination = PricingItemCategory(name="Equipment", department_id=target.id)
+    item = PricingItem(department_id=1, category=source, name="Camera", model="C1", unit_price=Decimal("10"))
+    duplicate = PricingItem(department_id=target.id, category=destination, name="camera", model="c1", unit_price=Decimal("20"))
+    db.add_all([source, destination])
+    db.commit()
+    source_id, item_id = source.id, item.id
+    login(client, *ADMIN)
+    token = csrf_of(client, "/pricing/items")
+    invalid_target = client.post("/pricing/items/move", data={
+        "csrf_token": token, "item_ids": str(item_id),
+        "target_department_id": str(target.id), "target_category_id": "invalid",
+    })
+    assert invalid_target.status_code == 303
+    response = client.post("/pricing/items/move", data={
+        "csrf_token": token, "item_ids": str(item_id),
+        "target_department_id": str(target.id), "target_category_id": str(destination.id),
+    })
+    assert response.status_code == 303
+    db.expire_all()
+    assert db.get(PricingItem, item_id).department_id == 1
+    assert db.get(PricingItem, item_id).category_id == source_id
+
+
+def test_non_admin_cannot_move_folders_or_items_between_departments(client, db):
+    target = _add_department(db)
+    source = PricingItemCategory(name="Cameras", department_id=1)
+    destination = PricingItemCategory(name="Equipment", department_id=target.id)
+    item = PricingItem(department_id=1, category=source, name="Camera", model="C1", unit_price=Decimal("10"))
+    db.add_all([source, destination])
+    db.commit()
+    source_id, item_id = source.id, item.id
+    login(client, *LEADER_A)
+    token = csrf_of(client, "/pricing/categories/manage")
+    page = client.get("/pricing/categories/manage")
+    assert f'id="folder-destination-{destination.id}"' not in page.text
+    folder_move = client.post("/pricing/categories/move", data={
+        "csrf_token": token, "category_ids": str(source_id),
+        "target_department_id": str(target.id), "target_category_id": str(destination.id),
+        "move_items": "yes",
+    })
+    item_move = client.post("/pricing/items/move", data={
+        "csrf_token": token, "item_ids": str(item_id),
+        "target_department_id": str(target.id), "target_category_id": str(destination.id),
+    })
+    assert folder_move.status_code == 303 and item_move.status_code == 303
+    db.expire_all()
+    assert db.get(PricingItemCategory, source_id).department_id == 1
+    assert db.get(PricingItem, item_id).department_id == 1
 
 
 def test_category_transfer_lists_all_item_conflicts_without_moving_branch(client, db):

@@ -1,0 +1,30 @@
+<dialog class="pricing-item-picker pricing-folder-destination-picker" data-folder-destination-picker data-empty-selection="{{ t('pricing.folders.select.first') }}" data-create-parent-required="{{ t('pricing.folders.choose.parent') }}" aria-labelledby="folder-destination-title">
+  <div class="pricing-item-picker-head">
+    <div><span class="eyebrow">{{ t('ui.item.categories') }}</span><h2 id="folder-destination-title">{{ t('pricing.folders.choose.destination') }}</h2></div>
+    <div class="pricing-picker-head-actions"><button class="btn btn-secondary btn-sm" type="button" data-folder-destination-back hidden>{{ t('ui.back') }}</button><button class="btn btn-quiet btn-sm" type="button" data-folder-destination-close>{{ t('ui.close') }}</button></div>
+  </div>
+  <div class="pricing-item-picker-grid">
+    {% if destination_departments|length > 1 %}<div class="field" data-folder-department-wrap><label for="folder-destination-department">{{ t('pricing.move.to.department') }}</label><select id="folder-destination-department" data-folder-destination-department>{% for option in destination_departments %}<option value="{{ option.id }}" {{ 'selected' if option.id == current_department_id }}>{{ option.name }}</option>{% endfor %}</select></div>{% else %}<input type="hidden" data-folder-destination-department value="{{ current_department_id }}">{% endif %}
+    {% for department in destination_departments %}
+    <div data-folder-destination-root data-department-id="{{ department.id }}" {{ 'hidden' if department.id != current_department_id }}>
+      <div class="pricing-category-choice-head"><h3>{{ department.name }}</h3><button class="btn btn-primary btn-sm" type="button" data-folder-destination-select data-category-id="" data-department-id="{{ department.id }}" data-destination-kind="main">{{ t('pricing.folders.select.main') }}</button></div>
+      <div class="pricing-category-folder-grid">
+        {% for category in destination_roots if category.department_id == department.id %}
+        <button class="pricing-category-folder pricing-picker-folder" type="button" data-folder-destination-open="folder-destination-{{ category.id }}"><span class="pricing-category-folder-icon" aria-hidden="true"></span><span class="pricing-category-folder-copy"><strong>{{ category.name }}</strong><span>{{ destination_children.get(category.id, [])|length }} {{ t('ui.child.categories') }}</span></span><span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span></button>
+        {% endfor %}
+        <button class="pricing-category-folder pricing-category-folder-muted pricing-picker-folder" type="button" data-folder-destination-select data-category-id="" data-department-id="{{ department.id }}" data-destination-kind="uncategorized"><span class="pricing-category-folder-icon" aria-hidden="true"></span><span class="pricing-category-folder-copy"><strong>{{ t('ui.uncategorized') }}</strong></span><span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span></button>
+      </div>
+    </div>
+    {% endfor %}
+    {% for category in destination_categories %}
+    <section id="folder-destination-{{ category.id }}" data-folder-destination-panel data-department-id="{{ category.department_id }}" data-parent-panel="{{ 'folder-destination-' ~ category.parent_id if category.parent_id else '' }}" hidden>
+      <div class="pricing-category-choice-head"><h3>{{ category.name }}</h3><button class="btn btn-primary btn-sm" type="button" data-folder-destination-select data-category-id="{{ category.id }}" data-department-id="{{ category.department_id }}" data-destination-kind="folder">{{ t('ui.select.this.category') }}</button></div>
+      {% if destination_children.get(category.id, []) %}<p class="hint">{{ t('ui.open.a.child.category.or.select.this.folder') }}</p><div class="pricing-category-folder-grid pricing-subcategory-folder-grid">
+        {% for child in destination_children.get(category.id, []) %}
+        <button class="pricing-category-folder pricing-subcategory-folder pricing-picker-folder" type="button" data-folder-destination-open="folder-destination-{{ child.id }}"><span class="pricing-category-folder-icon" aria-hidden="true"></span><span class="pricing-category-folder-copy"><strong>{{ child.name }}</strong><span>{{ destination_children.get(child.id, [])|length }} {{ t('ui.child.categories') }}</span></span><span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span></button>
+        {% endfor %}
+      </div>{% else %}<p class="hint">{{ t('ui.this.category.has.no.child.categories') }}</p>{% endif %}
+    </section>
+    {% endfor %}
+  </div>
+</dialog>

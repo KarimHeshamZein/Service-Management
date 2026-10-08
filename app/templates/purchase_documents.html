@@ -46,9 +46,9 @@
 <section class="card">
   <div class="pricing-category-detail-title">
     <a class="btn btn-secondary btn-sm" href="{% if selected_category.parent_id %}/pricing/purchase-documents?category={{ selected_category.parent_id }}{% else %}/pricing/purchase-documents{% endif %}">{{ t('ui.back') }}</a>
-    <div><span class="eyebrow">{{ t('ui.main.category') if selected_category.depth == 0 else (t('ui.subcategory') if selected_category.depth == 1 else t('ui.subsubcategory')) }}</span><h2>{{ selected_category_label }}</h2></div>
+    <div><span class="eyebrow">{{ t('ui.main.category') if selected_category.depth == 0 else t('ui.subcategory') }}</span><h2>{{ selected_category_label }}</h2></div>
   </div>
-  {% if subcategories %}<div class="pricing-category-folder-grid pricing-subcategory-folder-grid">{% for subcategory in subcategories %}<a class="pricing-category-folder pricing-subcategory-folder {{ 'pricing-subsubcategory-folder' if subcategory.depth == 2 }}" href="/pricing/purchase-documents?category={{ subcategory.id }}"><span class="pricing-category-folder-icon" aria-hidden="true"></span><span class="pricing-category-folder-copy"><strong>{{ subcategory.name }}</strong><span>{{ t('ui.subcategory') if subcategory.depth == 1 else t('ui.subsubcategory') }}</span></span><span>›</span></a>{% endfor %}</div>{% endif %}
+  {% if subcategories %}<div class="pricing-category-folder-grid pricing-subcategory-folder-grid">{% for subcategory in subcategories %}<a class="pricing-category-folder pricing-subcategory-folder {{ 'pricing-subsubcategory-folder' if subcategory.depth > 1 }}" href="/pricing/purchase-documents?category={{ subcategory.id }}"><span class="pricing-category-folder-icon" aria-hidden="true"></span><span class="pricing-category-folder-copy"><strong>{{ subcategory.name }}</strong><span>{{ t('ui.subcategory') }}</span></span><span>›</span></a>{% endfor %}</div>{% endif %}
   {% if cards %}<h3 class="purchase-items-heading">{{ t('ui.items') }}</h3>{{ item_cards(cards) }}{% elif not subcategories %}<p class="empty-state">{{ t('ui.no.items') }}</p>{% endif %}
 </section>
 {% endif %}

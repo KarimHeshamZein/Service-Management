@@ -35,7 +35,7 @@ Work in small, reviewable changes. Where one phase spans unrelated risks, its pa
 ## Priority 2 — broken workflows and everyday UX
 
 - [ ] **14 — P10:** Repair document exports, failed-upload cleanup, and form recovery.
-- [ ] **15 — P1/P2:** Repair Category form boundaries, read-only controls, scoped navigation paths, and access wording. [Draft PR #10](https://github.com/KarimHeshamZein/Service-Management/pull/10) gives Manage Categories a searchable page with separate edit, transfer, and delete forms; focused Category checks pass. Scoped navigation, view-only Item controls, and manual English/Arabic UI verification remain open.
+- [ ] **15 — P1/P2:** Repair Category form boundaries, read-only controls, scoped navigation paths, and access wording. [Draft PR #10](https://github.com/KarimHeshamZein/Service-Management/pull/10) separated Category actions. The `fix/pricing-category-folder-workflow` preview branch now uses browsable folder cards, separate rename/delete actions, and one destination picker. Scoped navigation, view-only Item controls, and manual English/Arabic UI verification remain open.
 - [ ] **16 — P3:** Make branch-transfer conflicts actionable and keep transfers atomic. [Draft PR #11](https://github.com/KarimHeshamZein/Service-Management/pull/11) detects all descendant Item name/model collisions before a move and rolls back a concurrent uniqueness conflict; focused checks pass. Manual English/Arabic UI verification remains open.
 - [ ] **17 — P9:** Align quotation validation and recover entered work after a failed save.
 - [ ] **18 — P17:** Finish the Excel import/preview contract after the access issue in item 06 is resolved.
@@ -47,8 +47,8 @@ Work in small, reviewable changes. Where one phase spans unrelated risks, its pa
 ## Priority 3 — larger workflow changes and measured optimization
 
 - [ ] **23 — P11:** Decide and implement document correction and deletion behavior after shared-link protection.
-- [ ] **24 — P4:** Simplify same-Department Item/Category organization and recovery. [Draft PR #10](https://github.com/KarimHeshamZein/Service-Management/pull/10) makes Category reparenting a direct action with full destination paths and keeps invalid edits on the form; dedicated single/multi-Item moves remain open.
-- [ ] **25 — P5:** Add reviewable cross-Department group transfers after access and preservation safeguards.
+- [ ] **24 — P4:** Simplify Item/Category organization and recovery. The `fix/pricing-category-folder-workflow` preview branch replaces flat parent lists with the existing folder-card picker, supports Main/Sub creation, any-depth nesting, one/many Category moves, and direct-Item single/multi/Select All moves. Folder moves ask whether all descendant Items follow; No sends them to Uncategorized in the source Department. Folder deletion has the same explicit Item choice. Focused regression passes; manual English/Arabic, keyboard, and mobile UI checks remain open.
+- [ ] **25 — P5:** Add reviewable cross-Department group transfers after access and preservation safeguards. The same preview branch supports Administrator-only cross-Department group Category and Item moves with name/model conflict checks and atomic rollback. Manual conflict/permission checks and review remain open.
 - [ ] **26 — P6:** Measure catalogue performance with representative data, then optimize only confirmed bottlenecks.
 
 ## Final regression gate

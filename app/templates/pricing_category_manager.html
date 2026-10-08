@@ -1,77 +1,49 @@
 {% extends "base.html" %}
+{% import "partials/pricing_category_card.html" as folder_ui with context %}
 {% set page_content_class = 'content-wide' %}
 {% block title %}{{ t('ui.manage.categories') }} · {{ settings.app_name }}{% endblock %}
 {% block topbar_title %}{{ t('ui.manage.categories') }}{% endblock %}
 {% block content %}
 <div class="page-head">
-  <div><span class="eyebrow">{{ t('nav.pricing.items') }}</span><h1>{{ t('ui.manage.categories') }}</h1><p class="lede">{{ t('pricing.category.manager.help') }}</p></div>
-  <a class="btn btn-secondary" href="/pricing/items">{{ t('pricing.category.back.to.items') }}</a>
+  <div><span class="eyebrow">{{ t('nav.pricing.items') }}</span><h1>{{ t('ui.manage.categories') }}</h1><p class="lede">{{ t('pricing.folders.manager.help') }}</p></div>
+  <div class="pricing-category-manager-links"><a class="btn btn-secondary" href="/pricing/items">{{ t('pricing.category.back.to.items') }}</a><button class="btn btn-primary" type="button" data-toggle-target="category-create" aria-expanded="{{ 'true' if create_mode else 'false' }}">{{ t('ui.add.category') }}</button></div>
 </div>
 {% if errors.form %}<div class="alert error" role="alert">{{ errors.form }}</div>{% endif %}
-<div class="pricing-category-manager">
-  <aside class="card pricing-category-manager-list" aria-label="{{ t('ui.item.categories') }}">
-    <div class="card-head"><h2>{{ t('ui.item.categories') }}</h2></div>
-    <div class="card-body">
-      <form method="get" action="/pricing/categories/manage" class="pricing-category-manager-search">
-        <label for="category-manager-search">{{ t('pricing.category.find.path') }}</label>
-        <div><input id="category-manager-search" type="search" name="q" value="{{ q }}" dir="auto" placeholder="{{ t('pricing.category.search.placeholder') }}"><button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.search') }}</button></div>
-      </form>
-      <a class="btn btn-primary pricing-category-manager-add" href="/pricing/categories/manage?mode=create">{{ t('ui.add.category') }}</a>
-      {% if category_rows %}
-      <nav class="pricing-category-manager-options" aria-label="{{ t('ui.item.categories') }}">
-        {% for category in category_rows %}
-        <a class="pricing-category-manager-option {{ 'is-selected' if selected_category and selected_category.id == category.id }}" href="/pricing/categories/manage?category_id={{ category.id }}{{ '&q=' ~ (q|urlencode) if q else '' }}" {{ 'aria-current="page"' if selected_category and selected_category.id == category.id }}>
-          <span class="pricing-category-manager-level">{{ t('ui.main.category') if category_depths[category.id] == 0 else (t('ui.subcategory') if category_depths[category.id] == 1 else t('ui.subsubcategory')) }}</span>
-          <strong dir="auto">{{ category.name }}</strong>
-          <small dir="auto">{{ category.display_label }}</small>
-        </a>
-        {% endfor %}
-      </nav>
-      {% else %}<p class="hint">{{ t('pricing.category.no.results') if q else t('pricing.category.none.yet') }}</p>{% endif %}
-    </div>
-  </aside>
-  <div class="pricing-category-manager-detail">
-    {% if create_mode %}
-    <section class="card"><div class="card-head"><h2>{{ t('ui.add.category') }}</h2></div><div class="card-body">
-      <p class="hint">{{ t('pricing.category.create.help') }}</p>
-      <form method="post" action="/pricing/categories">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="from_manager" value="1">
-        <div class="field"><label for="new-category-name">{{ t('ui.category.name') }}</label><input id="new-category-name" name="name" value="{{ draft_name|default('') }}" required maxlength="120" dir="auto" autofocus></div>
-        <div class="field"><label for="new-category-parent">{{ t('pricing.category.parent.folder') }}</label><select id="new-category-parent" name="parent_category_id"><option value="">{{ t('ui.main.category') }}</option>{% for parent in parent_options %}<option value="{{ parent.id }}" {{ 'selected' if (draft_parent_id|default(selected_parent_id|string)) == parent.id|string }}>{{ parent.display_label }}</option>{% endfor %}</select><p class="hint">{{ t('pricing.category.max.depth') }}</p></div>
-        <button class="btn btn-primary" type="submit">{{ t('ui.add.category') }}</button>
-      </form>
-    </div></section>
-    {% else %}
-    <section class="card"><div class="card-head"><div><span class="eyebrow">{{ t('pricing.category.current.path') }}</span><h2 dir="auto">{{ selected_category.display_label }}</h2></div></div><div class="card-body">
-      <p class="hint">{{ selected_category.items|length }} {{ t('ui.direct.items') }} · {{ selected_category.children|length }} {{ t('ui.child.categories') }}</p>
-      <div class="pricing-category-manager-links"><a class="btn btn-secondary btn-sm" href="/pricing/items?category={{ selected_category.id }}">{{ t('pricing.category.open.items') }}</a>{% if category_depths[selected_category.id] < 2 %}<a class="btn btn-secondary btn-sm" href="/pricing/categories/manage?mode=create&parent_id={{ selected_category.id }}">{{ t('pricing.category.add.child') }}</a>{% endif %}</div>
-    </div></section>
-    <section class="card"><div class="card-head"><h2>{{ t('pricing.category.edit.location') }}</h2></div><div class="card-body">
-      <p class="hint">{{ t('pricing.category.edit.help') }}</p>
-      <form method="post" action="/pricing/categories/{{ selected_category.id }}/edit">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="from_manager" value="1">
-        <div class="field"><label for="edit-category-name">{{ t('ui.category.name') }}</label><input id="edit-category-name" name="name" value="{{ draft_name|default(selected_category.name) }}" required maxlength="120" dir="auto"></div>
-        <div class="field"><label for="edit-category-parent">{{ t('pricing.category.parent.folder') }}</label><select id="edit-category-parent" name="parent_category_id"><option value="">{{ t('ui.main.category') }}</option>{% for parent in parent_options if parent.id in valid_parent_ids %}<option value="{{ parent.id }}" {{ 'selected' if (draft_parent_id|default(selected_category.parent_id|string)) == parent.id|string }}>{{ parent.display_label }}</option>{% endfor %}</select><p class="hint">{{ t('pricing.category.reparent.help') }}</p></div>
-        <button class="btn btn-primary" type="submit">{{ t('ui.save.changes') }}</button>
-      </form>
-    </div></section>
-    {% if user.is_admin and department_options|length > 1 %}
-    <section class="card"><div class="card-head"><h2>{{ t('pricing.category.transfer.heading') }}</h2></div><div class="card-body">
-      <p class="hint">{{ t('pricing.category.transfer.help') }}</p>
-      <form method="post" action="/pricing/categories/{{ selected_category.id }}/move-department" onsubmit="return confirm('{{ t('pricing.move.category.confirm') }}');">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="from_manager" value="1">
-        <div class="field"><label for="category-target-department">{{ t('pricing.move.to.department') }}</label><select id="category-target-department" name="target_department_id" required><option value="">{{ t('pricing.category.choose.department') }}</option>{% for option in department_options if option.id != selected_category.department_id %}<option value="{{ option.id }}">{{ option.name }}</option>{% endfor %}</select></div>
-        <button class="btn btn-secondary" type="submit">{{ t('pricing.move') }}</button>
-      </form>
-    </div></section>
-    {% endif %}
-    {% if user.is_admin %}
-    <section class="card"><div class="card-head"><h2>{{ t('pricing.category.delete.heading') }}</h2></div><div class="card-body">
-      {% if selected_category.items or selected_category.children %}<p class="hint">{{ t('pricing.category.delete.blocked') }}</p><button class="btn btn-danger" type="button" disabled>{{ t('ui.delete') }}</button>
-      {% else %}<p class="hint">{{ t('pricing.category.delete.help') }}</p><form method="post" action="/pricing/categories/{{ selected_category.id }}/delete" onsubmit="return confirm('{{ t('pricing.category.delete.confirm') }}');"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="from_manager" value="1"><button class="btn btn-danger" type="submit">{{ t('ui.delete') }}</button></form>{% endif %}
-    </div></section>
-    {% endif %}
-    {% endif %}
+<section class="card" id="category-create" {{ '' if create_mode else 'hidden' }}>
+  <div class="card-head"><h2>{{ t('ui.add.category') }}</h2></div>
+  <div class="card-body">
+    {% set draft_parent_value = draft_parent_id|default(selected_parent_id|string if selected_parent_id else '') %}
+    {% set selected_kind = draft_kind|default('sub' if draft_parent_value else 'main') %}
+    <form method="post" action="/pricing/categories" data-category-create-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="from_manager" value="1"><input type="hidden" name="parent_category_id" value="{{ draft_parent_value }}" data-create-parent-id>
+      <fieldset class="pricing-folder-kind"><legend>{{ t('pricing.folders.choose.kind') }}</legend><label class="choice"><input type="radio" name="category_kind" value="main" {{ 'checked' if selected_kind == 'main' }}><span>{{ t('ui.main.category') }}</span></label><label class="choice"><input type="radio" name="category_kind" value="sub" {{ 'checked' if selected_kind == 'sub' }}><span>{{ t('ui.subcategory') }}</span></label></fieldset>
+      <div class="field" data-create-parent-wrap hidden><label>{{ t('pricing.category.parent.folder') }}</label><div class="pricing-folder-choice"><strong data-create-parent-label>{% for option in parent_options if option.id|string == draft_parent_value %}{{ option.display_label }}{% endfor %}</strong><button class="btn btn-secondary btn-sm" type="button" data-open-folder-destination data-picker-action="create">{{ t('ui.choose.category') }}</button></div></div>
+      <div class="field"><label for="new-category-name">{{ t('ui.category.name') }}</label><input id="new-category-name" name="name" value="{{ draft_name|default('') }}" required maxlength="120" dir="auto"></div>
+      <button class="btn btn-primary" type="submit">{{ t('ui.add.category') }}</button>
+    </form>
   </div>
-</div>
+</section>
+<form id="category-move-form" method="post" action="/pricing/categories/move"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target_department_id" value="{{ current_department_id }}"><input type="hidden" name="target_category_id" value=""></form>
+<section class="pricing-category-browser" data-category-overview>
+  <div class="pricing-category-browser-head">
+    <div class="pricing-category-detail-title">
+      {% if selected_category or q %}<a class="btn btn-secondary btn-sm" href="{{ '/pricing/categories/manage?category_id=' ~ selected_category.parent_id if selected_category and selected_category.parent_id else '/pricing/categories/manage' }}">{{ t('ui.back') }}</a>{% endif %}
+      <div><h2>{{ selected_category.name if selected_category else t('ui.item.categories') }}</h2><p class="hint">{{ selected_category.display_label if selected_category else t('ui.open.a.category.to.view.and.manage.its.items') }}</p></div>
+    </div>
+    <form method="get" action="/pricing/categories/manage" class="pricing-category-search"><input type="search" name="q" value="{{ q }}" placeholder="{{ t('pricing.category.search.placeholder') }}" aria-label="{{ t('pricing.category.find.path') }}" dir="auto"><button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.search') }}</button></form>
+  </div>
+  <div class="pricing-folder-toolbar">
+    {% if selected_category %}<label class="choice"><input type="checkbox" name="category_ids" value="{{ selected_category.id }}" form="category-move-form"><span>{{ t('pricing.folders.select.current') }}</span></label><button class="pricing-category-icon-button" type="button" data-rename-folder data-folder-id="{{ selected_category.id }}" data-folder-name="{{ selected_category.name }}" data-parent-id="{{ selected_category.parent_id or '' }}" aria-label="{{ t('pricing.folders.rename') }}" title="{{ t('pricing.folders.rename') }}">✎</button>{% if user.is_admin %}<button class="pricing-category-icon-button danger" type="button" data-delete-folder data-folder-id="{{ selected_category.id }}" data-folder-name="{{ selected_category.name }}" aria-label="{{ t('pricing.folders.delete') }}" title="{{ t('pricing.folders.delete') }}">&#x1F5D1;</button>{% endif %}{% endif %}
+    <button class="btn btn-secondary" type="button" data-open-folder-destination data-picker-action="categories">{{ t('pricing.folders.move.categories') }}</button>
+    {% if selected_category %}<a class="btn btn-secondary btn-sm" href="/pricing/items?category={{ selected_category.id }}">{{ t('pricing.category.open.items') }}</a><a class="btn btn-secondary btn-sm" href="/pricing/categories/manage?mode=create&parent_id={{ selected_category.id }}">{{ t('pricing.category.add.child') }}</a>{% endif %}
+  </div>
+  {% if visible_categories or (not selected_category and not q) %}<div class="pricing-category-folder-grid">
+    {% for category in visible_categories %}{{ folder_ui.folder(category, category_item_counts[category.id], '/pricing/categories/manage?category_id=' ~ category.id, 'category-move-form', true, user.is_admin) }}{% endfor %}
+    {% if not selected_category and not q %}<a class="pricing-category-folder pricing-category-folder-muted" href="/pricing/items?category=uncategorized"><span class="pricing-category-folder-icon" aria-hidden="true"></span><span class="pricing-category-folder-copy"><strong>{{ t('ui.uncategorized') }}</strong><span>{{ uncategorized_count }} {{ t('ui.item') if uncategorized_count == 1 else t('ui.items.lowercase') }}</span></span><span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span></a>{% endif %}
+  </div>{% else %}<p class="hint">{{ t('pricing.category.no.results') if q else t('pricing.category.none.yet') }}</p>{% endif %}
+</section>
+<dialog class="pricing-folder-action-dialog" data-folder-rename-dialog><form method="post" data-folder-rename-form><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="from_manager" value="1"><input type="hidden" name="parent_category_id" value=""><h2>{{ t('pricing.folders.rename') }}</h2><div class="field"><label for="folder-rename-name">{{ t('ui.category.name') }}</label><input id="folder-rename-name" name="name" value="{{ draft_name|default('') }}" required maxlength="120" dir="auto"></div><div class="pricing-folder-dialog-actions"><button class="btn btn-primary" type="submit">{{ t('ui.save') }}</button><button class="btn btn-quiet" type="button" data-folder-dialog-close>{{ t('ui.cancel') }}</button></div></form></dialog>
+<dialog class="pricing-folder-action-dialog" data-folder-delete-dialog><form method="post" data-folder-delete-form><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="from_manager" value="1"><h2>{{ t('pricing.folders.delete.confirm') }}</h2><p data-folder-delete-name></p><p class="hint">{{ t('pricing.folders.delete.descendants') }}</p><div class="pricing-folder-dialog-actions"><button class="btn btn-danger" type="submit" name="delete_items" value="yes">{{ t('pricing.folders.delete.with.items') }}</button><button class="btn btn-secondary" type="submit" name="delete_items" value="no">{{ t('pricing.folders.delete.folders.only') }}</button><button class="btn btn-quiet" type="button" data-folder-dialog-close>{{ t('ui.cancel') }}</button></div></form></dialog>
+<dialog class="pricing-folder-action-dialog" data-folder-move-choice><h2>{{ t('pricing.folders.move.items.question') }}</h2><p class="hint">{{ t('pricing.folders.move.descendants') }}</p><div class="pricing-folder-dialog-actions"><button class="btn btn-primary" type="submit" form="category-move-form" name="move_items" value="yes">{{ t('pricing.folders.move.with.items') }}</button><button class="btn btn-secondary" type="submit" form="category-move-form" name="move_items" value="no">{{ t('pricing.folders.move.without.items') }}</button><button class="btn btn-quiet" type="button" data-folder-dialog-close>{{ t('ui.cancel') }}</button></div></dialog>
+{% include "partials/pricing_folder_destination_picker.html" %}
 {% endblock %}

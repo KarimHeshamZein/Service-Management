@@ -749,6 +749,160 @@
     }
   }
 
+  /* Pricing folder creation, bulk moves, and card actions. */
+  var folderDestinationPicker = document.querySelector("[data-folder-destination-picker]");
+  if (folderDestinationPicker) {
+    var destinationAction = "";
+    var destinationPanel = null;
+    var destinationDepartment = folderDestinationPicker.querySelector("[data-folder-destination-department]");
+    var destinationBack = folderDestinationPicker.querySelector("[data-folder-destination-back]");
+    var createCategoryForm = document.querySelector("[data-category-create-form]");
+    var categoryMoveForm = document.getElementById("category-move-form");
+    var itemMoveForm = document.getElementById("item-move-form");
+    var folderMoveChoice = document.querySelector("[data-folder-move-choice]");
+
+    function openFolderDialog(dialog) {
+      if (!dialog) return;
+      if (typeof dialog.showModal === "function") dialog.showModal();
+      else dialog.setAttribute("open", "");
+    }
+    function closeFolderDialog(dialog) {
+      if (!dialog) return;
+      if (typeof dialog.close === "function") dialog.close();
+      else dialog.removeAttribute("open");
+    }
+    function showDestinationRoot() {
+      destinationPanel = null;
+      if (destinationBack) destinationBack.hidden = true;
+      folderDestinationPicker.querySelectorAll("[data-folder-destination-panel]").forEach(function (panel) { panel.hidden = true; });
+      folderDestinationPicker.querySelectorAll("[data-folder-destination-root]").forEach(function (root) {
+        root.hidden = root.dataset.departmentId !== destinationDepartment.value;
+      });
+    }
+    function showDestinationPanel(panel) {
+      if (!panel) return;
+      destinationPanel = panel;
+      folderDestinationPicker.querySelectorAll("[data-folder-destination-root]").forEach(function (root) { root.hidden = true; });
+      folderDestinationPicker.querySelectorAll("[data-folder-destination-panel]").forEach(function (candidate) { candidate.hidden = candidate !== panel; });
+      if (destinationBack) destinationBack.hidden = false;
+    }
+    function updateDestinationChoices() {
+      folderDestinationPicker.querySelectorAll("[data-destination-kind=main]").forEach(function (button) { button.hidden = destinationAction !== "categories"; });
+      folderDestinationPicker.querySelectorAll("[data-destination-kind=uncategorized]").forEach(function (button) { button.hidden = destinationAction !== "items"; });
+      var departmentWrap = folderDestinationPicker.querySelector("[data-folder-department-wrap]");
+      if (departmentWrap) departmentWrap.hidden = destinationAction === "create";
+      if (destinationAction === "create") destinationDepartment.value = String(folderDestinationPicker.dataset.currentDepartment || destinationDepartment.value);
+      showDestinationRoot();
+    }
+    folderDestinationPicker.dataset.currentDepartment = destinationDepartment.value;
+    document.querySelectorAll("[data-open-folder-destination]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var action = button.dataset.pickerAction;
+        if (action === "categories" && !document.querySelector('input[name="category_ids"][form="category-move-form"]:checked')) {
+          window.alert(folderDestinationPicker.dataset.emptySelection); return;
+        }
+        if (action === "items" && !document.querySelector("[data-pricing-item-move-check]:checked")) {
+          window.alert(folderDestinationPicker.dataset.emptySelection); return;
+        }
+        destinationAction = action;
+        updateDestinationChoices();
+        openFolderDialog(folderDestinationPicker);
+      });
+    });
+    destinationDepartment.addEventListener("change", showDestinationRoot);
+    folderDestinationPicker.querySelectorAll("[data-folder-destination-open]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        showDestinationPanel(document.getElementById(button.dataset.folderDestinationOpen));
+      });
+    });
+    folderDestinationPicker.querySelectorAll("[data-folder-destination-select]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var categoryId = button.dataset.categoryId || "";
+        var departmentId = button.dataset.departmentId || "";
+        if (destinationAction === "create") {
+          if (!categoryId || !createCategoryForm) return;
+          createCategoryForm.querySelector("[data-create-parent-id]").value = categoryId;
+          var pathNames = [];
+          var pathPanel = destinationPanel;
+          while (pathPanel) {
+            pathNames.unshift(pathPanel.querySelector("h3").textContent);
+            pathPanel = pathPanel.dataset.parentPanel ? document.getElementById(pathPanel.dataset.parentPanel) : null;
+          }
+          createCategoryForm.querySelector("[data-create-parent-label]").textContent = pathNames.join(" / ");
+          closeFolderDialog(folderDestinationPicker);
+          return;
+        }
+        var form = destinationAction === "categories" ? categoryMoveForm : itemMoveForm;
+        if (!form) return;
+        form.elements.target_department_id.value = departmentId;
+        form.elements.target_category_id.value = categoryId;
+        closeFolderDialog(folderDestinationPicker);
+        if (destinationAction === "categories") openFolderDialog(folderMoveChoice);
+        else form.requestSubmit();
+      });
+    });
+    if (destinationBack) destinationBack.addEventListener("click", function () {
+      var parentId = destinationPanel && destinationPanel.dataset.parentPanel;
+      if (parentId) showDestinationPanel(document.getElementById(parentId));
+      else showDestinationRoot();
+    });
+    var destinationClose = folderDestinationPicker.querySelector("[data-folder-destination-close]");
+    if (destinationClose) destinationClose.addEventListener("click", function () { closeFolderDialog(folderDestinationPicker); });
+    if (createCategoryForm) {
+      var categoryKind = createCategoryForm.querySelectorAll('input[name="category_kind"]');
+      var createParentWrap = createCategoryForm.querySelector("[data-create-parent-wrap]");
+      function updateCategoryKind() {
+        var sub = createCategoryForm.querySelector('input[name="category_kind"]:checked').value === "sub";
+        createParentWrap.hidden = !sub;
+        if (!sub) createCategoryForm.querySelector("[data-create-parent-id]").value = "";
+      }
+      categoryKind.forEach(function (radio) { radio.addEventListener("change", updateCategoryKind); });
+      updateCategoryKind();
+      createCategoryForm.addEventListener("submit", function (event) {
+        if (createCategoryForm.querySelector('input[name="category_kind"]:checked').value === "sub" && !createCategoryForm.querySelector("[data-create-parent-id]").value) {
+          event.preventDefault(); window.alert(folderDestinationPicker.dataset.createParentRequired);
+        }
+      });
+    }
+    document.querySelectorAll("[data-rename-folder]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var dialog = document.querySelector("[data-folder-rename-dialog]");
+        var form = dialog && dialog.querySelector("[data-folder-rename-form]");
+        if (!form) return;
+        form.action = "/pricing/categories/" + encodeURIComponent(button.dataset.folderId) + "/edit";
+        form.elements.name.value = button.dataset.folderName;
+        form.elements.parent_category_id.value = button.dataset.parentId || "";
+        openFolderDialog(dialog);
+        form.elements.name.focus();
+      });
+    });
+    document.querySelectorAll("[data-delete-folder]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var dialog = document.querySelector("[data-folder-delete-dialog]");
+        var form = dialog && dialog.querySelector("[data-folder-delete-form]");
+        if (!form) return;
+        form.action = "/pricing/categories/" + encodeURIComponent(button.dataset.folderId) + "/delete";
+        dialog.querySelector("[data-folder-delete-name]").textContent = button.dataset.folderName;
+        openFolderDialog(dialog);
+      });
+    });
+    document.querySelectorAll("[data-folder-dialog-close]").forEach(function (button) {
+      button.addEventListener("click", function () { closeFolderDialog(button.closest("dialog")); });
+    });
+    var selectAllItems = document.querySelector("[data-pricing-items-select-all]");
+    var itemChecks = document.querySelectorAll("[data-pricing-item-move-check]");
+    if (selectAllItems) {
+      selectAllItems.addEventListener("change", function () {
+        itemChecks.forEach(function (checkbox) { checkbox.checked = selectAllItems.checked; });
+      });
+      itemChecks.forEach(function (checkbox) { checkbox.addEventListener("change", function () {
+        var checked = document.querySelectorAll("[data-pricing-item-move-check]:checked").length;
+        selectAllItems.checked = checked === itemChecks.length;
+        selectAllItems.indeterminate = checked > 0 && checked < itemChecks.length;
+      }); });
+    }
+  }
+
   document.querySelectorAll("[data-service-item-picker]").forEach(function (picker) {
     var search = picker.querySelector("[data-service-item-picker-search]");
     var empty = picker.querySelector("[data-service-item-picker-empty]");

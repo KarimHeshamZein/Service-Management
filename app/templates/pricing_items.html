@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% import "partials/macros.html" as ui with context %}
+{% import "partials/pricing_category_card.html" as folder_ui with context %}
 {% set page_content_class = 'content-wide' %}
 {% macro category_selector(input_id, selected=None) %}
 <div class="field pricing-category-selector" data-pricing-category-selector>
@@ -92,6 +93,8 @@
 </div>
 {% endif %}
 
+{% if can('pricing_items.manage') %}<form id="category-move-form" method="post" action="/pricing/categories/move"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target_department_id" value="{{ current_department_id }}"><input type="hidden" name="target_category_id" value=""></form><form id="item-move-form" method="post" action="/pricing/items/move"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="target_department_id" value="{{ current_department_id }}"><input type="hidden" name="target_category_id" value=""></form>{% endif %}
+{% if selected_category and can('pricing_items.manage') %}<div class="pricing-folder-toolbar"><label class="choice"><input type="checkbox" name="category_ids" value="{{ selected_category.id }}" form="category-move-form"><span>{{ t('pricing.folders.select.current') }}: {{ selected_category.name }}</span></label><button class="pricing-category-icon-button" type="button" data-rename-folder data-folder-id="{{ selected_category.id }}" data-folder-name="{{ selected_category.name }}" data-parent-id="{{ selected_category.parent_id or '' }}" aria-label="{{ t('pricing.folders.rename') }}" title="{{ t('pricing.folders.rename') }}">✎</button>{% if can_delete %}<button class="pricing-category-icon-button danger" type="button" data-delete-folder data-folder-id="{{ selected_category.id }}" data-folder-name="{{ selected_category.name }}" aria-label="{{ t('pricing.folders.delete') }}" title="{{ t('pricing.folders.delete') }}">&#x1F5D1;</button>{% endif %}<button class="btn btn-secondary" type="button" data-open-folder-destination data-picker-action="categories">{{ t('pricing.folders.move.categories') }}</button></div>{% endif %}
 {% if show_category_overview %}
 <section class="pricing-category-browser" data-category-overview>
   <div class="pricing-category-browser-head">
@@ -104,16 +107,10 @@
       <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.search') }}</button>
     </form>
   </div>
+  {% if can('pricing_items.manage') %}<div class="pricing-folder-toolbar"><button class="btn btn-secondary" type="button" data-open-folder-destination data-picker-action="categories">{{ t('pricing.folders.move.categories') }}</button></div>{% endif %}
   <div class="pricing-category-folder-grid">
     {% for category in root_categories %}
-    <a class="pricing-category-folder" href="/pricing/items?category={{ category.id }}" aria-label="{{ category.name }}">
-      <span class="pricing-category-folder-icon" aria-hidden="true"></span>
-      <span class="pricing-category-folder-copy">
-        <strong>{{ category.name }}</strong>
-        {% set category_count = root_category_item_counts[category.id] %}<span>{{ category_count }} {{ t('ui.item') if category_count == 1 else t('ui.items.lowercase') }}</span>
-      </span>
-      <span class="pricing-category-folder-arrow" aria-hidden="true">›</span>
-    </a>
+    {{ folder_ui.folder(category, root_category_item_counts[category.id], '/pricing/items?category=' ~ category.id, 'category-move-form', can('pricing_items.manage'), can_delete) }}
     {% endfor %}
     <a class="pricing-category-folder pricing-category-folder-muted" href="/pricing/items?category=uncategorized" aria-label="{{ t('ui.uncategorized') }}">
       <span class="pricing-category-folder-icon" aria-hidden="true"></span>
@@ -133,11 +130,7 @@
   </div>
   <div class="pricing-category-folder-grid pricing-subcategory-folder-grid">
     {% for subcategory in selected_child_categories %}
-    <a class="pricing-category-folder pricing-subcategory-folder {{ 'pricing-subsubcategory-folder' if category_depths[subcategory.id] == 2 }}" href="/pricing/items?category={{ subcategory.id }}">
-      <span class="pricing-category-folder-icon" aria-hidden="true"></span>
-      {% set subcategory_count = category_item_counts[subcategory.id] %}<span class="pricing-category-folder-copy"><strong>{{ subcategory.name }}</strong><span>{{ subcategory_count }} {{ t('ui.item') if subcategory_count == 1 else t('ui.items.lowercase') }}</span></span>
-      <span class="pricing-category-folder-arrow" aria-hidden="true">›</span>
-    </a>
+    {{ folder_ui.folder(subcategory, category_item_counts[subcategory.id], '/pricing/items?category=' ~ subcategory.id, 'category-move-form', can('pricing_items.manage'), can_delete) }}
     {% endfor %}
   </div>
 </section>
@@ -155,14 +148,16 @@
       {% if q %}<a class="btn btn-quiet btn-sm" href="{{ '/pricing/items?category=' ~ selected_category_key if selected_category_key else '/pricing/items' }}">{{ t('ui.clear') }}</a>{% endif %}
     </form>
   </div>
+  {% if can('pricing_items.manage') %}<div class="pricing-folder-toolbar"><button class="btn btn-secondary" type="button" data-open-folder-destination data-picker-action="items">{{ t('pricing.folders.move.items') }}</button></div>{% endif %}
   <div class="card-body tight">
     {% if items %}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>{{ t('ui.image') }}</th><th>{{ t('ui.main.item') }}</th><th>{{ t('ui.item.category') }}</th><th>{{ t('ui.model') }}</th><th>{{ t('ui.unit.price.label') }}</th><th>{{ t('ui.service.records') }}</th><th>{{ t('ui.related.items') }}</th><th>{{ t('ui.status') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
+        <thead><tr>{% if can('pricing_items.manage') %}<th>{% if not q %}<label><input type="checkbox" data-pricing-items-select-all aria-label="{{ t('pricing.folders.select.all.items') }}"><span class="sr-only">{{ t('pricing.folders.select.all.items') }}</span></label>{% endif %}</th>{% endif %}<th>{{ t('ui.image') }}</th><th>{{ t('ui.main.item') }}</th><th>{{ t('ui.item.category') }}</th><th>{{ t('ui.model') }}</th><th>{{ t('ui.unit.price.label') }}</th><th>{{ t('ui.service.records') }}</th><th>{{ t('ui.related.items') }}</th><th>{{ t('ui.status') }}</th><th>{{ t('ui.actions') }}</th></tr></thead>
         <tbody>
         {% for item in items %}
           <tr data-pricing-item-row="{{ item.id }}">
+            {% if can('pricing_items.manage') %}<td><input type="checkbox" name="item_ids" value="{{ item.id }}" form="item-move-form" data-pricing-item-move-check aria-label="{{ t('pricing.folders.select.item') }}: {{ item.name }}"></td>{% endif %}
             <td>{% if item.image_storage_key %}<img src="/pricing/items/{{ item.id }}/image?size=thumb" alt="{{ item.name }}" style="width:64px;height:48px;object-fit:cover;border-radius:6px;">{% else %}<span class="hint">{{ t('ui.no.image') }}</span>{% endif %}</td>
             <td><strong>{{ item.name }}</strong>{% if item.description %}<p class="hint" dir="auto">{{ item.description }}</p>{% endif %}</td>
             <td>{{ item.category.display_label if item.category else t('ui.uncategorized') }}</td>
@@ -182,7 +177,7 @@
             </td>
           </tr>
           <tr id="pricing-item-{{ item.id }}" hidden>
-            <td colspan="9" style="background:#f7f9fa;">
+            <td colspan="{{ 10 if can('pricing_items.manage') else 9 }}" style="background:#f7f9fa;">
               <div class="grid cols-2">
                 <div>
                 <form method="post" action="/pricing/items/{{ item.id }}/edit" enctype="multipart/form-data">
@@ -279,16 +274,16 @@
     {% for category in categories %}
     <section id="pricing-category-choice-{{ category.id }}" data-pricing-category-panel data-parent-panel="{{ 'pricing-category-choice-' ~ category.parent_id if category.parent_id else '' }}" data-category-label="{{ category.display_label }}" hidden>
       <div class="pricing-category-choice-head">
-        <div><span class="eyebrow">{{ t('ui.main.category') if category_depths[category.id] == 0 else (t('ui.subcategory') if category_depths[category.id] == 1 else t('ui.subsubcategory')) }}</span><h3>{{ category.display_label }}</h3></div>
+        <div><span class="eyebrow">{{ t('ui.main.category') if category_depths[category.id] == 0 else t('ui.subcategory') }}</span><h3>{{ category.display_label }}</h3></div>
         <button type="button" class="btn btn-primary btn-sm" data-select-pricing-category data-category-id="{{ category.id }}" data-category-label="{{ category.display_label }}">{{ t('ui.select.this.category') }}</button>
       </div>
       {% if category.children %}
       <p class="hint">{{ t('ui.open.a.child.category.or.select.this.folder') }}</p>
       <div class="pricing-category-folder-grid pricing-subcategory-folder-grid">
         {% for subcategory in category.children|sort(attribute='name') %}
-        <button type="button" class="pricing-category-folder pricing-subcategory-folder {{ 'pricing-subsubcategory-folder' if category_depths[subcategory.id] == 2 }} pricing-picker-folder" data-open-pricing-category="pricing-category-choice-{{ subcategory.id }}" data-category-label="{{ subcategory.display_label }}">
+        <button type="button" class="pricing-category-folder pricing-subcategory-folder {{ 'pricing-subsubcategory-folder' if category_depths[subcategory.id] > 1 }} pricing-picker-folder" data-open-pricing-category="pricing-category-choice-{{ subcategory.id }}" data-category-label="{{ subcategory.display_label }}">
           <span class="pricing-category-folder-icon" aria-hidden="true"></span>
-          <span class="pricing-category-folder-copy"><strong>{{ subcategory.name }}</strong><span>{{ t('ui.subcategory') if category_depths[subcategory.id] == 1 else t('ui.subsubcategory') }}</span></span>
+          <span class="pricing-category-folder-copy"><strong>{{ subcategory.name }}</strong><span>{{ t('ui.subcategory') }}</span></span>
           <span class="pricing-category-folder-arrow" aria-hidden="true">&rsaquo;</span>
         </button>
         {% endfor %}
@@ -300,4 +295,10 @@
     {% endfor %}
   </div>
 </dialog>
+{% if can('pricing_items.manage') %}
+<dialog class="pricing-folder-action-dialog" data-folder-rename-dialog><form method="post" data-folder-rename-form><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="parent_category_id" value=""><h2>{{ t('pricing.folders.rename') }}</h2><div class="field"><label for="folder-rename-name">{{ t('ui.category.name') }}</label><input id="folder-rename-name" name="name" required maxlength="120" dir="auto"></div><div class="pricing-folder-dialog-actions"><button class="btn btn-primary" type="submit">{{ t('ui.save') }}</button><button class="btn btn-quiet" type="button" data-folder-dialog-close>{{ t('ui.cancel') }}</button></div></form></dialog>
+{% if user.is_admin %}<dialog class="pricing-folder-action-dialog" data-folder-delete-dialog><form method="post" data-folder-delete-form><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><h2>{{ t('pricing.folders.delete.confirm') }}</h2><p data-folder-delete-name></p><p class="hint">{{ t('pricing.folders.delete.descendants') }}</p><div class="pricing-folder-dialog-actions"><button class="btn btn-danger" type="submit" name="delete_items" value="yes">{{ t('pricing.folders.delete.with.items') }}</button><button class="btn btn-secondary" type="submit" name="delete_items" value="no">{{ t('pricing.folders.delete.folders.only') }}</button><button class="btn btn-quiet" type="button" data-folder-dialog-close>{{ t('ui.cancel') }}</button></div></form></dialog>{% endif %}
+<dialog class="pricing-folder-action-dialog" data-folder-move-choice><h2>{{ t('pricing.folders.move.items.question') }}</h2><p class="hint">{{ t('pricing.folders.move.descendants') }}</p><div class="pricing-folder-dialog-actions"><button class="btn btn-primary" type="submit" form="category-move-form" name="move_items" value="yes">{{ t('pricing.folders.move.with.items') }}</button><button class="btn btn-secondary" type="submit" form="category-move-form" name="move_items" value="no">{{ t('pricing.folders.move.without.items') }}</button><button class="btn btn-quiet" type="button" data-folder-dialog-close>{{ t('ui.cancel') }}</button></div></dialog>
+{% include "partials/pricing_folder_destination_picker.html" %}
+{% endif %}
 {% endblock %}

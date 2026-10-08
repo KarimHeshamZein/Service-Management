@@ -4,7 +4,20 @@ Service Management System — a maintenance evidence portal. Read `README.md` fo
 full architecture, entities and known limitations. This file is the short version
 plus the rules that aren't inferable from the code.
 
-## Current handoff — 2026-10-06
+## Current handoff — 2026-10-08
+
+- Pending manual review on `fix/pricing-category-folder-workflow`: the user-approved
+  Pricing Items folder workflow replaces flat parent selection with the existing
+  folder-card design. Main Categories need only a name; Subcategories choose any
+  parent folder. A Category branch can now nest at any depth and move alone or
+  with other selected branches, including across Departments for Administrators.
+  Before a move, the user chooses whether descendant Items follow or become
+  Uncategorized in the source Department. Selected direct Items can move without
+  moving their folder. Folder deletion includes descendants and offers an explicit
+  delete-Items or preserve-as-Uncategorized choice. Focused Category/Pricing
+  checks and Arabic catalog checks pass; visual and manual verification remain
+  open. No migration was needed. This behavior supersedes the historical
+  three-level limit described later in this handoff.
 
 - The validated offline production release is
   `dist/service-management-offline-1.1.0-rc53.zip` (535,473,487 bytes) with

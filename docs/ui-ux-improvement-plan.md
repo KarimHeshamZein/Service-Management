@@ -247,7 +247,7 @@ Acceptance and checks:
 
 - [ ] Reproduce CAT-004 with a duplicate in the destination; receive an actionable error.
 - [ ] Root/subcategory/leaf Items, related Items, documents and grants remain unchanged on failure.
-- [ ] Conflict-free three-level branch transfer preserves IDs and internal parent relationships.
+- [ ] Conflict-free branch transfer at any nesting depth preserves IDs and internal parent relationships.
 - [ ] Concurrent collision rolls back and gives a recoverable response.
 - [ ] Verify focused database/HTTP cases; manually verify the conflict message and retry path.
 
@@ -257,11 +257,13 @@ Findings: CAT-005 (same-Department part), CAT-006, CAT-007, CAT-008.
 Priority: next workflow phase. Preliminary destination/search design pending browser review.
 Approval: none.
 
-Scope: dedicated single/multi-Item Move action; searchable authorized destination
-paths; clickable ancestors; open at current folder; source/destination summary;
-explicit folder/all-folder search scope; preserve validation values and return
-context. Related Items remain attached to their main Item. Category branch reparent
-retains three-level guards. Consider direct active-Department entry only after task validation.
+Scope: dedicated single/multi-Item Move action; browsable authorized destination
+folders; clickable ancestors; direct-Item Select All; preserve validation values
+and return context. Related Items remain attached to their main Item. Category
+branches may be nested at any depth, including across Departments, without
+allowing cycles. A folder move explicitly chooses whether descendant Items follow
+or become Uncategorized in their original Department. Folder deletion makes the
+same Item choice before removing the selected branch.
 
 Dependencies/risks: P2 scoped paths, selected-category access changes, selection
 state after filtering, safe redirects, browser file restrictions. Reusing the
@@ -275,7 +277,7 @@ Acceptance and checks:
 - [ ] Move a single Item and multiple Items without submitting unrelated price/detail fields.
 - [ ] Cancel changes nothing; invalid or unauthorized member causes no partial move.
 - [ ] Display permission consequences of changing category before committing.
-- [ ] Reject self/descendant/fourth-level category moves on the server.
+- [ ] Reject self/descendant moves and duplicate sibling names on the server; allow deeper nesting.
 - [ ] Search full paths consistently; distinguish direct items from descendant search results.
 - [ ] After success show destination/affected Items; after error retain text/category and focus error.
 - [ ] Explain necessary image reselection without claiming that browser files were retained.

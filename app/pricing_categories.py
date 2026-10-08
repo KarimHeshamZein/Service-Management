@@ -1,11 +1,8 @@
-"""Helpers for the fixed three-level Pricing category hierarchy."""
+"""Helpers for the navigable Pricing category hierarchy."""
 from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import Any
-
-
-MAX_CATEGORY_DEPTH = 2
 
 
 def category_ancestry(category: Any | None) -> list[Any]:

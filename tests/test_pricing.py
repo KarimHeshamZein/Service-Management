@@ -1026,21 +1026,35 @@ def test_three_level_category_navigation_and_assignment(client, db):
         "/pricing/categories",
         data={
             "csrf_token": token,
-            "name": "Fourth level is rejected",
+            "name": "Fourth level",
             "parent_category_id": str(access_folder.id),
         },
     )
     assert fourth_level.status_code == 303
-    assert db.query(PricingItemCategory).filter_by(name="Fourth level is rejected").count() == 0
+    nested = db.query(PricingItemCategory).filter_by(name="Fourth level").one()
+    assert nested.parent_id == access_folder.id
+    assert f'href="/pricing/items?category={nested.id}"' in client.get(
+        f"/pricing/items?category={access_folder.id}"
+    ).text
+    deep_item = PricingItem(name="Deep category camera", model="D4", unit_price=Decimal("75.00"), category=nested)
+    db.add(deep_item)
+    db.commit()
+    purchase_folder = client.get(f"/pricing/purchase-documents?category={nested.id}")
+    data_sheet_folder = client.get(f"/pricing/data-sheet?category={nested.id}")
+    assert purchase_folder.status_code == 200
+    assert data_sheet_folder.status_code == 200
+    assert "Cameras / Hikvision / Hikvision Access Control / Fourth level" in purchase_folder.text
+    assert "Cameras / Hikvision / Hikvision Access Control / Fourth level" in data_sheet_folder.text
 
     quotation = client.get("/pricing/quotations/new")
     assert quotation.status_code == 200
-    for category in (main, brand, camera_folder, access_folder):
+    for category in (main, brand, camera_folder, access_folder, nested):
         assert f'data-pricing-picker-folder="quotation-picker-category-{category.id}"' in quotation.text
     assert f'data-item-id="{camera.id}"' in quotation.text
     assert f'data-item-id="{recorder.id}"' in quotation.text
     assert f'data-item-id="{hik_camera.id}"' in quotation.text
     assert f'data-item-id="{access_control.id}"' in quotation.text
+    assert f'data-item-id="{deep_item.id}"' in quotation.text
 
 
 def test_main_item_image_is_validated_protected_and_removed(client, db):
