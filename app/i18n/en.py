@@ -1833,3 +1833,7 @@ MESSAGES.update({
  'ui.this.category.has.no.child.categories': 'This Category has no child Categories. You can select it directly.',
  'ui.select.this.category': 'Select this Category',
 })
+
+MESSAGES.update({
+ 'server.purchase.document.shared.read.only': 'This shared document includes Items outside your access. Ask an Administrator to edit or delete it.',
+})
