@@ -26,6 +26,7 @@ def validate_entry_scopes(
     db: Session,
     *,
     require_quotation: bool = True,
+    allowed_project_ids: set[int] | None = None,
 ) -> tuple[list[EntryScope], dict[str, str]]:
     project_values = [str(value or "").strip() for value in form.getlist("project_id")]
     sub_values = [str(value or "").strip() for value in form.getlist("sub_project_id")]
@@ -59,6 +60,9 @@ def validate_entry_scopes(
             errors[f"project_id{suffix}"] = "That project no longer exists."
         elif not project.is_active:
             errors[f"project_id{suffix}"] = "That project is deactivated."
+        elif allowed_project_ids is not None and project.id not in allowed_project_ids:
+            errors[f"project_id{suffix}"] = "You do not have access to this Project."
+            errors.setdefault("form", "You do not have access to this Project.")
 
         site_id = entity_id(site_values[index])
         site = db.get(WorkSite, site_id) if site_id else None
@@ -83,7 +87,10 @@ def validate_entry_scopes(
             if quotation_error or quotation is None:
                 errors[f"quotation_number{suffix}"] = quotation_error or "Select a valid quotation."
 
-        if project and site and (quotation or not require_quotation) and not sub_error:
+        if (
+            project and site and (quotation or not require_quotation) and not sub_error
+            and f"project_id{suffix}" not in errors
+        ):
             scopes.append(EntryScope(index, project, sub_project, site, quotation))
 
     if len(scopes) != count and count > 1:
