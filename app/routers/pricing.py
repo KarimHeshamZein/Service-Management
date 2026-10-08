@@ -2995,6 +2995,102 @@ def edit_quotation_page(
     )
 
 
+@router.get("/quotations/{quotation_id}/edit-details")
+def edit_quotation_details_page(
+    quotation_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    require_permission(request, db, user, "quotations.edit")
+    quotation = _quotation_or_404(db, quotation_id)
+    return render(request, "pricing_quotation_details_form.html", {
+        "active_nav": "pricing_quotations",
+        "quotation": quotation,
+        "values": {
+            "quotation_date": quotation.quotation_date.isoformat(),
+            "valid_until": quotation.valid_until.isoformat(),
+            "notes": quotation.notes,
+            "terms": quotation.terms,
+        },
+        "errors": {},
+    })
+
+
+@router.post("/quotations/{quotation_id}/edit-details")
+async def edit_quotation_details(
+    quotation_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    require_permission(request, db, user, "quotations.edit")
+    quotation = _quotation_or_404(db, quotation_id)
+    form = await request.form()
+    values = {
+        "quotation_date": str(form.get("quotation_date") or ""),
+        "valid_until": str(form.get("valid_until") or ""),
+        "notes": str(form.get("notes") or "").strip(),
+        "terms": str(form.get("terms") or "").strip(),
+    }
+    errors: dict[str, str] = {}
+    if not csrf_valid(request, str(form.get("csrf_token") or "")):
+        errors["form"] = "Your session expired. Reload the page and try again."
+    try:
+        quotation_date = date.fromisoformat(values["quotation_date"])
+    except ValueError:
+        quotation_date = None
+        errors["quotation_date"] = "Enter a valid quotation date."
+    try:
+        valid_until = date.fromisoformat(values["valid_until"])
+    except ValueError:
+        valid_until = None
+        errors["valid_until"] = "Enter a valid expiry date."
+    if quotation_date and valid_until and valid_until < quotation_date:
+        errors["valid_until"] = "The expiry date cannot be before the quotation date."
+    if errors:
+        return render(request, "pricing_quotation_details_form.html", {
+            "active_nav": "pricing_quotations", "quotation": quotation,
+            "values": values, "errors": errors,
+        }, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+
+    before = {
+        "quotation_date": quotation.quotation_date,
+        "valid_until": quotation.valid_until,
+        "notes": quotation.notes,
+        "terms": quotation.terms,
+    }
+    quotation.quotation_date = quotation_date
+    quotation.valid_until = valid_until
+    quotation.notes = values["notes"]
+    quotation.terms = values["terms"]
+    quotation.updated_at = utcnow()
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        errors["form"] = "The quotation could not be saved. Review the form and try again."
+        return render(request, "pricing_quotation_details_form.html", {
+            "active_nav": "pricing_quotations", "quotation": quotation,
+            "values": values, "errors": errors,
+        }, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+    set_audit_context(
+        request, action="update", entity_type="pricing_quotation",
+        entity_id=quotation.id, entity_label=quotation.quotation_number,
+        changes={
+            field: {"before": before[field], "after": after}
+            for field, after in {
+                "quotation_date": quotation.quotation_date,
+                "valid_until": quotation.valid_until,
+                "notes": quotation.notes,
+                "terms": quotation.terms,
+            }.items() if before[field] != after
+        },
+    )
+    flash(request, f"Quotation {quotation.quotation_number} updated.")
+    return _redirect(f"/pricing/quotations/{quotation.id}")
+
+
 @router.post("/quotations/{quotation_id}/edit")
 async def edit_quotation(
     quotation_id: int,
@@ -3015,6 +3111,8 @@ async def edit_quotation(
     values, errors = _validate_quote_header(form, db)
     if not csrf_valid(request, str(form.get("csrf_token") or "")):
         errors["form"] = "Your session expired. Reload the page and try again."
+    if str(form.get("refresh_source_snapshots") or "") != "1":
+        errors["form"] = "Confirm that this edit will replace saved Item, Project, company, image and installation-plan snapshots with current source values."
     lines = _build_quote_lines(db, submitted, errors)
     charges = _build_quote_charges(form, errors)
     plan_submission = await _plan_submission(form, errors)

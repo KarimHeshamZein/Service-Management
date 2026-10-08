@@ -1833,3 +1833,12 @@ MESSAGES.update({
  'ui.this.category.has.no.child.categories': 'This Category has no child Categories. You can select it directly.',
  'ui.select.this.category': 'Select this Category',
 })
+
+MESSAGES.update({
+ 'pricing.edit.saved.details': 'Edit dates, notes & terms',
+ 'pricing.edit.saved.details.help': 'Change these details without changing saved Items, prices, descriptions, images, Project and company details, charges, plan, or technical package.',
+ 'pricing.edit.items.charges': 'Edit Items & charges',
+ 'pricing.full.edit.snapshot.warning': 'This full edit rebuilds saved Item, Project, company, image and installation-plan snapshots from current sources. Use the details form for dates, notes or terms only.',
+ 'pricing.full.edit.confirm': 'I understand that saving this full edit will replace those saved snapshots.',
+ 'server.pricing.full.edit.confirm': 'Confirm that this edit will replace saved Item, Project, company, image and installation-plan snapshots with current source values.',
+})
