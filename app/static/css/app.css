@@ -285,6 +285,23 @@ html[dir="rtl"] .nav-group-toggle[aria-expanded="false"] .nav-chevron {
   border-top: 1px solid var(--border);
 }
 .pricing-category-row .field { margin: 0; }
+.pricing-category-manager { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 20px; align-items: start; }
+.pricing-category-manager-list .card-body { padding-top: 14px; }
+.pricing-category-manager-search { display: grid; gap: 7px; }
+.pricing-category-manager-search > div { display: flex; gap: 8px; }
+.pricing-category-manager-search input { min-width: 0; flex: 1; }
+.pricing-category-manager-add { width: 100%; justify-content: center; margin: 16px 0; }
+.pricing-category-manager-options { display: grid; gap: 6px; max-height: 65vh; overflow-y: auto; }
+.pricing-category-manager-option { display: grid; gap: 3px; padding: 10px 12px; color: inherit; text-decoration: none; border: 1px solid var(--line); border-radius: 9px; overflow-wrap: anywhere; }
+.pricing-category-manager-option:hover, .pricing-category-manager-option:focus-visible, .pricing-category-manager-option.is-selected { border-color: var(--accent); background: var(--accent-wash); }
+.pricing-category-manager-option strong { font-size: .95rem; }
+.pricing-category-manager-option small { color: var(--slate); }
+.pricing-category-manager-level { color: var(--accent-dark); font-size: .75rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+.pricing-category-manager-detail { display: grid; gap: 16px; min-width: 0; }
+.pricing-category-manager-detail .card { margin: 0; }
+.pricing-category-manager-detail .card-head h2 { overflow-wrap: anywhere; }
+.pricing-category-manager-links { display: flex; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 850px) { .pricing-category-manager { grid-template-columns: 1fr; } .pricing-category-manager-options { max-height: 300px; } }
 .pricing-category-browser {
   padding: 22px;
   border: 1px solid var(--line);

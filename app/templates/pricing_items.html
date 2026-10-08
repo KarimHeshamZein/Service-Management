@@ -28,7 +28,7 @@
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
     <a class="btn btn-secondary" href="/pricing/items/departments">{{ t('pricing.departments.back') }}</a>
     {% if can('pricing_items.manage') %}
-    <button class="btn btn-secondary" data-toggle-target="manage-item-categories" aria-expanded="false">{{ t('ui.manage.categories') }}</button>
+    <a class="btn btn-secondary" href="/pricing/categories/manage">{{ t('ui.manage.categories') }}</a>
     <button class="btn btn-secondary" data-toggle-target="add-related-item" aria-expanded="false">{{ t('ui.add.related.item') }}</button>
     <button class="btn btn-primary" data-toggle-target="add-pricing-item" aria-expanded="false">{{ t('ui.add.main.item') }}</button>
     {% endif %}
@@ -36,32 +36,6 @@
 </div>
 
 {% if can('pricing_items.manage') %}
-<div class="card" id="manage-item-categories" hidden>
-  <div class="card-head"><h2>{{ t('ui.item.categories') }}</h2></div>
-  <div class="card-body">
-    {% if user.is_admin %}<p class="hint">{{ 'تُدار صلاحيات الكاتجوري من صفحة المستخدمين والصلاحيات.' if lang == 'ar' else 'Manage Category access from Users & permissions.' }}</p>{% endif %}
-    <form method="post" action="/pricing/categories" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:18px;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <div class="field" style="margin:0;flex:1 1 260px;"><label for="category-name">{{ t('ui.category.name') }}</label><input id="category-name" name="name" required maxlength="120" dir="auto"></div>
-      <div class="field" style="margin:0;flex:1 1 260px;"><label for="category-parent">{{ t('ui.category.level') }}</label><select id="category-parent" name="parent_category_id"><option value="">{{ t('ui.main.category') }}</option>{% for parent in category_parent_options %}<option value="{{ parent.id }}">{{ t('ui.subcategory.under') if category_depths[parent.id] == 0 else t('ui.subsubcategory.under') }} {{ parent.display_label }}</option>{% endfor %}</select></div>
-      <button class="btn btn-primary" type="submit">{{ t('ui.add.category') }}</button>
-    </form>
-    {% if categories %}
-      {% for category in categories %}
-      <form method="post" action="/pricing/categories/{{ category.id }}/edit" class="pricing-category-row">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div class="field"><label class="sr-only" for="category-{{ category.id }}">{{ t('ui.category.name') }}</label><input id="category-{{ category.id }}" name="name" value="{{ category.name }}" required maxlength="120" dir="auto"></div>
-        <div class="field"><label class="sr-only" for="category-parent-{{ category.id }}">{{ t('ui.category.level') }}</label><select id="category-parent-{{ category.id }}" name="parent_category_id"><option value="">{{ t('ui.main.category') }}</option>{% for parent in category_parent_options if parent.id in category_valid_parent_ids[category.id] %}<option value="{{ parent.id }}" {{ 'selected' if category.parent_id == parent.id }}>{{ t('ui.subcategory.under') if category_depths[parent.id] == 0 else t('ui.subsubcategory.under') }} {{ parent.display_label }}</option>{% endfor %}</select></div>
-        <span class="hint">{{ category.items|length }} {{ t('ui.items.lowercase') }}{% if category.children %} · {{ category.children|length }} {{ t('ui.child.categories') }}{% endif %}</span>
-        <button class="btn btn-secondary btn-sm" type="submit">{{ t('ui.save') }}</button>
-        {% if user.is_admin and department_options|length > 1 %}<div class="field"><label class="sr-only" for="category-department-{{ category.id }}">{{ t('pricing.move.to.department') }}</label><select id="category-department-{{ category.id }}" name="target_department_id" required><option value="">{{ t('pricing.move.to.department') }}</option>{% for option in department_options if option.id != department.id %}<option value="{{ option.id }}">{{ option.name }}</option>{% endfor %}</select></div><button class="btn btn-secondary btn-sm" type="submit" formaction="/pricing/categories/{{ category.id }}/move-department" formnovalidate onclick="return confirm('{{ t('pricing.move.category.confirm') }}');">{{ t('pricing.move') }}</button>{% endif %}
-        {% if can_delete %}<button class="btn btn-danger btn-sm" type="submit" formaction="/pricing/categories/{{ category.id }}/delete">{{ t('ui.delete') }}</button>{% endif %}
-      </form>
-      {% endfor %}
-    {% else %}<p class="hint">{{ t('ui.uncategorized') }}</p>{% endif %}
-  </div>
-</div>
-
 <div class="card" id="add-pricing-item" {{ '' if prefill_from_evaluation else 'hidden' }}>
   <div class="card-head"><h2>{{ t('ui.add.a.main.item') }}</h2></div>
   <div class="card-body">
