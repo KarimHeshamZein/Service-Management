@@ -19,6 +19,7 @@ Work in small, reviewable changes. Where one phase spans unrelated risks, its pa
 
 - [ ] **01 — P0:** Restrict Category grant changes to authorized administrators and preserve existing nested grants on unchanged saves.
 - [ ] **02 — P14:** Enforce Edit permission for appending to saved Installation/Maintenance records and validate every submitted Project section.
+  - Code and focused tests are in [draft PR #5](https://github.com/KarimHeshamZein/Service-Management/pull/5) (`fe17824`). The permission matrix, mixed-Project rejection, upload/record preservation, permitted quotation IDs, and existing append flows passed focused tests on disposable PostgreSQL databases. Browser verification and PR review remain open; item 02 stays unchecked.
 - [ ] **03 — P19:** Make Records list, detail, and evidence access follow the same effective permissions and Project scope.
 - [ ] **04 — P18:** Limit Photo Guidance choices and direct reads to authorized Projects.
 - [ ] **05 — P12:** Bound Project-team changes to authorized Projects and keep creator identity separate from role text.
@@ -61,7 +62,7 @@ Work in small, reviewable changes. Where one phase spans unrelated risks, its pa
 3. Run focused, proportionate regressions for each source change, including permission/transaction and migration checks when relevant. Do not rerun the full suite for every item. Verify affected screens in a browser, including English/Arabic and relevant mobile/keyboard paths when available. Record any verification that remains blocked.
 4. Review the diff and record the PR/commit, test result, and any remaining limitation here. Check the item only when its acceptance criteria are met.
 
-The next concrete change is item **01**. Its proposed scope is the Category grant mutation route and the User Roles grant-saving form; it does not require a database migration or broader Pricing redesign.
+Items **01** and **02** have source changes in separate draft PRs. Their browser checks and review remain open; the full suite is reserved for the final gate.
 
 ## First slice — Pricing Category grants (item 01)
 
