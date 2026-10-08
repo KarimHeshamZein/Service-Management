@@ -59,7 +59,7 @@ Work in small, reviewable changes. Where one phase spans unrelated risks, its pa
 
 1. Confirm the exact behavior and boundary from the detailed plan; record any policy decision before coding.
 2. Create a fresh task branch from the updated `main` after checkpoint integration. Preserve local data and the unrelated root `index.html`.
-3. Run focused, proportionate regressions for each source change, including permission/transaction and migration checks when relevant. Do not rerun the full suite for every item. Verify affected screens in a browser, including English/Arabic and relevant mobile/keyboard paths when available. Record any verification that remains blocked.
+3. Run focused, proportionate regressions for each source change, including permission/transaction and migration checks when relevant. Do not rerun the full suite for every item. Restart the local preview on port 8999 with the new changes and give the user click-by-click test steps. Verify affected screens in a browser, including English/Arabic and relevant mobile/keyboard paths when available. Record any verification that remains blocked.
 4. Review the diff and record the PR/commit, test result, and any remaining limitation here. Check the item only when its acceptance criteria are met.
 
 Items **01** and **02** have source changes in separate draft PRs. Their browser checks and review remain open; the full suite is reserved for the final gate.
