@@ -25,7 +25,7 @@ Work in small, reviewable changes. Where one phase spans unrelated risks, its pa
 - [ ] **06 — P17:** Stop Excel templates/previews from disclosing or accepting unauthorized Project data; define the supported import path.
 - [ ] **07 — P0:** Preserve shared Purchase Document links outside the editor's authority during save.
 - [ ] **08 — P0:** Preserve saved quotation package attachments when their live source is moved, hidden, or deleted.
-- [ ] **09 — P8:** Keep saved quotations editable after catalogue changes without rewriting historical line snapshots. The saved-price-and-quantity editor is implemented in `fix/pricing-saved-line-values` (focused regression passed); full Item replacement/reconciliation and manual English/Arabic UI checks remain open.
+- [ ] **09 — P8:** Keep saved quotations editable after catalogue changes without rewriting historical line snapshots. [Draft PR #9](https://github.com/KarimHeshamZein/Service-Management/pull/9) adds a saved-price-and-quantity editor (5 focused checks passed); full Item replacement/reconciliation and manual English/Arabic UI checks remain open.
 - [ ] **10 — P7:** Make document library scope and own-work visibility consistent with the permission policy.
 - [ ] **11 — P15:** Give drafts stable user/workspace/entry identity and clear them only after a confirmed successful save.
 - [ ] **12 — P16:** Define device-table row identity and metadata precedence so edits/imports do not silently overwrite asset data.
