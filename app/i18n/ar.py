@@ -1772,6 +1772,8 @@ MESSAGES.update({
  'pricing.category.delete.blocked': 'انقل أو احذف الأصناف المباشرة والكاتجوريز الفرعية أولاً.',
  'pricing.category.delete.help': 'يمكن حذف هذه الكاتجوري الفارغة.',
  'pricing.category.delete.confirm': 'هل تريد حذف هذه الكاتجوري الفارغة؟',
+ 'server.pricing.category.transfer.items.conflict': 'يحتوي القسم المستهدف بالفعل على أصناف بالاسم والموديل نفسيهما: {items}. غيّر أسماء الأصناف المتعارضة أو انقلها قبل نقل هذه الكاتجوري.',
+ 'server.pricing.category.transfer.concurrent': 'تغير القسم المستهدف أثناء نقل الكاتجوري. لم تُنقل أي بيانات. حدّث الصفحة ثم حاول مرة أخرى.',
  'ui.create': 'إنشاء', 'ui.download': 'تنزيل', 'store.serial.short': 'السريال', 'technical.bytes': 'بايت', 'store.reversal.reason': 'سبب العكس مطلوب', 'store.reverse': 'عكس الحركة', 'store.reversed': 'تم عكسها',
  'store.download.excel': 'تنزيل Excel', 'store.reports': 'تقارير المستودعات', 'store.reports.help': 'مراجعة الأرصدة والعهد والمشتريات والصرف والتحويلات والمخزون المنخفض.', 'store.all.warehouses': 'كل المستودعات المسموح بها', 'store.report.empty': 'لا توجد نتائج مطابقة.',
  'store.report.current_stock': 'المخزون الحالي لكل مستودع', 'store.report.custody': 'عهد الفنيين', 'store.report.movements': 'سجل حركات المخزون', 'store.report.project_issues': 'الصرف للمشاريع', 'store.report.purchases': 'إضافات المشتريات', 'store.report.transfers': 'التحويلات', 'store.report.low_stock': 'المخزون المنخفض',

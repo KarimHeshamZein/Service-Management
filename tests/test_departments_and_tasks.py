@@ -8,6 +8,8 @@ from decimal import Decimal
 from sqlalchemy import select
 
 from app.access_control import permission_allowed, project_access_allowed
+from app.database import SessionLocal
+import app.routers.pricing as pricing_router
 from app.models import (
     AccessScope,
     AuditEvent,
@@ -619,6 +621,105 @@ def test_category_manager_separates_edit_move_delete_and_keeps_category_context(
     })
     assert transferred.status_code == 303
     assert transferred.headers["location"] == "/pricing/items/departments"
+
+
+def test_category_transfer_lists_all_item_conflicts_without_moving_branch(client, db):
+    target = _add_department(db)
+    root = PricingItemCategory(name="Security", department_id=1)
+    child = PricingItemCategory(name="Outdoor", department_id=1, parent=root)
+    first = PricingItem(
+        department_id=1, category=root, name="Camera Alpha", model="A",
+        unit_price=Decimal("100.00"), currency="SAR",
+    )
+    second = PricingItem(
+        department_id=1, category=child, name="Camera Beta", model="B",
+        unit_price=Decimal("200.00"), currency="SAR",
+    )
+    second.related_items.append(PricingRelatedItem(
+        department_id=1, name="Mount", unit_price=Decimal("10.00"), currency="SAR",
+    ))
+    db.add_all([
+        root,
+        PricingItem(department_id=target.id, name="camera alpha", model="a",
+                    unit_price=Decimal("50.00"), currency="SAR"),
+        PricingItem(department_id=target.id, name="CAMERA BETA", model="b",
+                    unit_price=Decimal("60.00"), currency="SAR"),
+    ])
+    db.commit()
+    admin_user = db.get(User, 1)
+    document = PurchaseDocument(
+        department_id=1,
+        document_type=PurchaseDocumentType.PURCHASE_INVOICE,
+        supplier_name="Branch supplier",
+        document_date=date.today(),
+        uploaded_by_id=admin_user.id,
+        uploaded_by_name=admin_user.full_name,
+    )
+    document.item_links.append(PurchaseDocumentItem(item=second, position=0))
+    db.add(document)
+    db.add(PricingCategoryUserAccess(category_id=child.id, user_id=2, granted_by_id=1))
+    db.commit()
+    root_id, child_id, first_id, second_id, document_id = root.id, child.id, first.id, second.id, document.id
+
+    login(client, *ADMIN)
+    token = csrf_of(client, "/pricing/items")
+    rejected = client.post(f"/pricing/categories/{root_id}/move-department", data={
+        "csrf_token": token, "target_department_id": str(target.id),
+    })
+    assert rejected.status_code == 303
+    assert rejected.headers["location"] == "/pricing/items"
+    page = client.get("/pricing/items")
+    assert "Camera Alpha" in page.text and "Camera Beta" in page.text
+    assert "Security / Outdoor" in page.text
+    assert "Rename or move those Items" in page.text
+
+    db.expire_all()
+    assert db.get(PricingItemCategory, root_id).department_id == 1
+    assert db.get(PricingItemCategory, child_id).parent_id == root_id
+    assert db.get(PricingItem, first_id).department_id == 1
+    assert db.get(PricingItem, second_id).department_id == 1
+    assert db.get(PricingItem, second_id).related_items[0].department_id == 1
+    assert db.get(PurchaseDocument, document_id).department_id == 1
+    assert [link.pricing_item_id for link in db.get(PurchaseDocument, document_id).item_links] == [second_id]
+    assert db.scalar(select(PricingCategoryUserAccess).where(
+        PricingCategoryUserAccess.category_id == child_id,
+    )) is not None
+
+
+def test_category_transfer_rolls_back_a_new_destination_item_conflict(client, db, monkeypatch):
+    target = _add_department(db)
+    root = PricingItemCategory(name="Security", department_id=1)
+    item = PricingItem(
+        department_id=1, category=root, name="Race camera", model="M",
+        unit_price=Decimal("100.00"), currency="SAR",
+    )
+    db.add(root)
+    db.commit()
+    root_id, item_id, target_id = root.id, item.id, target.id
+    original = pricing_router._move_linked_item_resources
+
+    def concurrent_insert(session, *, items, target_department):
+        with SessionLocal() as other:
+            other.add(PricingItem(
+                department_id=target_id, name="Race camera", model="M",
+                unit_price=Decimal("50.00"), currency="SAR",
+            ))
+            other.commit()
+        return original(session, items=items, target_department=target_department)
+
+    monkeypatch.setattr(pricing_router, "_move_linked_item_resources", concurrent_insert)
+    login(client, *ADMIN)
+    token = csrf_of(client, "/pricing/items")
+    rejected = client.post(f"/pricing/categories/{root_id}/move-department", data={
+        "csrf_token": token, "target_department_id": str(target_id),
+    })
+    assert rejected.status_code == 303
+    assert rejected.headers["location"] == "/pricing/items"
+    assert "No data moved. Refresh and try again." in client.get("/pricing/items").text
+    db.expire_all()
+    assert db.get(PricingItemCategory, root_id).department_id == 1
+    assert db.get(PricingItem, item_id).department_id == 1
+    assert db.get(PricingItem, item_id).category_id == root_id
 
 
 def test_new_categories_and_items_are_owned_by_the_active_department(client, db):

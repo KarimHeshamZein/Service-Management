@@ -1884,4 +1884,6 @@ MESSAGES.update({
  'pricing.category.delete.blocked': 'Move or delete the direct Items and child Categories before deleting this Category.',
  'pricing.category.delete.help': 'This empty Category can be deleted.',
  'pricing.category.delete.confirm': 'Delete this empty Category?',
+ 'server.pricing.category.transfer.items.conflict': 'The target Department already has Items with the same name and model: {items}. Rename or move those Items before transferring this Category.',
+ 'server.pricing.category.transfer.concurrent': 'The destination changed while this Category was moving. No data moved. Refresh and try again.',
 })
