@@ -24,7 +24,7 @@ Work in small, reviewable changes. Where one phase spans unrelated risks, its pa
 - [ ] **05 — P12:** Bound Project-team changes to authorized Projects and keep creator identity separate from role text.
 - [ ] **06 — P17:** Stop Excel templates/previews from disclosing or accepting unauthorized Project data; define the supported import path.
 - [ ] **07 — P0:** Preserve shared Purchase Document links outside the editor's authority during save.
-- [ ] **08 — P0:** Preserve saved quotation package attachments when their live source is moved, hidden, or deleted.
+- [ ] **08 — P0:** Preserve saved quotation package attachments when their live source is moved, hidden, or deleted. [Draft PR #7](https://github.com/KarimHeshamZein/Service-Management/pull/7): saved copies appear separately and stay checked by default; explicit uncheck removes a copy, selecting a current source refreshes it, stale forms are rejected, and file/DB failures retain existing copies. Focused tests pass; manual English/Arabic UI check and PR review remain open.
 - [ ] **09 — P8:** Keep saved quotations editable after catalogue changes without rewriting historical line snapshots.
 - [ ] **10 — P7:** Make document library scope and own-work visibility consistent with the permission policy.
 - [ ] **11 — P15:** Give drafts stable user/workspace/entry identity and clear them only after a confirmed successful save.

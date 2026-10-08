@@ -1833,3 +1833,20 @@ MESSAGES.update({
  'ui.this.category.has.no.child.categories': 'This Category has no child Categories. You can select it directly.',
  'ui.select.this.category': 'Select this Category',
 })
+
+MESSAGES.update({
+ 'technical.saved.copies': 'Saved copies in this quotation',
+ 'technical.saved.copies.help': 'Checked copies stay in the package, even if the original Data Sheet is moved or deleted. Uncheck a copy to remove it.',
+ 'technical.no.saved.copies': 'No technical copies have been saved yet.',
+ 'technical.current.sources': 'Current Data Sheets and recommendations',
+ 'technical.current.sources.help': 'Select a current source to add it. Selecting one already saved replaces its saved copy with the current version.',
+ 'server.technical.package.changed': 'This technical package changed while you were editing. Refresh and review the saved copies before saving.',
+ 'server.technical.package.invalid.saved': 'Invalid saved technical attachment selection.',
+ 'server.technical.package.invalid.sheet': 'Invalid Data Sheet selection.',
+ 'server.technical.package.sheet.unavailable': 'A selected Data Sheet is no longer available. Refresh and review the package.',
+ 'server.technical.package.sheet.unrelated': 'A selected Data Sheet is not part of this quotation.',
+ 'server.technical.package.invalid.recommendation': 'Invalid technical recommendation selection.',
+ 'server.technical.package.recommendation.unrelated': 'A selected recommendation is not part of this quotation.',
+ 'server.technical.package.recommendation.unavailable': 'A selected recommendation is no longer available. Refresh and review the package.',
+ 'server.technical.package.save.failed': 'Could not update the technical package. Existing saved copies were kept.',
+})

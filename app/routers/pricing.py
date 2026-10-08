@@ -64,7 +64,7 @@ from ..pricing_categories import (
     category_subtree_height,
 )
 from ..pricing_pdf import build_quotation_pdf
-from ..purchase_documents import delete_purchase_files
+from ..purchase_documents import PurchaseDocumentError, delete_purchase_files
 from ..technical_documents import delete_quotation_technical_files, recommendation_pdf, resolve_technical_file
 from ..quotation_planner import (
     InstallationPlanSubmission,
@@ -2474,6 +2474,7 @@ def quotation_detail(
             "technical_documents": technical_documents,
             "technical_recommendations": recommendations,
             "technical_attachments": technical_attachments,
+            "can_edit_technical": request.state.can("quotations.edit"),
         },
     )
 
@@ -2483,37 +2484,119 @@ async def save_quotation_technical_attachments(quotation_id: int, request: Reque
     require_permission(request, db, user, "quotations.edit")
     quotation = _quotation_or_404(db, quotation_id)
     form = await request.form()
+    return_url = f"/pricing/quotations/{quotation_id}"
     if not csrf_valid(request, str(form.get("csrf_token") or "")):
         flash(request, "Your form expired. Refresh and try again.", "error")
-        return _redirect(f"/pricing/quotations/{quotation_id}")
-    document_ids = {entity_id(value) for value in form.getlist("technical_document_ids")} - {None}
+        return _redirect(return_url)
+
+    # Lock this quotation while reconciling its saved copies. A stale form must
+    # never remove a snapshot added by another editor after the page was opened.
+    db.execute(select(PricingQuotation.id).where(PricingQuotation.id == quotation_id).with_for_update())
+    attachments = list(db.scalars(
+        select(QuotationTechnicalAttachment)
+        .where(QuotationTechnicalAttachment.quotation_id == quotation_id)
+        .order_by(QuotationTechnicalAttachment.position)
+    ))
+    current_ids = {attachment.id for attachment in attachments}
+    baseline = str(form.get("technical_attachment_baseline") or "")
+    try:
+        baseline_ids = {int(value) for value in baseline.split(",") if value}
+    except ValueError:
+        baseline_ids = set()
+    if baseline_ids != current_ids:
+        flash(request, "This technical package changed while you were editing. Refresh and review the saved copies before saving.", "error")
+        return _redirect(return_url)
+
+    retained_ids = {entity_id(value) for value in form.getlist("retain_technical_attachment_ids")}
+    if None in retained_ids or not retained_ids <= current_ids:
+        flash(request, "Invalid saved technical attachment selection.", "error")
+        return _redirect(return_url)
+    document_ids = {entity_id(value) for value in form.getlist("technical_document_ids")}
+    if None in document_ids:
+        flash(request, "Invalid Data Sheet selection.", "error")
+        return _redirect(return_url)
     recommendation_keys = {str(value) for value in form.getlist("technical_recommendations")}
-    old_technical_keys = list(db.scalars(select(QuotationTechnicalAttachment.storage_key).where(QuotationTechnicalAttachment.quotation_id == quotation_id)))
-    db.query(QuotationTechnicalAttachment).filter(QuotationTechnicalAttachment.quotation_id == quotation_id).delete(synchronize_session=False)
-    position = 0
     target_names = {("main", line.source_item_id): line.item_name for line in quotation.lines if line.source_item_id}
     target_names.update({("related", rel.source_related_item_id): rel.item_name for line in quotation.lines for rel in line.related_items if rel.source_related_item_id})
-    for document_id in sorted(document_ids):
-        document = db.get(TechnicalDocument, document_id)
-        if not document: continue
-        kind, target_id = ("main", document.pricing_item_id) if document.pricing_item_id else ("related", document.related_item_id)
-        if (kind, target_id) not in target_names: continue
-        source = resolve_technical_file(document.storage_key)
-        suffix = source.suffix.lower()
-        key = f"quotation-technical/{quotation_id}/{uuid.uuid4().hex}{suffix}"
-        target = app_settings.upload_dir / key; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(source.read_bytes())
-        db.add(QuotationTechnicalAttachment(quotation_id=quotation_id, source_document_id=document.id, target_kind=kind, target_id=target_id, item_name=target_names[(kind,target_id)], title=document.title, storage_key=key, original_filename=document.original_filename, content_type=document.content_type, position=position)); position += 1
-    for key in sorted(recommendation_keys):
-        try: kind, raw_id = key.split(":", 1); target_id = int(raw_id)
-        except (ValueError, TypeError): continue
-        if (kind,target_id) not in target_names: continue
-        rec = db.scalar(select(TechnicalRecommendation).where((TechnicalRecommendation.pricing_item_id == target_id) if kind == "main" else (TechnicalRecommendation.related_item_id == target_id)))
-        if rec: db.add(QuotationTechnicalAttachment(quotation_id=quotation_id, target_kind=kind, target_id=target_id, item_name=target_names[(kind,target_id)], title="Technical Recommendation", recommendation_snapshot=rec.recommendation, position=position)); position += 1
-    db.commit()
-    delete_quotation_technical_files(*old_technical_keys)
-    set_audit_context(request, action="update", entity_type="quotation_technical_package", entity_id=quotation_id, entity_label=quotation.quotation_number, changes={"attachments":position})
+    new_keys: list[str] = []
+    removed_keys: list[str | None] = []
+    position = max((attachment.position for attachment in attachments), default=-1) + 1
+    try:
+        documents = []
+        for document_id in sorted(document_ids):
+            document = db.get(TechnicalDocument, document_id)
+            if document is None:
+                raise ValueError("A selected Data Sheet is no longer available. Refresh and review the package.")
+            kind, target_id = ("main", document.pricing_item_id) if document.pricing_item_id else ("related", document.related_item_id)
+            if (kind, target_id) not in target_names:
+                raise ValueError("A selected Data Sheet is not part of this quotation.")
+            documents.append((document, kind, target_id))
+
+        recommendations = []
+        for key in sorted(recommendation_keys):
+            try:
+                kind, raw_id = key.split(":", 1)
+                target_id = int(raw_id)
+            except (ValueError, TypeError):
+                raise ValueError("Invalid technical recommendation selection.") from None
+            if kind not in {"main", "related"} or (kind, target_id) not in target_names:
+                raise ValueError("A selected recommendation is not part of this quotation.")
+            recommendation = db.scalar(select(TechnicalRecommendation).where(
+                (TechnicalRecommendation.pricing_item_id == target_id) if kind == "main"
+                else (TechnicalRecommendation.related_item_id == target_id)
+            ))
+            if recommendation is None:
+                raise ValueError("A selected recommendation is no longer available. Refresh and review the package.")
+            recommendations.append((recommendation, kind, target_id))
+
+        # A chosen current source explicitly refreshes its existing saved copy.
+        for attachment in attachments:
+            replacing_document = attachment.source_document_id in document_ids if attachment.source_document_id else False
+            replacing_recommendation = bool(
+                attachment.recommendation_snapshot
+                and f"{attachment.target_kind}:{attachment.target_id}" in recommendation_keys
+            )
+            if attachment.id not in retained_ids or replacing_document or replacing_recommendation:
+                removed_keys.append(attachment.storage_key)
+                db.delete(attachment)
+
+        for document, kind, target_id in documents:
+            source = resolve_technical_file(document.storage_key)
+            key = f"quotation-technical/{quotation_id}/{uuid.uuid4().hex}{source.suffix.lower()}"
+            new_keys.append(key)
+            target = app_settings.upload_dir / key
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+            db.add(QuotationTechnicalAttachment(
+                quotation_id=quotation_id, source_document_id=document.id,
+                target_kind=kind, target_id=target_id, item_name=target_names[(kind, target_id)],
+                title=document.title, storage_key=key,
+                original_filename=document.original_filename, content_type=document.content_type,
+                position=position,
+            ))
+            position += 1
+        for recommendation, kind, target_id in recommendations:
+            db.add(QuotationTechnicalAttachment(
+                quotation_id=quotation_id, target_kind=kind, target_id=target_id,
+                item_name=target_names[(kind, target_id)], title="Technical Recommendation",
+                recommendation_snapshot=recommendation.recommendation, position=position,
+            ))
+            position += 1
+        db.commit()
+    except (OSError, SQLAlchemyError, PurchaseDocumentError, ValueError) as exc:
+        db.rollback()
+        delete_quotation_technical_files(*new_keys)
+        flash(request, str(exc) if isinstance(exc, ValueError) else "Could not update the technical package. Existing saved copies were kept.", "error")
+        return _redirect(return_url)
+    except Exception:
+        db.rollback()
+        delete_quotation_technical_files(*new_keys)
+        raise
+
+    delete_quotation_technical_files(*removed_keys)
+    set_audit_context(request, action="update", entity_type="quotation_technical_package", entity_id=quotation_id, entity_label=quotation.quotation_number, changes={"attachments":len(attachments) - len(removed_keys) + len(documents) + len(recommendations)})
     flash(request, "Quotation technical package updated.")
-    return _redirect(f"/pricing/quotations/{quotation_id}")
+    return _redirect(return_url)
 
 
 @router.get("/quotations/{quotation_id}/technical-package.zip")

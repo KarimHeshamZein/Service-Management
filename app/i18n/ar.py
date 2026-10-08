@@ -1812,3 +1812,20 @@ MESSAGES.update({
  'pricing.move.item.confirm': 'هل تريد نقل هذا الصنف وملفاته المرتبطة إلى القسم المحدد؟',
  'pricing.move.item.help': 'سيظهر الصنف بدون كاتجوري داخل القسم الجديد، وتبقى عروض الأسعار القديمة بدون تغيير.',
 })
+
+MESSAGES.update({
+ 'technical.saved.copies': 'النسخ المحفوظة مع عرض السعر',
+ 'technical.saved.copies.help': 'تبقى النسخ المحددة في الحزمة حتى لو نُقل ملف Data Sheet الأصلي أو حُذف. أزل التحديد لحذف نسخة محفوظة.',
+ 'technical.no.saved.copies': 'لم تُحفظ نسخ تقنية بعد.',
+ 'technical.current.sources': 'ملفات Data Sheet والتوصيات الحالية',
+ 'technical.current.sources.help': 'حدد مصدراً حالياً لإضافته. تحديد مصدر محفوظ مسبقاً يستبدل نسخته المحفوظة بالإصدار الحالي.',
+ 'server.technical.package.changed': 'تغيرت الحزمة التقنية أثناء التحرير. حدّث الصفحة وراجع النسخ المحفوظة قبل الحفظ.',
+ 'server.technical.package.invalid.saved': 'اختيار النسخ التقنية المحفوظة غير صالح.',
+ 'server.technical.package.invalid.sheet': 'اختيار ملف Data Sheet غير صالح.',
+ 'server.technical.package.sheet.unavailable': 'أحد ملفات Data Sheet المحددة لم يعد متاحاً. حدّث الصفحة وراجع الحزمة.',
+ 'server.technical.package.sheet.unrelated': 'أحد ملفات Data Sheet المحددة لا يخص عرض السعر هذا.',
+ 'server.technical.package.invalid.recommendation': 'اختيار التوصية التقنية غير صالح.',
+ 'server.technical.package.recommendation.unrelated': 'إحدى التوصيات المحددة لا تخص عرض السعر هذا.',
+ 'server.technical.package.recommendation.unavailable': 'إحدى التوصيات المحددة لم تعد متاحة. حدّث الصفحة وراجع الحزمة.',
+ 'server.technical.package.save.failed': 'تعذر تحديث الحزمة التقنية. بقيت النسخ المحفوظة كما هي.',
+})
