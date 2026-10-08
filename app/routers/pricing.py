@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import delete, func, or_, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 from starlette.datastructures import UploadFile
 
@@ -598,6 +598,34 @@ def _move_target(db: Session, target_department_id: int | None) -> Department | 
     return target if target and target.is_active else None
 
 
+def _category_transfer_item_conflicts(
+    db: Session, *, items: list[PricingItem], target_department_id: int,
+) -> list[str]:
+    """Report every source Item whose name/model already exists in the target."""
+    if not items:
+        return []
+    names = {item.name.lower() for item in items}
+    target_keys = {
+        (name.lower(), model.lower())
+        for name, model in db.execute(
+            select(PricingItem.name, PricingItem.model)
+            .where(
+                PricingItem.department_id == target_department_id,
+                func.lower(PricingItem.name).in_(names),
+            )
+            .execution_options(include_all_departments=True)
+        )
+    }
+    return sorted(
+        (
+            f"{item.display_label} ({category_path_label(item.category)})"
+            for item in items
+            if (item.name.lower(), item.model.lower()) in target_keys
+        ),
+        key=str.casefold,
+    )
+
+
 def _item_context(
     db: Session,
     user: User,
@@ -998,6 +1026,18 @@ async def move_category_department(
         return _redirect("/pricing/items")
     categories = [category, *category_descendants(category)]
     items = [item for entry in categories for item in entry.items]
+    conflicts = _category_transfer_item_conflicts(
+        db, items=items, target_department_id=target.id,
+    )
+    if conflicts:
+        flash(
+            request,
+            "The target Department already has Items with the same name and model: "
+            + "; ".join(conflicts)
+            + ". Rename or move those Items before transferring this Category.",
+            "error",
+        )
+        return _redirect("/pricing/items")
     source_department_id = category.department_id
     try:
         _move_linked_item_resources(db, items=items, target_department=target)
@@ -1010,6 +1050,22 @@ async def move_category_department(
     except ValueError as exc:
         db.rollback()
         flash(request, str(exc), "error")
+        return _redirect("/pricing/items")
+    except IntegrityError as exc:
+        db.rollback()
+        constraint = getattr(getattr(exc.orig, "diag", None), "constraint_name", None)
+        if constraint not in {
+            "uq_pricing_item_department_name_model",
+            "uq_pricing_category_root_department_name",
+            "uq_pricing_category_child_department_name",
+        }:
+            raise
+        flash(
+            request,
+            "The destination changed while this Category was moving. "
+            "No data moved. Refresh and try again.",
+            "error",
+        )
         return _redirect("/pricing/items")
     set_audit_context(
         request,

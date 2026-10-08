@@ -1833,3 +1833,8 @@ MESSAGES.update({
  'ui.this.category.has.no.child.categories': 'This Category has no child Categories. You can select it directly.',
  'ui.select.this.category': 'Select this Category',
 })
+
+MESSAGES.update({
+ 'server.pricing.category.transfer.items.conflict': 'The target Department already has Items with the same name and model: {items}. Rename or move those Items before transferring this Category.',
+ 'server.pricing.category.transfer.concurrent': 'The destination changed while this Category was moving. No data moved. Refresh and try again.',
+})
