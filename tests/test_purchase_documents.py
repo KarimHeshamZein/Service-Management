@@ -10,13 +10,16 @@ from reportlab.pdfgen import canvas
 
 from app.config import settings
 from app.models import (
+    AccessScope,
     PricingItem,
     PricingItemCategory,
+    PricingItemUserAccess,
     PricingRelatedItem,
     PurchaseDocument,
     PurchaseDocumentItem,
     User,
     UserDepartmentPermission,
+    UserDepartmentScope,
 )
 from app.uploads import store_image
 from tests.conftest import ADMIN, LEADER_A, csrf_of, login, logout, make_image
@@ -165,6 +168,105 @@ def test_edit_shared_document_replaces_item_links_without_copying_files(client, 
     assert [entry.storage_key for entry in document.files] == storage_keys
     assert {(link.pricing_item_id, link.related_item_id) for link in document.item_links} == {(camera.id, None), (recorder.id, None)}
     assert db.query(PurchaseDocumentItem).filter_by(related_item_id=related.id).count() == 0
+
+
+def test_scoped_editor_cannot_lose_hidden_shared_links_or_delete_document(client, db):
+    camera, _, recorder, _, _ = _catalogue(db)
+    login(client, *ADMIN)
+    _create_document(client, _selection(("main", camera.id, "100", "SAR"), ("main", recorder.id, "500", "SAR")))
+    db.expire_all()
+    document = db.query(PurchaseDocument).one()
+    document_id = document.id
+    storage_keys = [entry.storage_key for entry in document.files]
+
+    technical = db.query(User).filter_by(username=LEADER_A[0]).one()
+    db.add(PricingItemUserAccess(item_id=camera.id, user_id=technical.id, granted_by_id=1))
+    db.get(UserDepartmentScope, (technical.id, 1, "pricing_items")).scope = AccessScope.SELECTED
+    db.commit()
+    logout(client)
+    login(client, *LEADER_A)
+
+    item_page = client.get(f"/pricing/purchase-documents/items/main/{camera.id}")
+    assert item_page.status_code == 200
+    assert f"/{document_id}/edit" in item_page.text
+    assert f"/{document_id}/delete" not in item_page.text
+    edit_page = client.get(f"/pricing/purchase-documents/{document_id}/edit")
+    assert edit_page.status_code == 200
+    assert "This shared document includes Items outside your access" in edit_page.text
+    assert "selected_items_json" not in edit_page.text
+    assert "purchase-catalogue-data" not in edit_page.text
+    assert "Network Recorder" not in edit_page.text
+    assert "500.00" not in edit_page.text
+
+    token = csrf_of(client, f"/pricing/purchase-documents/items/main/{camera.id}")
+    attempted_edit = client.post(
+        f"/pricing/purchase-documents/{document_id}/edit",
+        data={
+            "csrf_token": token,
+            "document_type": "purchase_invoice",
+            "supplier_name": "Changed without full access",
+            "document_date": "2026-08-27",
+            "selected_items_json": _selection(("main", camera.id, "110", "SAR")),
+        },
+        files=[("files", ("new.pdf", _pdf_bytes(), "application/pdf"))],
+    )
+    assert attempted_edit.status_code == 303
+    attempted_delete = client.post(
+        f"/pricing/purchase-documents/{document_id}/delete",
+        data={"csrf_token": token},
+    )
+    assert attempted_delete.status_code == 303
+    db.expire_all()
+    document = db.get(PurchaseDocument, document_id)
+    assert document.supplier_name == "Supplier A"
+    assert {link.pricing_item_id for link in document.item_links} == {camera.id, recorder.id}
+    assert {link.unit_price for link in document.item_links} == {Decimal("100.00"), Decimal("500.00")}
+    assert [entry.storage_key for entry in document.files] == storage_keys
+    assert all((settings.upload_dir / key).exists() for key in storage_keys)
+
+    logout(client)
+    login(client, *ADMIN)
+    admin_edit = client.get(f"/pricing/purchase-documents/{document_id}/edit")
+    assert admin_edit.status_code == 200
+    assert "Network Recorder" in admin_edit.text
+    assert "selected_items_json" in admin_edit.text
+
+
+def test_scoped_editor_stale_form_is_rejected_after_link_added(client, db):
+    camera, _, recorder, _, _ = _catalogue(db)
+    login(client, *ADMIN)
+    _create_document(client, _selection(("main", camera.id, "100", "SAR")))
+    db.expire_all()
+    document = db.query(PurchaseDocument).one()
+    document_id = document.id
+    technical = db.query(User).filter_by(username=LEADER_A[0]).one()
+    db.add(PricingItemUserAccess(item_id=camera.id, user_id=technical.id, granted_by_id=1))
+    db.get(UserDepartmentScope, (technical.id, 1, "pricing_items")).scope = AccessScope.SELECTED
+    db.commit()
+    logout(client)
+    login(client, *LEADER_A)
+    form = client.get(f"/pricing/purchase-documents/{document_id}/edit")
+    assert form.status_code == 200
+    assert "selected_items_json" in form.text
+    token = csrf_of(client, f"/pricing/purchase-documents/{document_id}/edit")
+
+    document.item_links.append(PurchaseDocumentItem(pricing_item_id=recorder.id, unit_price=Decimal("500"), currency="SAR", position=1))
+    db.commit()
+    response = client.post(
+        f"/pricing/purchase-documents/{document_id}/edit",
+        data={
+            "csrf_token": token,
+            "document_type": "purchase_invoice",
+            "supplier_name": "Stale edit",
+            "document_date": "2026-08-27",
+            "selected_items_json": _selection(("main", camera.id, "110", "SAR")),
+        },
+    )
+    assert response.status_code == 303
+    db.expire_all()
+    document = db.get(PurchaseDocument, document_id)
+    assert document.supplier_name == "Supplier A"
+    assert {link.pricing_item_id for link in document.item_links} == {camera.id, recorder.id}
 
 
 def test_item_price_analysis_filters_type_and_exports_pdf(client, db):

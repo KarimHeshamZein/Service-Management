@@ -3,6 +3,9 @@
 {% block content %}
 <div class="page-head"><div><span class="eyebrow">{{ t('ui.purchase.documents') }}</span><h1>{{ t('ui.edit.purchase.document') if document else t('ui.add.purchase.document') }}</h1><p class="lede">{{ t('ui.purchase.documents.help') }}</p></div><a class="btn btn-secondary" href="/pricing/purchase-documents">{{ t('ui.back') }}</a></div>
 
+{% if blocked_shared_links %}
+<section class="card"><div class="card-body"><p class="alert info" role="status">{{ t('server.purchase.document.shared.read.only') }}</p></div></section>
+{% else %}
 <form method="post" enctype="multipart/form-data" action="{{ '/pricing/purchase-documents/' ~ document.id ~ '/edit' if document else '/pricing/purchase-documents' }}" class="purchase-document-form" data-purchase-document-form data-remove-label="{{ t('ui.remove') }}" data-related-label="{{ t('ui.related.item') }}" data-unit-price-label="{{ t('ui.unit.price.optional') }}" data-currency-label="{{ t('ui.currency') }}" data-uncategorized-label="{{ t('ui.uncategorized') }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="selected_items_json" value='{{ selected_items_json|e }}' data-purchase-selected-json>
@@ -34,4 +37,5 @@
 </div>
 <script type="application/json" id="purchase-catalogue-data">{{ catalogue|tojson }}</script>
 <script type="application/json" id="purchase-category-data">{{ category_tree|tojson }}</script>
+{% endif %}
 {% endblock %}

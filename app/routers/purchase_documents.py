@@ -213,6 +213,28 @@ def purchase_documents_home(
     return render(request, "purchase_documents.html", context)
 
 
+def _visible_link_keys(db: Session) -> set[tuple[str, int]]:
+    """Resolve Item identities without loading inaccessible names or prices."""
+    return {
+        ("main", item_id) for item_id in db.scalars(select(PricingItem.id))
+    } | {
+        ("related", item_id) for item_id in db.scalars(select(PricingRelatedItem.id))
+    }
+
+
+def _has_inaccessible_links(
+    document: PurchaseDocument, visible_keys: set[tuple[str, int]]
+) -> bool:
+    return any(
+        (
+            ("main", link.pricing_item_id)
+            if link.pricing_item_id is not None
+            else ("related", link.related_item_id)
+        ) not in visible_keys
+        for link in document.item_links
+    )
+
+
 def _form_context(
     db: Session,
     *,
@@ -290,10 +312,17 @@ def edit_purchase_document(
     db: Session = Depends(get_db),
 ):
     require_permission(request, db, user, "purchase_documents.manage")
+    document = _document(db, document_id)
+    if _has_inaccessible_links(document, _visible_link_keys(db)):
+        return render(
+            request,
+            "purchase_document_form.html",
+            {"active_nav": "purchase_documents", "document": document, "blocked_shared_links": True},
+        )
     return render(
         request,
         "purchase_document_form.html",
-        _form_context(db, document=_document(db, document_id)),
+        _form_context(db, document=document),
     )
 
 
@@ -351,6 +380,13 @@ async def _save_document(
     return_url = f"/pricing/purchase-documents/{document.id}/edit" if document else "/pricing/purchase-documents/new"
     if not csrf_valid(request, str(form.get("csrf_token") or "")):
         flash(request, "Your form expired. Refresh the page and try again.", "error")
+        return _redirect(return_url)
+    if document is not None and _has_inaccessible_links(document, _visible_link_keys(db)):
+        flash(
+            request,
+            "This shared document includes Items outside your access. Ask an Administrator to edit or delete it.",
+            "error",
+        )
         return _redirect(return_url)
     try:
         selected_type = PurchaseDocumentType(str(form.get("document_type") or ""))
@@ -582,6 +618,7 @@ def purchase_document_item(
             "date_to": date_to,
         }.items() if value
     })
+    visible_link_keys = _visible_link_keys(db)
     return render(
         request,
         "purchase_document_item.html",
@@ -598,6 +635,10 @@ def purchase_document_item(
             "date_to": date_to,
             "price_series": _price_series(rows),
             "can_delete": permission_allowed(db, user, db.info["department_id"], "purchase_documents.manage"),
+            "editable_document_ids": {
+                document.id for document, _ in rows
+                if not _has_inaccessible_links(document, visible_link_keys)
+            },
             "price_analysis_url": f"{_item_url(kind, item_id)}/price-analysis.pdf" + (f"?{query}" if query else ""),
         },
     )
@@ -733,6 +774,13 @@ async def delete_purchase_document(
     form = await request.form()
     if not csrf_valid(request, str(form.get("csrf_token") or "")):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Invalid CSRF token")
+    if _has_inaccessible_links(document, _visible_link_keys(db)):
+        flash(
+            request,
+            "This shared document includes Items outside your access. Ask an Administrator to edit or delete it.",
+            "error",
+        )
+        return _redirect(f"/pricing/purchase-documents/{document.id}/edit")
     storage_keys = [entry.storage_key for entry in document.files]
     label = f"{document.document_type.label} - {document.supplier_name}"
     db.delete(document)
