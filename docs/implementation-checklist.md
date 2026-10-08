@@ -25,7 +25,7 @@ Work in small, reviewable changes. Where one phase spans unrelated risks, its pa
 - [ ] **06 — P17:** Stop Excel templates/previews from disclosing or accepting unauthorized Project data; define the supported import path.
 - [ ] **07 — P0:** Preserve shared Purchase Document links outside the editor's authority during save.
 - [ ] **08 — P0:** Preserve saved quotation package attachments when their live source is moved, hidden, or deleted.
-- [ ] **09 — P8:** Keep saved quotations editable after catalogue changes without rewriting historical line snapshots.
+- [ ] **09 — P8:** Keep saved quotations editable after catalogue changes without rewriting historical line snapshots. Draft first slice on `fix/pricing-quotation-notes-preserve-snapshots`: dates, Notes and Terms have a separate safe edit path that preserves saved Item/related/Project/company/image/charge/package data after a source moves or is deleted. Full Item/charge edits now require explicit snapshot-refresh confirmation. Editing existing saved lines, related Items and alternatives without refreshing them remains to be implemented before this item is complete.
 - [ ] **10 — P7:** Make document library scope and own-work visibility consistent with the permission policy.
 - [ ] **11 — P15:** Give drafts stable user/workspace/entry identity and clear them only after a confirmed successful save.
 - [ ] **12 — P16:** Define device-table row identity and metadata precedence so edits/imports do not silently overwrite asset data.

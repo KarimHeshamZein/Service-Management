@@ -33,7 +33,7 @@
           <td class="num">{{ quotation.quotation_date|date }}</td>
           <td class="num">{{ quotation.valid_until|date }}</td>
           <td>{{ quotation.created_by_name }}</td>
-          <td><div class="actions-row" style="flex-wrap:nowrap;"><a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}">{{ t('ui.view') }}</a>{% if can('quotations.edit') %}<a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}/edit">{{ t('ui.edit') }}</a>{% endif %}{% if can_delete %}<button class="btn btn-danger btn-sm" type="submit" formaction="/pricing/quotations/{{ quotation.id }}/delete" onclick="return confirm('{{ t("ui.permanently.delete.this.quotation") }}');">{{ t('ui.delete') }}</button>{% endif %}</div></td>
+          <td><div class="actions-row" style="flex-wrap:nowrap;"><a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}">{{ t('ui.view') }}</a>{% if can('quotations.edit') %}<a class="btn btn-quiet btn-sm" href="/pricing/quotations/{{ quotation.id }}/edit-details">{{ t('pricing.edit.saved.details') }}</a>{% endif %}{% if can_delete %}<button class="btn btn-danger btn-sm" type="submit" formaction="/pricing/quotations/{{ quotation.id }}/delete" onclick="return confirm('{{ t("ui.permanently.delete.this.quotation") }}');">{{ t('ui.delete') }}</button>{% endif %}</div></td>
         </tr>
       {% endfor %}</tbody>
     </table></div></form>

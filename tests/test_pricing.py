@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     AuditEvent,
+    Department,
     GeneralMaintenanceRecord,
     InstallationRecord,
     MaintenanceRecord,
@@ -25,6 +26,8 @@ from app.models import (
     PricingQuotationSiteSurveyImage,
     PricingRelatedItem,
     PricingSettings,
+    QuotationTechnicalAttachment,
+    Site,
     User,
     UserDepartmentPermission,
 )
@@ -1303,6 +1306,7 @@ def test_edit_quotation_commit_failure_removes_only_new_image_snapshots(
         f"/pricing/quotations/{quotation.id}/edit",
         data={
             "csrf_token": csrf,
+            "refresh_source_snapshots": "1",
             "project_id": "1",
             "quotation_date": "2026-07-29",
             "valid_until": "2026-08-28",
@@ -1613,6 +1617,126 @@ def test_quotation_pdf_splits_a_long_catalog_description_across_pages(client, db
     assert text.count("Long catalog item description for layout validation.") >= 35
 
 
+def test_details_edit_preserves_quotation_snapshots_after_item_moves(client, db):
+    camera, _ = _create_catalogue(db)
+    _attach_catalogue_image(db, camera)
+    login(client, *ADMIN)
+    assert _submit_quote(client, camera).status_code == 303
+    quotation = db.query(PricingQuotation).one()
+    quotation_id = quotation.id
+    line = quotation.lines[0]
+    related = line.related_items[0]
+    original = {
+        "line_id": line.id,
+        "item_name": line.item_name,
+        "item_model": line.item_model,
+        "description": line.item_description,
+        "unit_price": line.unit_price,
+        "image_key": line.image_storage_key,
+        "related_id": related.id,
+        "related_name": related.item_name,
+        "related_price": related.unit_price,
+        "project_name": quotation.project_name,
+        "project_address": quotation.project_address,
+        "company_name": quotation.company_name,
+        "charge_ids": [charge.id for charge in quotation.charges],
+    }
+    assert (settings.upload_dir / original["image_key"]).is_file()
+    db.add(QuotationTechnicalAttachment(
+        quotation_id=quotation_id, target_kind="main", target_id=camera.id,
+        item_name=line.item_name, title="Technical Recommendation",
+        recommendation_snapshot="Original guidance", position=0,
+    ))
+    moved_department = Department(id=2, name="Moved Items", code="MOVED")
+    db.add(moved_department)
+    db.flush()
+    camera.department_id = moved_department.id
+    camera.name = "Current renamed camera"
+    camera.description = "Current changed description"
+    project = db.get(Site, quotation.project_id)
+    project.name = "Current renamed project"
+    project.address = "Current changed address"
+    db.commit()
+
+    detail = client.get(f"/pricing/quotations/{quotation_id}")
+    assert detail.status_code == 200
+    assert f"/{quotation_id}/edit-details" in detail.text
+    assert "Edit Items &amp; charges" in detail.text
+    form = client.get(f"/pricing/quotations/{quotation_id}/edit-details")
+    assert form.status_code == 200
+    assert "Change these details without changing saved Items" in form.text
+    assert "Current renamed camera" not in form.text
+    token = csrf_of(client, f"/pricing/quotations/{quotation_id}/edit-details")
+
+    invalid = client.post(f"/pricing/quotations/{quotation_id}/edit-details", data={
+        "csrf_token": token, "quotation_date": "2026-09-01",
+        "valid_until": "2026-08-01", "notes": "Invalid date",
+        "terms": "Still original",
+    })
+    assert invalid.status_code == 422
+    assert "The expiry date cannot be before the quotation date" in invalid.text
+    db.expire_all()
+    assert db.get(PricingQuotation, quotation_id).notes == "Installation included."
+
+    saved = client.post(f"/pricing/quotations/{quotation_id}/edit-details", data={
+        "csrf_token": token, "quotation_date": "2026-07-30",
+        "valid_until": "2026-09-01", "notes": "Revised customer note",
+        "terms": "Revised payment terms",
+    })
+    assert saved.status_code == 303
+    db.expire_all()
+    quotation = db.get(PricingQuotation, quotation_id)
+    line = quotation.lines[0]
+    assert quotation.notes == "Revised customer note"
+    assert quotation.terms == "Revised payment terms"
+    assert quotation.quotation_date == date(2026, 7, 30)
+    assert quotation.valid_until == date(2026, 9, 1)
+    assert (line.id, line.item_name, line.item_model, line.item_description, line.unit_price, line.image_storage_key) == (
+        original["line_id"], original["item_name"], original["item_model"],
+        original["description"], original["unit_price"], original["image_key"],
+    )
+    assert (line.related_items[0].id, line.related_items[0].item_name, line.related_items[0].unit_price) == (
+        original["related_id"], original["related_name"], original["related_price"],
+    )
+    assert (quotation.project_name, quotation.project_address, quotation.company_name) == (
+        original["project_name"], original["project_address"], original["company_name"],
+    )
+    assert [charge.id for charge in quotation.charges] == original["charge_ids"]
+    assert db.query(QuotationTechnicalAttachment).filter_by(quotation_id=quotation_id).count() == 1
+    assert (settings.upload_dir / original["image_key"]).is_file()
+
+    full_edit = client.get(f"/pricing/quotations/{quotation_id}/edit")
+    assert full_edit.status_code == 200
+    assert 'name="refresh_source_snapshots"' in full_edit.text
+    blocked = client.post(f"/pricing/quotations/{quotation_id}/edit", data={
+        "csrf_token": token, "project_id": "1", "quotation_date": "2026-07-30",
+        "valid_until": "2026-09-01", "notes": "Unsafe refresh",
+        "terms": "Revised payment terms", "line_0_item_id": str(camera.id),
+        "line_0_quantity": "2", "line_0_unit_price": "100",
+    })
+    assert blocked.status_code == 422
+    assert "Confirm that this edit will replace saved Item" in blocked.text
+    db.expire_all()
+    assert db.get(PricingQuotation, quotation_id).notes == "Revised customer note"
+
+    db.delete(camera)
+    db.commit()
+    token = csrf_of(client, f"/pricing/quotations/{quotation_id}/edit-details")
+    after_deletion = client.post(f"/pricing/quotations/{quotation_id}/edit-details", data={
+        "csrf_token": token, "quotation_date": "2026-07-30",
+        "valid_until": "2026-09-01", "notes": "Updated after deletion",
+        "terms": "Revised payment terms",
+    })
+    assert after_deletion.status_code == 303
+    db.expire_all()
+    quotation = db.get(PricingQuotation, quotation_id)
+    assert quotation.notes == "Updated after deletion"
+    assert quotation.lines[0].source_item_id is None
+    assert quotation.lines[0].item_name == original["item_name"]
+    assert quotation.lines[0].related_items[0].item_name == original["related_name"]
+    assert (settings.upload_dir / original["image_key"]).is_file()
+
+
 def test_quotation_search_edit_pdf_and_admin_delete(client, db):
     camera, recorder = _create_catalogue(db)
     login(client, *ADMIN)
@@ -1631,6 +1755,7 @@ def test_quotation_search_edit_pdf_and_admin_delete(client, db):
         f"/pricing/quotations/{quotation.id}/edit",
         data={
             "csrf_token": token,
+            "refresh_source_snapshots": "1",
             "project_id": "1",
             "quotation_date": "2026-07-29",
             "valid_until": "2026-09-01",

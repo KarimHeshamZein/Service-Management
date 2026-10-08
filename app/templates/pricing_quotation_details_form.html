@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ t('pricing.edit.saved.details') }} · {{ quotation.quotation_number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><span class="eyebrow">{{ t('nav.pricing.quotations') }}</span><h1>{{ t('pricing.edit.saved.details') }}</h1><p class="lede">{{ quotation.quotation_number }}</p></div>
+  <a class="btn btn-secondary" href="/pricing/quotations/{{ quotation.id }}">{{ t('ui.back') }}</a>
+</div>
+<section class="card">
+  <div class="card-body">
+    <p class="hint">{{ t('pricing.edit.saved.details.help') }}</p>
+    {% if errors.form %}<div class="alert error" role="alert">{{ errors.form }}</div>{% endif %}
+    <form method="post" action="/pricing/quotations/{{ quotation.id }}/edit-details">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="grid cols-2">
+        <div class="field"><label for="quotation-date">{{ t('ui.quotation.date') }}</label><input id="quotation-date" type="date" name="quotation_date" value="{{ values.quotation_date }}" required>{% if errors.quotation_date %}<p class="field-error">{{ errors.quotation_date }}</p>{% endif %}</div>
+        <div class="field"><label for="valid-until">{{ t('ui.valid.until.label') }}</label><input id="valid-until" type="date" name="valid_until" value="{{ values.valid_until }}" required>{% if errors.valid_until %}<p class="field-error">{{ errors.valid_until }}</p>{% endif %}</div>
+      </div>
+      <div class="field"><label for="quotation-notes">{{ t('ui.notes') }}</label><textarea id="quotation-notes" name="notes" rows="5">{{ values.notes }}</textarea></div>
+      <div class="field"><label for="quotation-terms">{{ t('ui.terms.and.conditions') }}</label><textarea id="quotation-terms" name="terms" rows="5">{{ values.terms }}</textarea></div>
+      <div class="sticky-actions"><a class="btn btn-secondary" href="/pricing/quotations/{{ quotation.id }}">{{ t('ui.cancel') }}</a><button class="btn btn-primary" type="submit">{{ t('ui.save.changes') }}</button></div>
+    </form>
+  </div>
+</section>
+{% endblock %}
