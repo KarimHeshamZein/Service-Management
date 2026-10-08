@@ -4,7 +4,7 @@ from __future__ import annotations
 import io
 import json
 import re
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     AuditEvent,
+    Department,
     GeneralMaintenanceRecord,
     InstallationRecord,
     MaintenanceRecord,
@@ -1611,6 +1612,110 @@ def test_quotation_pdf_splits_a_long_catalog_description_across_pages(client, db
         "\n".join(page.extract_text() or "" for page in reader.pages).split()
     )
     assert text.count("Long catalog item description for layout validation.") >= 35
+
+
+def test_saved_line_values_edit_survives_moved_and_deleted_catalogue_sources(client, db):
+    camera, _ = _create_catalogue(db)
+    _attach_catalogue_image(db, camera)
+    login(client, *ADMIN)
+    assert _submit_quote(client, camera).status_code == 303
+    quotation = db.query(PricingQuotation).one()
+    quotation_id = quotation.id
+    line = quotation.lines[0]
+    related = line.related_items[0]
+    original = {
+        "line_id": line.id,
+        "related_id": related.id,
+        "name": line.item_name,
+        "model": line.item_model,
+        "description": line.item_description,
+        "related_name": related.item_name,
+        "image_key": line.image_storage_key,
+        "project_name": quotation.project_name,
+        "company_name": quotation.company_name,
+        "notes": quotation.notes,
+    }
+    db.add(Department(id=2, name="Moved Pricing", code="MOVED_PRICING"))
+    camera.department_id = 2
+    camera.name = "Current renamed camera"
+    camera.description = "Current revised description"
+    db.commit()
+
+    page = client.get(f"/pricing/quotations/{quotation_id}/edit-saved-lines")
+    assert page.status_code == 200
+    assert original["name"] in page.text
+    assert original["description"] in page.text
+    assert original["related_name"] in page.text
+    assert "Current renamed camera" not in page.text
+    baseline = re.search(r'name="baseline" value="([^"]+)"', page.text).group(1)
+    token = csrf_of(client, f"/pricing/quotations/{quotation_id}/edit-saved-lines")
+    payload = {
+        "csrf_token": token, "baseline": baseline,
+        f"line_{line.id}_quantity": "3", f"line_{line.id}_unit_price": "120",
+        f"line_{line.id}_currency": "SAR",
+        f"related_{related.id}_quantity": "4",
+        f"related_{related.id}_unit_price": "15",
+        f"related_{related.id}_currency": "SAR",
+    }
+    invalid = client.post(f"/pricing/quotations/{quotation_id}/edit-saved-lines", data={
+        **payload, f"line_{line.id}_unit_price": "-1",
+    })
+    assert invalid.status_code == 422
+    db.expire_all()
+    assert db.get(PricingQuotation, quotation_id).lines[0].unit_price == Decimal("100.00")
+
+    saved = client.post(f"/pricing/quotations/{quotation_id}/edit-saved-lines", data=payload)
+    assert saved.status_code == 303
+    db.expire_all()
+    quotation = db.get(PricingQuotation, quotation_id)
+    line = quotation.lines[0]
+    related = line.related_items[0]
+    assert (line.id, line.item_name, line.item_model, line.item_description, line.image_storage_key) == (
+        original["line_id"], original["name"], original["model"],
+        original["description"], original["image_key"],
+    )
+    assert (line.quantity, line.unit_price, line.line_total) == (
+        Decimal("3.00"), Decimal("120.00"), Decimal("420.00"),
+    )
+    assert (related.id, related.item_name, related.quantity, related.unit_price) == (
+        original["related_id"], original["related_name"], Decimal("4.00"), Decimal("15.00"),
+    )
+    assert (quotation.project_name, quotation.company_name, quotation.notes) == (
+        original["project_name"], original["company_name"], original["notes"],
+    )
+    assert (settings.upload_dir / original["image_key"]).is_file()
+
+    db.delete(camera)
+    db.commit()
+    page = client.get(f"/pricing/quotations/{quotation_id}/edit-saved-lines")
+    assert page.status_code == 200
+    baseline = re.search(r'name="baseline" value="([^"]+)"', page.text).group(1)
+    token = csrf_of(client, f"/pricing/quotations/{quotation_id}/edit-saved-lines")
+    after_delete = client.post(f"/pricing/quotations/{quotation_id}/edit-saved-lines", data={
+        **payload, "csrf_token": token, "baseline": baseline,
+        f"line_{line.id}_unit_price": "125",
+    })
+    assert after_delete.status_code == 303
+    db.expire_all()
+    quotation = db.get(PricingQuotation, quotation_id)
+    assert quotation.lines[0].source_item_id is None
+    assert quotation.lines[0].item_name == original["name"]
+    assert quotation.lines[0].related_items[0].item_name == original["related_name"]
+    assert quotation.lines[0].unit_price == Decimal("125.00")
+    assert (settings.upload_dir / original["image_key"]).is_file()
+
+    stale_page = client.get(f"/pricing/quotations/{quotation_id}/edit-saved-lines")
+    stale_baseline = re.search(r'name="baseline" value="([^"]+)"', stale_page.text).group(1)
+    quotation.updated_at += timedelta(seconds=1)
+    db.commit()
+    stale = client.post(f"/pricing/quotations/{quotation_id}/edit-saved-lines", data={
+        **payload, "csrf_token": token, "baseline": stale_baseline,
+        f"line_{line.id}_unit_price": "999",
+    })
+    assert stale.status_code == 422
+    assert "This quotation changed while you were editing" in stale.text
+    db.expire_all()
+    assert db.get(PricingQuotation, quotation_id).lines[0].unit_price == Decimal("125.00")
 
 
 def test_quotation_search_edit_pdf_and_admin_delete(client, db):

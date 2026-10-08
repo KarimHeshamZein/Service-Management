@@ -1833,3 +1833,12 @@ MESSAGES.update({
  'ui.this.category.has.no.child.categories': 'This Category has no child Categories. You can select it directly.',
  'ui.select.this.category': 'Select this Category',
 })
+
+MESSAGES.update({
+ 'pricing.edit.saved.values': 'Edit saved prices & quantities',
+ 'pricing.edit.saved.values.help': 'Change the quantities, unit prices, or currencies of saved Items and related Items. Their saved names, descriptions, images, and links stay unchanged, even if a catalogue Item moved or was deleted.',
+ 'pricing.saved.snapshot.label': 'Saved quotation copy',
+ 'pricing.saved.related.items': 'Saved related Items',
+ 'server.pricing.saved.values.stale': 'This quotation changed while you were editing. Refresh and review its saved values.',
+ 'server.pricing.currency.choice': 'Choose SAR or USD.',
+})

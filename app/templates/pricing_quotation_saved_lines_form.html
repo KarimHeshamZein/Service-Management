@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ t('pricing.edit.saved.values') }} &middot; {{ quotation.quotation_number }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><span class="eyebrow">{{ t('nav.pricing.quotations') }}</span><h1>{{ t('pricing.edit.saved.values') }}</h1><p class="lede">{{ quotation.quotation_number }}</p></div>
+  <a class="btn btn-secondary" href="/pricing/quotations/{{ quotation.id }}">{{ t('ui.back') }}</a>
+</div>
+<p class="hint">{{ t('pricing.edit.saved.values.help') }}</p>
+{% if errors.form %}<div class="alert error" role="alert">{{ errors.form }}</div>{% endif %}
+<form method="post" action="/pricing/quotations/{{ quotation.id }}/edit-saved-lines">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="baseline" value="{{ baseline }}">
+  {% for line in quotation.lines %}
+  <section class="card">
+    <div class="card-head"><h2>{{ loop.index }}. {{ line.item_name }}</h2>{% if line.alternative_to %}<span class="badge muted">{{ t('ui.alternative.to.item', number=line.alternative_to.position, item=line.alternative_to.item_name) }}</span>{% endif %}</div>
+    <div class="card-body">
+      <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap;">
+        {% if line.image_storage_key %}<img src="/pricing/quotations/{{ quotation.id }}/lines/{{ line.id }}/image?size=thumb" alt="{{ line.item_name }}" style="width:120px;height:90px;object-fit:cover;border-radius:6px;">{% endif %}
+        <div>{% if line.item_model %}<p class="hint">{{ line.item_model }}</p>{% endif %}{% if line.item_description %}<p class="preline">{{ line.item_description }}</p>{% endif %}<p class="hint">{{ t('pricing.saved.snapshot.label') }}</p></div>
+      </div>
+      <div class="grid cols-3">
+        <div class="field"><label for="line-{{ line.id }}-quantity">{{ t('ui.quantity') }}</label><input id="line-{{ line.id }}-quantity" name="line_{{ line.id }}_quantity" type="number" min="0.01" step="0.01" value="{{ values['line_' ~ line.id ~ '_quantity'] }}" required>{% if errors['line_' ~ line.id ~ '_quantity'] %}<p class="field-error">{{ errors['line_' ~ line.id ~ '_quantity'] }}</p>{% endif %}</div>
+        <div class="field"><label for="line-{{ line.id }}-price">{{ t('ui.unit.price.label') }}</label><input id="line-{{ line.id }}-price" name="line_{{ line.id }}_unit_price" type="number" min="0" step="0.01" value="{{ values['line_' ~ line.id ~ '_unit_price'] }}" required>{% if errors['line_' ~ line.id ~ '_unit_price'] %}<p class="field-error">{{ errors['line_' ~ line.id ~ '_unit_price'] }}</p>{% endif %}</div>
+        <div class="field"><label for="line-{{ line.id }}-currency">{{ t('ui.currency') }}</label><select id="line-{{ line.id }}-currency" name="line_{{ line.id }}_currency" required>{% for code in currencies %}<option value="{{ code }}" {{ 'selected' if values['line_' ~ line.id ~ '_currency'] == code }}>{{ code }}</option>{% endfor %}</select>{% if errors['line_' ~ line.id ~ '_currency'] %}<p class="field-error">{{ errors['line_' ~ line.id ~ '_currency'] }}</p>{% endif %}</div>
+      </div>
+      {% if line.related_items %}<h3>{{ t('pricing.saved.related.items') }}</h3>{% endif %}
+      {% for related in line.related_items %}
+      <div class="card" style="padding:16px;margin-top:12px;"><strong>{{ related.item_name }}</strong><p class="hint">{{ t('pricing.saved.snapshot.label') }}</p>
+        <div class="grid cols-3">
+          <div class="field"><label for="related-{{ related.id }}-quantity">{{ t('ui.quantity') }}</label><input id="related-{{ related.id }}-quantity" name="related_{{ related.id }}_quantity" type="number" min="0.01" step="0.01" value="{{ values['related_' ~ related.id ~ '_quantity'] }}" required>{% if errors['related_' ~ related.id ~ '_quantity'] %}<p class="field-error">{{ errors['related_' ~ related.id ~ '_quantity'] }}</p>{% endif %}</div>
+          <div class="field"><label for="related-{{ related.id }}-price">{{ t('ui.unit.price.label') }}</label><input id="related-{{ related.id }}-price" name="related_{{ related.id }}_unit_price" type="number" min="0" step="0.01" value="{{ values['related_' ~ related.id ~ '_unit_price'] }}" required>{% if errors['related_' ~ related.id ~ '_unit_price'] %}<p class="field-error">{{ errors['related_' ~ related.id ~ '_unit_price'] }}</p>{% endif %}</div>
+          <div class="field"><label for="related-{{ related.id }}-currency">{{ t('ui.currency') }}</label><select id="related-{{ related.id }}-currency" name="related_{{ related.id }}_currency" required>{% for code in currencies %}<option value="{{ code }}" {{ 'selected' if values['related_' ~ related.id ~ '_currency'] == code }}>{{ code }}</option>{% endfor %}</select>{% if errors['related_' ~ related.id ~ '_currency'] %}<p class="field-error">{{ errors['related_' ~ related.id ~ '_currency'] }}</p>{% endif %}</div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+  <div class="sticky-actions"><a class="btn btn-secondary" href="/pricing/quotations/{{ quotation.id }}">{{ t('ui.cancel') }}</a><button class="btn btn-primary" type="submit">{{ t('ui.save.changes') }}</button></div>
+</form>
+{% endblock %}

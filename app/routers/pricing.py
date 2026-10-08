@@ -2974,6 +2974,122 @@ def _existing_quote_form(quotation: PricingQuotation) -> dict:
     }
 
 
+def _saved_line_value_form(quotation: PricingQuotation) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in quotation.lines:
+        prefix = f"line_{line.id}"
+        values[f"{prefix}_quantity"] = str(line.quantity)
+        values[f"{prefix}_unit_price"] = str(line.unit_price)
+        values[f"{prefix}_currency"] = line.currency
+        for related in line.related_items:
+            prefix = f"related_{related.id}"
+            values[f"{prefix}_quantity"] = str(related.quantity)
+            values[f"{prefix}_unit_price"] = str(related.unit_price)
+            values[f"{prefix}_currency"] = related.currency
+    return values
+
+
+@router.get("/quotations/{quotation_id}/edit-saved-lines")
+def edit_saved_quotation_lines_page(
+    quotation_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    require_permission(request, db, user, "quotations.edit")
+    quotation = _quotation_or_404(db, quotation_id)
+    return render(request, "pricing_quotation_saved_lines_form.html", {
+        "active_nav": "pricing_quotations",
+        "quotation": quotation,
+        "values": _saved_line_value_form(quotation),
+        "baseline": quotation.updated_at.isoformat(),
+        "currencies": CURRENCIES,
+        "errors": {},
+    })
+
+
+@router.post("/quotations/{quotation_id}/edit-saved-lines")
+async def edit_saved_quotation_lines(
+    quotation_id: int,
+    request: Request,
+    user: User = Depends(require_pricing_access),
+    db: Session = Depends(get_db),
+):
+    require_permission(request, db, user, "quotations.edit")
+    quotation = _quotation_or_404(db, quotation_id)
+    form = await request.form()
+    values = {str(key): str(value) for key, value in form.items()}
+    errors: dict[str, str] = {}
+    if not csrf_valid(request, values.get("csrf_token", "")):
+        errors["form"] = "Your session expired. Reload the page and try again."
+
+    # Serialize concurrent value edits and reject a form opened before another
+    # quotation save. The submitted IDs come only from the saved quotation.
+    db.execute(
+        select(PricingQuotation.id)
+        .where(PricingQuotation.id == quotation_id)
+        .with_for_update()
+    )
+    db.refresh(quotation, ["updated_at"])
+    if values.get("baseline") != quotation.updated_at.isoformat():
+        errors["form"] = "This quotation changed while you were editing. Refresh and review its saved values."
+
+    updates: list[tuple[PricingQuotationLine | PricingQuotationRelatedLine, Decimal, Decimal, str]] = []
+    for line in quotation.lines:
+        for kind, row in [("line", line), *[("related", related) for related in line.related_items]]:
+            prefix = f"{kind}_{row.id}"
+            row_quantity = quantity(values.get(f"{prefix}_quantity"))
+            row_price = money(values.get(f"{prefix}_unit_price"))
+            row_currency = _currency(values.get(f"{prefix}_currency"))
+            if row_quantity is None:
+                errors[f"{prefix}_quantity"] = "Enter a quantity greater than zero."
+            if row_price is None:
+                errors[f"{prefix}_unit_price"] = "Enter a valid non-negative price."
+            if row_currency is None:
+                errors[f"{prefix}_currency"] = "Choose SAR or USD."
+            if row_quantity is not None and row_price is not None and row_currency is not None:
+                updates.append((row, row_quantity, row_price, row_currency))
+    if errors:
+        return render(request, "pricing_quotation_saved_lines_form.html", {
+            "active_nav": "pricing_quotations", "quotation": quotation,
+            "values": values, "baseline": values.get("baseline", ""),
+            "currencies": CURRENCIES, "errors": errors,
+        }, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+
+    changes = {}
+    for row, row_quantity, row_price, row_currency in updates:
+        for field, after in (
+            ("quantity", row_quantity), ("unit_price", row_price), ("currency", row_currency)
+        ):
+            before = getattr(row, field)
+            if before != after:
+                changes[f"{type(row).__name__}:{row.id}:{field}"] = {
+                    "before": str(before), "after": str(after),
+                }
+                setattr(row, field, after)
+    if not changes:
+        flash(request, "No changes were made.")
+        return _redirect(f"/pricing/quotations/{quotation_id}")
+    quotation.updated_at = utcnow()
+    try:
+        db.commit()
+    except SQLAlchemyError:
+        db.rollback()
+        errors["form"] = "The quotation could not be saved. Review the form and try again."
+        return render(request, "pricing_quotation_saved_lines_form.html", {
+            "active_nav": "pricing_quotations", "quotation": quotation,
+            "values": values, "baseline": values.get("baseline", ""),
+            "currencies": CURRENCIES, "errors": errors,
+        }, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+    set_audit_context(
+        request, action="update", entity_type="pricing_quotation",
+        entity_id=quotation.id, entity_label=quotation.quotation_number,
+        changes=changes,
+    )
+    flash(request, f"Quotation {quotation.quotation_number} updated.")
+    return _redirect(f"/pricing/quotations/{quotation.id}")
+
+
 @router.get("/quotations/{quotation_id}/edit")
 def edit_quotation_page(
     quotation_id: int,
