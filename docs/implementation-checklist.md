@@ -35,7 +35,7 @@ Work in small, reviewable changes. Where one phase spans unrelated risks, its pa
 
 - [ ] **14 — P10:** Repair document exports, failed-upload cleanup, and form recovery.
 - [ ] **15 — P1/P2:** Repair Category form boundaries, read-only controls, scoped navigation paths, and access wording.
-- [ ] **16 — P3:** Make branch-transfer conflicts actionable and keep transfers atomic.
+- [ ] **16 — P3:** Make branch-transfer conflicts actionable and keep transfers atomic. [Draft PR #11](https://github.com/KarimHeshamZein/Service-Management/pull/11) detects all descendant Item name/model collisions before a move and rolls back a concurrent uniqueness conflict; 5 focused checks pass. Manual English/Arabic UI verification remains open.
 - [ ] **17 — P9:** Align quotation validation and recover entered work after a failed save.
 - [ ] **18 — P17:** Finish the Excel import/preview contract after the access issue in item 06 is resolved.
 - [ ] **19 — P13:** Improve Project setup navigation and validation recovery.
