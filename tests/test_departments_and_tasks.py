@@ -1,6 +1,7 @@
 """Focused coverage for Department isolation, overrides and task delivery."""
 from __future__ import annotations
 
+import re
 from datetime import date
 from decimal import Decimal
 
@@ -394,6 +395,102 @@ def test_admin_can_move_category_tree_and_items_to_another_department(client, db
     assert target_page.status_code == 200
     assert "Department camera" in target_page.text
     assert "Hikvision" in target_page.text
+
+
+def test_category_manager_separates_edit_move_delete_and_keeps_category_context(client, db):
+    target = _add_department(db)
+    root = PricingItemCategory(name="Security", department_id=1)
+    child = PricingItemCategory(name="Cameras", department_id=1, parent=root)
+    other = PricingItemCategory(name="Other", department_id=1)
+    empty = PricingItemCategory(name="Empty", department_id=1)
+    db.add_all([root, child, other, empty])
+    db.commit()
+    empty_id = empty.id
+    login(client, *ADMIN)
+    token = csrf_of(client, "/pricing/categories/manage")
+
+    items_page = client.get("/pricing/items")
+    assert 'href="/pricing/categories/manage"' in items_page.text
+    page = client.get(f"/pricing/categories/manage?category_id={root.id}")
+    assert page.status_code == 200
+    assert "Security / Cameras" in page.text
+    edit_form = re.search(
+        rf'<form method="post" action="/pricing/categories/{root.id}/edit">(.*?)</form>',
+        page.text, re.S,
+    ).group(1)
+    move_form = re.search(
+        rf'<form method="post" action="/pricing/categories/{root.id}/move-department"(.*?)</form>',
+        page.text, re.S,
+    ).group(1)
+    assert 'name="target_department_id"' not in edit_form
+    assert 'name="parent_category_id"' in edit_form
+    assert 'name="target_department_id" required' in move_form
+    assert "Move or delete the direct Items and child Categories" in page.text
+    assert 'type="button" disabled' in page.text
+
+    searched = client.get("/pricing/categories/manage?q=Security")
+    list_html = searched.text.split('class="pricing-category-manager-options"', 1)[1].split("</nav>", 1)[0]
+    assert "Security" in list_html and "Cameras" in list_html
+    assert "Other" not in list_html
+
+    created = client.post("/pricing/categories", data={
+        "csrf_token": token, "from_manager": "1", "name": "Access Control",
+        "parent_category_id": str(root.id),
+    })
+    assert created.status_code == 303
+    created_category = db.scalar(select(PricingItemCategory).where(PricingItemCategory.name == "Access Control"))
+    assert created_category.parent_id == root.id
+    assert created.headers["location"] == f"/pricing/categories/manage?category_id={created_category.id}"
+    duplicate = client.post("/pricing/categories", data={
+        "csrf_token": token, "from_manager": "1", "name": "Access Control",
+        "parent_category_id": str(root.id),
+    })
+    assert duplicate.status_code == 422
+    assert 'value="Access Control"' in duplicate.text
+    assert f'<option value="{root.id}" selected' in duplicate.text
+
+    renamed = client.post(f"/pricing/categories/{root.id}/edit", data={
+        "csrf_token": token, "from_manager": "1", "name": "Site Security",
+        "parent_category_id": "",
+    })
+    assert renamed.status_code == 303
+    assert renamed.headers["location"] == f"/pricing/categories/manage?category_id={root.id}"
+    db.expire_all()
+    assert db.get(PricingItemCategory, root.id).name == "Site Security"
+
+    moved_inside = client.post(f"/pricing/categories/{child.id}/edit", data={
+        "csrf_token": token, "from_manager": "1", "name": "Cameras",
+        "parent_category_id": str(other.id),
+    })
+    assert moved_inside.status_code == 303
+    assert moved_inside.headers["location"] == f"/pricing/categories/manage?category_id={child.id}"
+    db.expire_all()
+    assert db.get(PricingItemCategory, child.id).parent_id == other.id
+
+    invalid = client.post(f"/pricing/categories/{other.id}/edit", data={
+        "csrf_token": token, "from_manager": "1", "name": "Other revised",
+        "parent_category_id": str(child.id),
+    })
+    assert invalid.status_code == 422
+    assert 'value="Other revised"' in invalid.text
+    assert f'action="/pricing/categories/{other.id}/edit"' in invalid.text
+    db.expire_all()
+    assert (db.get(PricingItemCategory, other.id).name, db.get(PricingItemCategory, other.id).parent_id) == ("Other", None)
+
+    deleted = client.post(f"/pricing/categories/{empty_id}/delete", data={
+        "csrf_token": token, "from_manager": "1",
+    })
+    assert deleted.status_code == 303
+    assert deleted.headers["location"] == "/pricing/categories/manage"
+    db.expire_all()
+    assert db.get(PricingItemCategory, empty_id) is None
+
+    transferred = client.post(f"/pricing/categories/{root.id}/move-department", data={
+        "csrf_token": token, "from_manager": "1",
+        "target_department_id": str(target.id),
+    })
+    assert transferred.status_code == 303
+    assert transferred.headers["location"] == "/pricing/items/departments"
 
 
 def test_new_categories_and_items_are_owned_by_the_active_department(client, db):
