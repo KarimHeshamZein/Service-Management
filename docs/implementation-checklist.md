@@ -9,7 +9,7 @@ This is the short progress tracker for the UI/UX and business-logic improvements
 - [x] Prepare the first implementation slice and its acceptance checks below.
 - [x] Integrate the checkpoint into `main` through [PR #3](https://github.com/KarimHeshamZein/Service-Management/pull/3). The one-approval branch rule was restored after the authorized merge.
 - [x] Agree on the first implementation slice: protect Pricing Category grants (P0, B2-001/B2-002).
-- [ ] Implement and verify the first slice.
+- [ ] Implement and verify the first slice. Code and focused tests are in [draft PR #4](https://github.com/KarimHeshamZein/Service-Management/pull/4); visual verification remains open.
 
 Item 01 is in progress; no improvement item is complete yet. Browser, mobile, keyboard, and visual Arabic RTL verification from the review remain open. Add a PR/commit link and a brief verification note beside each item when it is finished. Check an item only when its behavior, regression tests, and relevant UI verification are complete; a partial repair stays unchecked.
 
@@ -72,6 +72,7 @@ The next concrete change is item **01**. Its proposed scope is the Category gran
 - [x] Make unchanged Category and User Roles saves preserve existing grants, including nested and legacy grants. Keep explicit revocation possible.
 - [x] Add focused regressions for self-grant attempts, unchanged saves, explicit revocation, and continued authorized Item/Category editing.
 - [ ] Verify the affected controls and error/confirmation feedback in English and Arabic; record any browser checks that remain blocked. English/Arabic HTTP rendering passed; visual browser bootstrap remains unavailable.
-- [ ] Record the resulting PR/commit and test evidence beside item 01, then check it when all criteria pass.
+- [x] Record the implementation and test evidence in [draft PR #4](https://github.com/KarimHeshamZein/Service-Management/pull/4) (`8c37d21`).
+- [ ] Check item 01 after the remaining UI verification and review are complete.
 
 Verification so far: 65 Pricing/Department tests passed on a disposable PostgreSQL database; after the last test and copy changes, the two directly affected regressions passed again. Scratch databases were removed. The full suite is reserved for the final gate above.
