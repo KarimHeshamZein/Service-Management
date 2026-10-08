@@ -1850,4 +1850,10 @@ MESSAGES.update({
  'server.technical.package.recommendation.unrelated': 'A selected recommendation is not part of this quotation.',
  'server.technical.package.recommendation.unavailable': 'A selected recommendation is no longer available. Refresh and review the package.',
  'server.technical.package.save.failed': 'Could not update the technical package. Existing saved copies were kept.',
+ 'pricing.edit.saved.details': 'Edit dates, notes & terms',
+ 'pricing.edit.saved.details.help': 'Change these details without changing saved Items, prices, descriptions, images, Project and company details, charges, plan, or technical package.',
+ 'pricing.edit.items.charges': 'Edit Items & charges',
+ 'pricing.full.edit.snapshot.warning': 'This full edit rebuilds saved Item, Project, company, image and installation-plan snapshots from current sources. Use the details form for dates, notes or terms only.',
+ 'pricing.full.edit.confirm': 'I understand that saving this full edit will replace those saved snapshots.',
+ 'server.pricing.full.edit.confirm': 'Confirm that this edit will replace saved Item, Project, company, image and installation-plan snapshots with current source values.',
 })

@@ -9,6 +9,7 @@
 </div>
 
 {% if errors.form %}<div class="alert error">{{ errors.form }}</div>{% endif %}
+{% if quotation %}<div class="alert warning" role="note">{{ t('pricing.full.edit.snapshot.warning') }} <a href="/pricing/quotations/{{ quotation.id }}/edit-details">{{ t('pricing.edit.saved.details') }}</a></div>{% endif %}
 <form method="post" enctype="multipart/form-data" action="{{ "/pricing/quotations/" ~ quotation.id ~ "/edit" if quotation else "/pricing/quotations" }}" data-pricing-quotation-form class="guided-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   {% if not quotation %}<input type="hidden" name="form_token" value="{{ form_token }}">{% endif %}
@@ -163,6 +164,7 @@
     <div class="field"><label for="pq-notes">{{ t('ui.notes') }}</label><textarea id="pq-notes" name="notes" rows="6" dir="auto">{{ form.notes }}</textarea></div>
     <div class="field"><label for="pq-terms">{{ t('ui.terms.and.conditions') }}</label><textarea id="pq-terms" name="terms" rows="6" dir="auto">{{ form.terms }}</textarea></div>
   </div></div>
+  {% if quotation %}<label class="choice"><input type="checkbox" name="refresh_source_snapshots" value="1" required><span>{{ t('pricing.full.edit.confirm') }}</span></label>{% endif %}
   <div class="sticky-form-actions no-print"><a class="btn btn-secondary" href="{{ "/pricing/quotations/" ~ quotation.id if quotation else "/pricing/quotations" }}">{{ t('ui.cancel') }}</a><button class="btn btn-primary" type="submit">{{ t('ui.save.quotation') if quotation else t('ui.create.quotation') }}</button></div>
 </form>
 {% if quotation %}
