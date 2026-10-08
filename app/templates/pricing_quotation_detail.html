@@ -5,7 +5,7 @@
 {% block content %}
 <div class="page-head">
   <div><span class="eyebrow">{{ t('ui.price.quotation') }}</span><h1>{{ quotation.quotation_number }}</h1><p class="lede">{{ quotation.project_name }} {{ t('ui.valid.until') }} {{ quotation.valid_until|date }}</p></div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;"><a class="btn btn-secondary" href="/pricing/quotations">{{ t('ui.back') }}</a>{% if can('quotations.edit') %}<a class="btn btn-secondary" href="/pricing/quotations/{{ quotation.id }}/edit-details">{{ t('pricing.edit.saved.details') }}</a><a class="btn btn-secondary" href="/pricing/quotations/{{ quotation.id }}/edit">{{ t('pricing.edit.items.charges') }}</a>{% endif %}<a class="btn btn-primary" href="/pricing/quotations/{{ quotation.id }}/pdf">{{ t('ui.download.pdf') }}</a></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;"><a class="btn btn-secondary" href="/pricing/quotations">{{ t('ui.back') }}</a>{% if can('quotations.edit') %}<a class="btn btn-secondary" href="/pricing/quotations/{{ quotation.id }}/edit-details">{{ t('pricing.edit.saved.details') }}</a><a class="btn btn-secondary" href="/pricing/quotations/{{ quotation.id }}/edit-saved-lines">{{ t('pricing.edit.saved.values') }}</a><a class="btn btn-secondary" href="/pricing/quotations/{{ quotation.id }}/edit">{{ t('pricing.edit.items.charges') }}</a>{% endif %}<a class="btn btn-primary" href="/pricing/quotations/{{ quotation.id }}/pdf">{{ t('ui.download.pdf') }}</a></div>
 </div>
 
 <div class="card"><div class="card-head"><h2>{{ t('ui.quotation.details') }}</h2></div><div class="card-body">

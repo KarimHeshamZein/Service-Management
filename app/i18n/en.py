@@ -1856,4 +1856,10 @@ MESSAGES.update({
  'pricing.full.edit.snapshot.warning': 'This full edit rebuilds saved Item, Project, company, image and installation-plan snapshots from current sources. Use the details form for dates, notes or terms only.',
  'pricing.full.edit.confirm': 'I understand that saving this full edit will replace those saved snapshots.',
  'server.pricing.full.edit.confirm': 'Confirm that this edit will replace saved Item, Project, company, image and installation-plan snapshots with current source values.',
+ 'pricing.edit.saved.values': 'Edit saved prices & quantities',
+ 'pricing.edit.saved.values.help': 'Change the quantities, unit prices, or currencies of saved Items and related Items. Their saved names, descriptions, images, and links stay unchanged, even if a catalogue Item moved or was deleted.',
+ 'pricing.saved.snapshot.label': 'Saved quotation copy',
+ 'pricing.saved.related.items': 'Saved related Items',
+ 'server.pricing.saved.values.stale': 'This quotation changed while you were editing. Refresh and review its saved values.',
+ 'server.pricing.currency.choice': 'Choose SAR or USD.',
 })
