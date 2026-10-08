@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from starlette.datastructures import UploadFile
 
 from ..config import settings
-from ..access_control import require_permission
+from ..access_control import accessible_project_ids, require_permission
 from ..database import get_db
 from ..deps import get_current_user, require_admin, require_record_submitter
 from ..helpers import (
@@ -137,9 +137,9 @@ def entry(
     user: User = Depends(require_record_submitter),
     db: Session = Depends(get_db),
 ):
-    require_permission(request, db, user, "records.create_maintenance")
     form = None
     if append_to is not None:
+        require_permission(request, db, user, "records.edit")
         record = _load_record(db, append_to, user)
         choices = technical_user_choices(db, user)
         form = {
@@ -150,6 +150,8 @@ def entry(
             "append_record_id": str(record.id),
             "append_record_number": record.record_number,
         }
+    else:
+        require_permission(request, db, user, "records.create_maintenance")
     return render(request, "general_maintenance_entry.html", _form_context(request, db, form))
 
 
@@ -237,10 +239,13 @@ async def submit_record(
     user: User = Depends(require_record_submitter),
     db: Session = Depends(get_db),
 ):
-    require_permission(request, db, user, "records.create_maintenance")
     form = await request.form()
     errors: dict[str, str] = {}
     append_record_id_raw = str(form.get("append_record_id") or "").strip()
+    require_permission(
+        request, db, user,
+        "records.edit" if append_record_id_raw else "records.create_maintenance",
+    )
     append_record = None
     if append_record_id_raw:
         append_record_id = entity_id(append_record_id_raw)
@@ -275,7 +280,12 @@ async def submit_record(
     if not form_token_available(request, form.get("form_token")):
         errors["form"] = "This maintenance record was already submitted. Check your records."
 
-    scopes, scope_errors = validate_entry_scopes(form, db, require_quotation=False)
+    scopes, scope_errors = validate_entry_scopes(
+        form, db, require_quotation=False,
+        allowed_project_ids=accessible_project_ids(
+            db, user, capability="can_create_records"
+        ),
+    )
     errors.update(scope_errors)
     data_rows, data_row_errors = parse_entry_data_rows(
         form, scopes, installation=False
