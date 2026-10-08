@@ -1,5 +1,8 @@
 from decimal import Decimal
+import io
+import zipfile
 
+from app.config import settings
 from app.models import (
     PricingQuotation, PricingQuotationLine, QuotationTechnicalAttachment,
     StoreCustodyBalance, StoreItem, StoreMovement, StoreStockBalance,
@@ -97,3 +100,78 @@ def test_data_sheet_library_uploads_recommends_and_builds_package(client, db):
     assert db.query(QuotationTechnicalAttachment).filter_by(quotation_id=quotation.id).count() == 3
     quote_package = client.get(f"/pricing/quotations/{quotation.id}/technical-package.zip")
     assert quote_package.status_code == 200 and quote_package.content.startswith(b"PK")
+
+    db.expire_all()
+    saved = db.query(QuotationTechnicalAttachment).filter_by(quotation_id=quotation.id).order_by(QuotationTechnicalAttachment.position).all()
+    first_copy_key = saved[0].storage_key
+    second_copy_key = saved[1].storage_key
+    saved_ids = [attachment.id for attachment in saved]
+    assert first_copy_key and second_copy_key
+
+    # The first live source is deleted, but the saved quotation copy remains.
+    token = csrf_of(client, f"/pricing/data-sheet/items/main/{pricing_item_id}")
+    deleted = client.post(f"/pricing/data-sheet/documents/{document_ids[0]}/delete", data={"csrf_token": token})
+    assert deleted.status_code == 303
+    detail = client.get(f"/pricing/quotations/{quotation.id}")
+    assert detail.status_code == 200
+    assert "Saved copies in this quotation" in detail.text
+    assert "camera.jpg" in detail.text
+    assert f'value="{saved_ids[0]}" checked' in detail.text
+
+    token = csrf_of(client, f"/pricing/quotations/{quotation.id}")
+    refreshed = client.post(f"/pricing/quotations/{quotation.id}/technical-attachments", data={
+        "csrf_token": token,
+        "technical_attachment_baseline": ",".join(map(str, saved_ids)),
+        "retain_technical_attachment_ids": saved_ids,
+        "technical_document_ids": [document_ids[1]],
+    })
+    assert refreshed.status_code == 303
+    db.expire_all()
+    saved = db.query(QuotationTechnicalAttachment).filter_by(quotation_id=quotation.id).all()
+    assert len(saved) == 3
+    assert any(attachment.id == saved_ids[0] and attachment.storage_key == first_copy_key for attachment in saved)
+    assert not (settings.upload_dir / second_copy_key).exists()
+    assert (settings.upload_dir / first_copy_key).is_file()
+    with zipfile.ZipFile(io.BytesIO(client.get(f"/pricing/quotations/{quotation.id}/technical-package.zip").content)) as archive:
+        assert len(archive.namelist()) == 4  # Quotation, two Data Sheets, recommendation.
+
+    # A failed refresh leaves the current saved package and its files intact.
+    current = db.query(QuotationTechnicalAttachment).filter_by(quotation_id=quotation.id).order_by(QuotationTechnicalAttachment.position).all()
+    current_ids = [attachment.id for attachment in current]
+    current_keys = [attachment.storage_key for attachment in current if attachment.storage_key]
+    source = db.get(TechnicalDocument, document_ids[1])
+    (settings.upload_dir / source.storage_key).unlink()
+    token = csrf_of(client, f"/pricing/quotations/{quotation.id}")
+    failed = client.post(f"/pricing/quotations/{quotation.id}/technical-attachments", data={
+        "csrf_token": token,
+        "technical_attachment_baseline": ",".join(map(str, current_ids)),
+        "retain_technical_attachment_ids": current_ids,
+        "technical_document_ids": [document_ids[1]],
+    })
+    assert failed.status_code == 303
+    db.expire_all()
+    assert {attachment.id for attachment in db.query(QuotationTechnicalAttachment).filter_by(quotation_id=quotation.id)} == set(current_ids)
+    assert all((settings.upload_dir / key).is_file() for key in current_keys)
+
+    # A stale form cannot remove the newly refreshed copy.
+    stale = client.post(f"/pricing/quotations/{quotation.id}/technical-attachments", data={
+        "csrf_token": token,
+        "technical_attachment_baseline": ",".join(map(str, saved_ids)),
+        "retain_technical_attachment_ids": saved_ids,
+    })
+    assert stale.status_code == 303
+    db.expire_all()
+    assert db.query(QuotationTechnicalAttachment).filter_by(quotation_id=quotation.id).count() == 3
+
+    # Removal is explicit; only the unchecked saved copy and its file disappear.
+    current = db.query(QuotationTechnicalAttachment).filter_by(quotation_id=quotation.id).order_by(QuotationTechnicalAttachment.position).all()
+    token = csrf_of(client, f"/pricing/quotations/{quotation.id}")
+    removed = client.post(f"/pricing/quotations/{quotation.id}/technical-attachments", data={
+        "csrf_token": token,
+        "technical_attachment_baseline": ",".join(str(attachment.id) for attachment in current),
+        "retain_technical_attachment_ids": [attachment.id for attachment in current if attachment.storage_key != first_copy_key],
+    })
+    assert removed.status_code == 303
+    db.expire_all()
+    assert db.query(QuotationTechnicalAttachment).filter_by(quotation_id=quotation.id).count() == 2
+    assert not (settings.upload_dir / first_copy_key).exists()

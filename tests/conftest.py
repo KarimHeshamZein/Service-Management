@@ -13,8 +13,9 @@ from pathlib import Path
 import pytest
 
 TMP_ROOT = Path(tempfile.mkdtemp(prefix="sms-tests-"))
-os.environ["DATABASE_URL"] = (
-    "postgresql://postgres:postgres@localhost:5432/service_management_test"
+os.environ["DATABASE_URL"] = os.environ.get(
+    "SMS_TEST_DATABASE_URL",
+    "postgresql://postgres:postgres@localhost:5432/service_management_test",
 )
 os.environ["UPLOAD_DIR"] = str(TMP_ROOT / "uploads")
 os.environ["SECRET_KEY"] = "test-secret-key"
